@@ -1,0 +1,21 @@
+[package]
+name = "yfinance"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+tokio = { version = "1.52.3", features = ["full"] }
+yfinance-rs = "0.9.0"
+sqlx = { version = "0.9.0", features = [
+  "runtime-tokio",
+  "postgres",
+  "macros",
+  "chrono",
+] }
+dotenvy = "0.15.7"
+chrono = "0.4.45"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+csv = "1.4.0"
+comfy-table = "7.2.2"
