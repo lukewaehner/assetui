@@ -1,10 +1,9 @@
 use sqlx::{Pool, Postgres};
 use tracing_subscriber::EnvFilter;
 
-use yfinance::cli::{Mode, select_mode};
+use yfinance::cli::{Mode, pick_tickers, print_tickers, select_mode};
 use yfinance::db::connection::setup_pool;
 use yfinance::db::quotes::dump_table_to_csv;
-use yfinance::format_output::print_tickers;
 use yfinance::run::fetch_and_store;
 
 // Multi threaded logging setup
@@ -28,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool: Pool<Postgres> = setup_pool(5).await?;
 
     match select_mode() {
-        Mode::FetchAndStore => fetch_and_store(&pool).await?,
+        Mode::FetchAndStore => fetch_and_store(&pool, &pick_tickers()).await?,
         Mode::DumpToCsv => dump_table_to_csv(&pool).await?,
         Mode::PullFromDb => print_tickers(&pool).await,
     }

@@ -2,20 +2,20 @@ use sqlx::{Pool, Postgres};
 use tracing::{debug, error, info, warn};
 use yfinance_rs::{Ticker, YfClient};
 
-use crate::cli::pick_tickers;
 use crate::db::quotes::store_quote_to_db;
 use crate::fetch::{fetch_quote, prepare_tickers};
 use crate::models::QuoteRecord;
 
-pub async fn fetch_and_store(pool: &Pool<Postgres>) -> Result<(), Box<dyn std::error::Error>> {
-    let tickers: Vec<String> = pick_tickers();
-
+pub async fn fetch_and_store(
+    pool: &Pool<Postgres>,
+    tickers: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
     let buffer: usize = 100;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<QuoteRecord>(buffer);
 
     let client: YfClient = YfClient::default();
 
-    let tickers: Vec<(String, Ticker)> = prepare_tickers(&tickers, &client);
+    let tickers: Vec<(String, Ticker)> = prepare_tickers(tickers, &client);
     info!(count = tickers.len(), "spawning fetch tasks");
 
     for (symbol, t) in tickers {
