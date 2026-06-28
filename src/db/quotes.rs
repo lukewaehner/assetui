@@ -3,7 +3,7 @@ use tracing::{debug, info, instrument};
 
 use crate::models::QuoteRecord;
 
-#[instrument(skip(quote, p), fields(name = ?quote.name))]
+#[instrument(skip(quote, p), fields(ticker = ?quote.ticker))]
 pub async fn store_quote_to_db(
     quote: &QuoteRecord,
     p: &Pool<Postgres>,
@@ -18,13 +18,13 @@ pub async fn store_quote_to_db(
     // (ON CONFLICT DO NOTHING means RETURNING yields no row in that case).
     let id: Option<i32> = sqlx::query_scalar(
         "
-        INSERT INTO quotes (name, price, previous_close, day_volume, as_of)
+        INSERT INTO quotes (ticker, price, previous_close, day_volume, as_of)
         VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (name, as_of) DO NOTHING
+        ON CONFLICT (ticker, as_of) DO NOTHING
         RETURNING id
         ",
     )
-    .bind(quote.name.clone())
+    .bind(quote.ticker.clone())
     .bind(quote.price)
     .bind(quote.previous_close)
     .bind(quote.day_volume)

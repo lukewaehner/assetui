@@ -3,7 +3,7 @@ use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use sqlx::{Pool, Postgres};
 
 fn ticker_row(qr: &QuoteRecord) -> Vec<Cell> {
-    let name = qr.name.as_deref().unwrap_or("Unknown");
+    let name = qr.ticker.as_deref().unwrap_or("Unknown");
 
     let price_str = qr
         .price

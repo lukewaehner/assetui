@@ -13,13 +13,13 @@ pub async fn fetch_quote(
     debug!("requesting quote from yfinance");
     let quote = ticker.quote().await?;
     debug!(
-        name = ?quote.name,
+        ticker = ?quote.name,
         has_price = quote.price.is_some(),
         "received quote payload"
     );
     let quote_record = QuoteRecord {
         id: None, // Set by the database
-        name: quote.name.clone(),
+        ticker: quote.name.clone(),
         price: quote.price.map(|p| p.into_inner().as_f64()),
         previous_close: quote.previous_close.map(|p| p.into_inner().as_f64()),
         day_volume: quote
@@ -57,7 +57,7 @@ pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
 
 pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<QuoteRecord>> {
     sqlx::query_as::<_, QuoteRecord>(
-        "SELECT id, name, price, previous_close, day_volume, as_of
+        "SELECT id, ticker, price, previous_close, day_volume, as_of
               FROM quotes
               ORDER BY as_of DESC, id DESC
               LIMIT $1",
@@ -73,11 +73,12 @@ pub async fn fetch_sorted(
     order: SortOrder,
     limit: i64,
 ) -> sqlx::Result<Vec<QuoteRecord>> {
+    debug!(?mode, ?order, "fetching sorted quotes");
     // `column` and `direction` come from closed enums, never user input, so
     // interpolating them into the query is safe from injection. `limit` is bound.
     let column = match mode {
         SortMode::ById => "id",
-        SortMode::ByName => "name",
+        SortMode::ByTicker => "ticker",
         SortMode::ByPrice => "price",
         SortMode::ByPrevClose => "previous_close",
         SortMode::ByVolume => "day_volume",
@@ -89,7 +90,7 @@ pub async fn fetch_sorted(
     };
 
     let query = format!(
-        "SELECT id, name, price, previous_close, day_volume, as_of
+        "SELECT id, ticker, price, previous_close, day_volume, as_of
               FROM quotes
               ORDER BY {column} {direction}, id DESC
               LIMIT $1"

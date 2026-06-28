@@ -1,4 +1,5 @@
 use std::io;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -41,6 +42,8 @@ struct App {
     logs: Vec<String>,
     pool: sqlx::PgPool,
     event_tx: mpsc::UnboundedSender<AppEvent>,
+    blink_state: bool,
+    last_blink: Instant,
 }
 
 struct InputMode {
@@ -73,6 +76,8 @@ impl App {
             logs: Vec::new(),
             pool,
             event_tx,
+            blink_state: true,
+            last_blink: Instant::now(),
         }
     }
 
@@ -87,7 +92,7 @@ impl App {
                 self.logs.push(format!("[INFO] fetching {symbol}"));
             }
             AppEvent::FetchCompleted(record) => {
-                let name = record.name.clone().unwrap_or_else(|| "?".to_string());
+                let name = record.ticker.clone().unwrap_or_else(|| "?".to_string());
                 self.db_display.status = format!("stored {name}");
                 self.logs.push(format!("[SUCCESS] stored {name}"));
                 // Newest on top, matching the fetch_recent ordering.
@@ -101,10 +106,12 @@ impl App {
                 self.logs.push(format!("[ERROR] {e}"));
             }
             AppEvent::ChangeSortMode(mode) => {
+                self.logs.push(format!("[SORT] mode → {mode:?}"));
                 self.db_display.sort_mode = mode;
                 self.spawn_reload();
             }
             AppEvent::ChangeSortOrder(order) => {
+                self.logs.push(format!("[SORT] order → {order:?}"));
                 self.db_display.sort_order = order;
                 self.spawn_reload();
             }
@@ -141,7 +148,7 @@ impl App {
                     'c' => SortMode::ByPrevClose,
                     'v' => SortMode::ByVolume,
                     'a' => SortMode::ByAsOf,
-                    'n' => SortMode::ByName,
+                    'n' => SortMode::ByTicker,
                     _ => unreachable!(),
                 };
                 self.handle_event(AppEvent::ChangeSortMode(mode));
@@ -220,6 +227,12 @@ async fn run<B: ratatui::backend::Backend>(
             app.handle_event(event);
         }
 
+        let now = Instant::now();
+        if now.duration_since(app.last_blink) >= Duration::from_millis(500) {
+            app.blink_state = !app.blink_state;
+            app.last_blink = now;
+        }
+
         terminal.draw(|f| draw(f, app))?;
 
         if event::poll(std::time::Duration::from_millis(100))?
@@ -286,12 +299,19 @@ fn draw(f: &mut Frame, app: &App) {
     let input_area = left_split[0];
     let log_area = left_split[1];
 
+    let in_input = app.input_mode.toggled;
+    let input_border = if in_input { Color::Cyan } else { Color::DarkGray };
+    let db_border = if in_input { Color::DarkGray } else { Color::Cyan };
+    let mode_label = if in_input { " [INSERT] " } else { " [COMMAND] " };
+
     // Input plane
+    let cursor = if in_input && app.blink_state { "▌" } else { " " };
+    let input_display = format!("{}{}", app.input_mode.input, cursor);
     let input_block = Block::default()
-        .title("Query")
+        .title(format!("Query{mode_label}"))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    let input_widget = Paragraph::new(app.input_mode.input.as_str()).block(input_block);
+        .border_style(Style::default().fg(input_border));
+    let input_widget = Paragraph::new(input_display.as_str()).block(input_block);
     f.render_widget(input_widget, input_area);
 
     // Log pane - show the most recent lines that fit inside the borders.
@@ -305,15 +325,10 @@ fn draw(f: &mut Frame, app: &App) {
     let log_widget = Paragraph::new(log_text).block(log_block);
     f.render_widget(log_widget, log_area);
 
-    draw_quotes_table(f, right, app);
-
-    f.set_cursor_position((
-        input_area.x + app.input_mode.input.len() as u16 + 1,
-        input_area.y + 1,
-    ));
+    draw_quotes_table(f, right, app, db_border);
 }
 
-fn draw_quotes_table(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+fn draw_quotes_table(f: &mut Frame, area: ratatui::layout::Rect, app: &App, border_color: Color) {
     let header = Row::new(vec![
         "ID",
         "Ticker",
@@ -347,7 +362,7 @@ fn draw_quotes_table(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
                 q.id.map(|id| id.to_string())
                     .unwrap_or_else(|| "-".to_string()),
             ),
-            Cell::from(q.name.clone().unwrap()),
+            Cell::from(q.ticker.clone().unwrap()),
             Cell::from(price),
             Cell::from(prev),
             Cell::from(vol),
@@ -368,7 +383,12 @@ fn draw_quotes_table(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let title = format!("Quote({})", app.db_display.status);
     let table = Table::new(rows, widths)
         .header(header)
-        .block(Block::default().title(title).borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     f.render_widget(table, area);
