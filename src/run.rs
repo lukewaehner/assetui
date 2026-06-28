@@ -42,9 +42,9 @@ pub async fn fetch_and_store(
     let mut failed = 0usize;
     while let Some(quote) = rx.recv().await {
         match store_quote_to_db(&quote, pool).await {
-            Ok(()) => {
+            Ok(id) => {
                 stored += 1;
-                info!(name = ?quote.name.unwrap_or_default(), "stored quote");
+                info!(name = ?quote.name.unwrap_or_default(), ?id, "stored quote");
             }
             Err(e) => {
                 failed += 1;

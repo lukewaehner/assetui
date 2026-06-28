@@ -1,7 +1,8 @@
 use tracing::{debug, instrument};
 use yfinance_rs::{Ticker, YfClient};
 
-use crate::models::QuoteRecord;
+use crate::sort::{SortMode, SortOrder};
+use crate::{db, models::QuoteRecord};
 
 #[instrument(skip(ticker), fields(symbol = %symbol))]
 pub async fn fetch_quote(
@@ -29,6 +30,23 @@ pub async fn fetch_quote(
     Ok(Some(quote_record))
 }
 
+pub async fn fetch_quote_and_store(
+    pool: &sqlx::PgPool,
+    symbol: &str,
+) -> Result<Option<QuoteRecord>, Box<dyn std::error::Error + Send + Sync>> {
+    let client = YfClient::default();
+    let ticker = Ticker::new(&client, symbol);
+
+    let Some(mut quote_record) = fetch_quote(symbol, &ticker).await? else {
+        return Ok(None);
+    };
+
+    quote_record.id = db::quotes::store_quote_to_db(&quote_record, pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Some(quote_record))
+}
+
 pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
     s.iter().map(|t| (t.clone(), Ticker::new(c, t))).collect()
 }
@@ -43,4 +61,36 @@ pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<Q
     .bind(limit)
     .fetch_all(pool)
     .await
+}
+
+pub async fn fetch_sorted(
+    pool: &sqlx::PgPool,
+    mode: SortMode,
+    order: SortOrder,
+    limit: i64,
+) -> sqlx::Result<Vec<QuoteRecord>> {
+    let column = match mode {
+        SortMode::ById => "id",
+        SortMode::ByName => "name",
+        SortMode::ByPrice => "price",
+        SortMode::ByPrevClose => "previous_close",
+        SortMode::ByVolume => "day_volume",
+        SortMode::ByAsOf => "as_of",
+    };
+    let direction = match order {
+        SortOrder::Ascending => "ASC",
+        SortOrder::Descending => "DESC",
+    };
+
+    let query = format!(
+        "SELECT id, name, price, previous_close, day_volume, as_of
+              FROM quotes
+              ORDER BY {column} {direction}, id DESC
+              LIMIT $1"
+    );
+
+    sqlx::query_as::<_, QuoteRecord>(sqlx::AssertSqlSafe(query))
+        .bind(limit)
+        .fetch_all(pool)
+        .await
 }

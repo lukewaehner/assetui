@@ -7,13 +7,14 @@ use crate::models::QuoteRecord;
 pub async fn store_quote_to_db(
     quote: &QuoteRecord,
     p: &Pool<Postgres>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Option<i32>, Box<dyn std::error::Error>> {
     debug!("inserting quote into postgres");
-    sqlx::query(
+    let id: Option<i32> = sqlx::query_scalar(
         "
         INSERT INTO quotes (name, price, previous_close, day_volume, as_of)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (name, as_of) DO NOTHING
+        RETURNING id
         ",
     )
     .bind(quote.name.clone())
@@ -21,9 +22,9 @@ pub async fn store_quote_to_db(
     .bind(quote.previous_close)
     .bind(quote.day_volume)
     .bind(quote.as_of)
-    .execute(p)
+    .fetch_optional(p)
     .await?;
-    Ok(())
+    Ok(id)
 }
 
 #[instrument(skip(p))]
