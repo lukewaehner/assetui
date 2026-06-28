@@ -7,7 +7,7 @@ pub enum SortOrder {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
     ById,
-    ByName,
+    ByTicker,
     ByPrice,
     ByPrevClose,
     ByVolume,

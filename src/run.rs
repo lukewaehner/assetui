@@ -44,11 +44,11 @@ pub async fn fetch_and_store(
         match store_quote_to_db(&quote, pool).await {
             Ok(id) => {
                 stored += 1;
-                info!(name = ?quote.name.unwrap_or_default(), ?id, "stored quote");
+                info!(ticker = ?quote.ticker.unwrap_or_default(), ?id, "stored quote");
             }
             Err(e) => {
                 failed += 1;
-                error!(name = ?quote.name.unwrap_or_default(), error = %e, "store failed");
+                error!(ticker = ?quote.ticker.unwrap_or_default(), error = %e, "store failed");
             }
         }
     }
