@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 
 // Shared record type used across fetching, DB writes, and CSV dumps.
 // Kept separate so `sqlx::FromRow` and `serde::Serialize` can both derive on it.
-#[derive(sqlx::FromRow, serde::Serialize)]
+#[derive(sqlx::FromRow, serde::Serialize, Default, Debug)]
 pub struct QuoteRecord {
     pub id: Option<i32>,
     pub ticker: Option<String>,
