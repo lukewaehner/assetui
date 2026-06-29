@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-#[derive(sqlx::FromRow, serde::Serialize)]
+#[derive(sqlx::FromRow, serde::Serialize, Default, Debug)]
 pub struct QuoteRecord {
     pub id: Option<i32>,
     pub ticker: Option<String>,
