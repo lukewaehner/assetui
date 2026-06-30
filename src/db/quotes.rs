@@ -1,21 +1,22 @@
+//! Queries against the `quotes` table.
+
 use sqlx::{Pool, Postgres};
 use tracing::{debug, info, instrument};
 
 use crate::models::QuoteRecord;
 
+/// Inserts a quote into the database and returns the new row's `id`.
+///
+/// The table has a `UNIQUE (ticker, as_of)` constraint.  If the same ticker
+/// and timestamp already exist the insert is silently skipped and `None` is
+/// returned, which lets callers detect duplicates without treating them as
+/// errors.
 #[instrument(skip(quote, p), fields(ticker = ?quote.ticker))]
 pub async fn store_quote_to_db(
     quote: &QuoteRecord,
     p: &Pool<Postgres>,
 ) -> Result<Option<i32>, Box<dyn std::error::Error>> {
     debug!("inserting quote into postgres");
-    // Keeps a stamped history of all fetches, but skips exact-duplicate quotes
-    // (same ticker at the same market as_of) via the (name, as_of) unique constraint.
-    // Can query quotes through ORDER BY as_of DESC, or WHERE as_of (expression) <time> for
-    // time-based queries.
-    //
-    // Returns the new row's id, or None when the insert was skipped as a duplicate
-    // (ON CONFLICT DO NOTHING means RETURNING yields no row in that case).
     let id: Option<i32> = sqlx::query_scalar(
         "
         INSERT INTO quotes (ticker, name, price, previous_close, day_volume, as_of)
@@ -35,6 +36,10 @@ pub async fn store_quote_to_db(
     Ok(id)
 }
 
+/// Returns every row in the `quotes` table with no ordering applied.
+///
+/// Primarily used by the CSV dump and the CLI display path, where the caller
+/// controls presentation order.
 #[instrument(skip(p))]
 pub async fn fetch_all_quotes(
     p: &Pool<Postgres>,
@@ -46,6 +51,10 @@ pub async fn fetch_all_quotes(
     Ok(rows)
 }
 
+/// Dumps every quote to a timestamped CSV file in the current directory.
+///
+/// The filename is `quotes_dump_YYYYMMDDHHMMSS.csv`.  Rows are serialised
+/// using `QuoteRecord`'s `serde::Serialize` implementation.
 pub async fn dump_table_to_csv(p: &Pool<Postgres>) -> Result<(), Box<dyn std::error::Error>> {
     debug!("dumping quotes table to csv");
     let rows: Vec<QuoteRecord> = fetch_all_quotes(p).await?;

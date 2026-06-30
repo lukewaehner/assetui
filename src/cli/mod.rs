@@ -1,6 +1,9 @@
-// Terminal-specific presentation for the CLI binary.
-// Shared engine code (fetch, run, db, models) lives at the crate root; this
-// module holds the stdin prompts and table rendering that only the CLI uses.
+//! Terminal-specific presentation for the CLI binary.
+//!
+//! The shared engine (fetch, db, models) lives at the crate root.  This module
+//! holds the stdin prompts ([`input`]) and table rendering ([`output`]) that
+//! only the CLI binary uses.
+
 pub mod input;
 pub mod output;
 

@@ -1,3 +1,10 @@
+//! Application state and event handling for the TUI binary.
+//!
+//! The event loop in `main.rs` owns the terminal and translates raw key events
+//! into [`AppEvent`] variants.  [`App::handle_event`] processes those events
+//! and mutates state; [`draw`](super::draw::draw) then renders the current
+//! state on the next frame.
+
 use std::time::Instant;
 
 use ratatui::widgets::TableState;
@@ -9,49 +16,84 @@ use yfinance::{
     sort::{SortMode, SortOrder},
 };
 
+/// Messages sent from async tasks back to the main event loop.
 pub enum AppEvent {
+    /// Initial page load or a re-fetch triggered by a sort change.
     PageLoaded(Vec<QuoteRecord>),
+    /// A fetch task has been spawned for the given symbol.
     FetchSpawned(String),
+    /// A quote was fetched and stored; the record is ready for display.
     FetchCompleted(QuoteRecord),
+    /// Analyst consensus and price targets loaded for the selected stock.
     StockAnalysisReady(QuoteRecordAnalysis),
+    /// User pressed a sort-column key.
     ChangeSortMode(SortMode),
+    /// User toggled sort direction.
     ChangeSortOrder(SortOrder),
+    /// Informational message for the log panel.
     LogLine(String),
+    /// Error message; also shown in the status bar.
     Error(String),
 }
 
+/// Top-level application state.
 pub struct App {
+    /// Ticker input box state (current text and whether the box is focused).
     pub input_mode: InputMode,
+    /// Set to `true` when the user presses `q`; the event loop exits on the
+    /// next iteration.
     pub should_quit: bool,
+    /// The quotes table and its associated sort/selection state.
     pub db_display: DbDisplay,
+    /// Lines shown in the log panel (most recent at the bottom).
     pub logs: Vec<String>,
+    /// Shared database connection pool passed to async tasks.
     pub pool: sqlx::PgPool,
+    /// Channel used by async tasks to push [`AppEvent`]s back to the loop.
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Current state of the blinking cursor in the input box.
     pub blink_state: bool,
+    /// Timestamp of the last blink toggle, used to drive the 500 ms interval.
     pub last_blink: Instant,
+    /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
 }
 
+/// State for the ticker input box.
 pub struct InputMode {
+    /// Text the user has typed so far.
     pub input: String,
+    /// Whether the input box is currently focused (i.e. typing goes here).
     pub toggled: bool,
 }
 
+/// State for the quotes table on the right side of the layout.
 pub struct DbDisplay {
+    /// Rows currently visible in the table.
     pub rows: Vec<QuoteRecord>,
+    /// Ratatui widget state tracking the selected row index.
     pub table_state: TableState,
+    /// Short status message shown in the table's title bar.
     pub status: String,
+    /// Column the table is currently sorted by.
     pub sort_mode: SortMode,
+    /// Direction of the current sort.
     pub sort_order: SortOrder,
 }
 
+/// State for the stock-detail overlay modal.
 pub struct StockInfoModal {
+    /// The quote row that was selected when `?` was pressed.
     pub stock: QuoteRecord,
+    /// Analyst data fetched in the background; `None` while loading.
     pub analysis: Option<QuoteRecordAnalysis>,
+    /// Whether the modal is currently visible.
     pub visible: bool,
 }
 
 impl App {
+    /// Creates a new `App` with sensible defaults.  The table starts sorted by
+    /// `id DESC` to show the most recently stored quotes first.
     pub fn new(pool: sqlx::PgPool, event_tx: mpsc::UnboundedSender<AppEvent>) -> Self {
         Self {
             input_mode: InputMode {
@@ -79,6 +121,7 @@ impl App {
         }
     }
 
+    /// Applies an [`AppEvent`] to the application state.
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::PageLoaded(rows) => {
@@ -98,7 +141,7 @@ impl App {
                 let name = record.ticker.clone().unwrap_or_else(|| "?".to_string());
                 self.db_display.status = format!("stored {name}");
                 self.logs.push(format!("[SUCCESS] stored {name}"));
-                // Newest on top, matching the fetch_recent ordering.
+                // Insert at position 0 to match the fetch_recent ordering (newest first).
                 self.db_display.rows.insert(0, record);
             }
             AppEvent::LogLine(line) => {
@@ -124,6 +167,8 @@ impl App {
         }
     }
 
+    /// Spawns a task to re-fetch the current page with the active sort applied,
+    /// then sends a [`AppEvent::PageLoaded`] back when done.
     pub fn spawn_reload(&self) {
         let pool = self.pool.clone();
         let tx = self.event_tx.clone();
@@ -141,6 +186,10 @@ impl App {
         });
     }
 
+    /// Routes a single command key to the appropriate state change.
+    ///
+    /// Only called when the input box is not focused; while focused, characters
+    /// are appended to [`InputMode::input`] directly in the event loop.
     pub fn handle_command_key(&mut self, key: char) {
         match key.to_ascii_lowercase() {
             'q' => self.should_quit = true,
@@ -207,6 +256,8 @@ impl App {
         }
     }
 
+    /// Spawns a background task to fetch analyst data for `symbol` and sends
+    /// the result back as [`AppEvent::StockAnalysisReady`].
     fn spawn_analysis(&self, symbol: &str) {
         let tx = self.event_tx.clone();
         let symbol = symbol.to_owned();

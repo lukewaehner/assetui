@@ -1,3 +1,10 @@
+//! Yahoo Finance API integration.
+//!
+//! Functions here are the only place in the codebase that talks to `yfinance-rs`.
+//! They translate the library's types into the project's own [`QuoteRecord`] and
+//! [`QuoteRecordAnalysis`] so the rest of the code stays decoupled from the
+//! upstream API shape.
+
 use tokio::try_join;
 use tracing::{debug, instrument};
 use yfinance_rs::{AnalysisBuilder, Ticker, YfClient};
@@ -6,7 +13,14 @@ use crate::models::QuoteRecordAnalysis;
 use crate::sort::{SortMode, SortOrder};
 use crate::{db, models::QuoteRecord};
 
-// Core logic: talk to yfinance and translate its payload into our QuoteRecord.
+/// Fetches a real-time quote for `symbol` using an already-initialised
+/// [`Ticker`] and converts it into a [`QuoteRecord`].
+///
+/// Returns `Ok(None)` if the API responds but carries no usable payload
+/// (symbol not found, market closed with no data, etc.).
+///
+/// The `id` field of the returned record is always `None`; it gets set once
+/// the record is written to the database.
 #[instrument(skip(ticker), fields(symbol = %symbol))]
 pub async fn fetch_quote(
     symbol: &str,
@@ -34,6 +48,12 @@ pub async fn fetch_quote(
     Ok(Some(quote_record))
 }
 
+/// Fetches a quote for `symbol` and immediately persists it to the database.
+///
+/// Convenience wrapper used by the TUI when a user submits a ticker in the
+/// input box.  After storing, the returned record has its `id` field set to
+/// the database-assigned value so the TUI can display it without a follow-up
+/// query.
 pub async fn fetch_quote_and_store(
     pool: &sqlx::PgPool,
     symbol: &str,
@@ -45,19 +65,20 @@ pub async fn fetch_quote_and_store(
         return Ok(None);
     };
 
-    // Stamp the DB-assigned id onto the record so callers can display it without
-    // This allows the tui to show the row's id immediately after storing without th eneed for
-    // requery
     quote_record.id = db::quotes::store_quote_to_db(&quote_record, pool)
         .await
         .map_err(|e| e.to_string())?;
     Ok(Some(quote_record))
 }
 
+/// Pairs each ticker symbol with an initialised [`Ticker`] client ready for
+/// async fetching.
 pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
     s.iter().map(|t| (t.clone(), Ticker::new(c, t))).collect()
 }
 
+/// Returns up to `limit` quotes ordered by `as_of DESC, id DESC` — the most
+/// recently fetched records first.
 pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<QuoteRecord>> {
     sqlx::query_as::<_, QuoteRecord>(
         "SELECT id, ticker, name, price, previous_close, day_volume, as_of
@@ -70,6 +91,11 @@ pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<Q
     .await
 }
 
+/// Returns up to `limit` quotes sorted by `mode` in the given `order`.
+///
+/// `column` and `direction` are derived from closed enums, never from user
+/// input, so interpolating them into the query string is safe.  `limit` is
+/// bound as a parameter.
 pub async fn fetch_sorted(
     pool: &sqlx::PgPool,
     mode: SortMode,
@@ -77,8 +103,6 @@ pub async fn fetch_sorted(
     limit: i64,
 ) -> sqlx::Result<Vec<QuoteRecord>> {
     debug!(?mode, ?order, "fetching sorted quotes");
-    // `column` and `direction` come from closed enums, never user input, so
-    // interpolating them into the query is safe from injection. `limit` is bound.
     let column = match mode {
         SortMode::ById => "id",
         SortMode::ByTicker => "ticker",
@@ -106,6 +130,10 @@ pub async fn fetch_sorted(
         .await
 }
 
+/// Fetches analyst consensus and price targets for `symbol` concurrently.
+///
+/// Both requests are fired at the same time via [`tokio::try_join!`]; either
+/// one failing aborts the whole call.
 pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, String> {
     let client = YfClient::default();
     let analysis_builder = AnalysisBuilder::new(&client, symbol);

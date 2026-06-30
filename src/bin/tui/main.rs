@@ -1,3 +1,8 @@
+//! TUI binary entry point.
+//!
+//! Sets up the Postgres pool, initialises the ratatui terminal, seeds the
+//! initial quote page, then drives the event loop until the user quits.
+
 mod app;
 mod draw;
 
@@ -69,6 +74,11 @@ async fn main() -> io::Result<()> {
     result
 }
 
+/// Main event loop.
+///
+/// Drains pending [`AppEvent`]s, toggles the cursor blink, redraws the frame,
+/// then polls for terminal input — all within a 100 ms tick.  Exits when
+/// [`App::should_quit`] is set.
 async fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,

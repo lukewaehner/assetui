@@ -1,7 +1,13 @@
+//! Table rendering for the CLI binary.
+
 use crate::{db::quotes::fetch_all_quotes, models::QuoteRecord};
 use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use sqlx::{Pool, Postgres};
 
+/// Formats a single [`QuoteRecord`] as a row of [`Cell`]s for comfy-table.
+///
+/// The price cell is coloured green when the price is above the previous
+/// close, red when below, and unstyled when the comparison cannot be made.
 fn ticker_row(qr: &QuoteRecord) -> Vec<Cell> {
     let name = qr.name.as_deref().unwrap_or("Unknown");
 
@@ -40,6 +46,8 @@ fn ticker_row(qr: &QuoteRecord) -> Vec<Cell> {
     ]
 }
 
+/// Fetches all quotes from the database and prints them as a UTF-8 table to
+/// stdout.
 pub async fn print_tickers(p: &Pool<Postgres>) {
     let rows = fetch_all_quotes(p).await.unwrap();
 

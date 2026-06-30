@@ -1,3 +1,10 @@
+//! Ratatui rendering for the TUI binary.
+//!
+//! The layout is a 20/80 horizontal split: a narrow left column holds the
+//! ticker input box and a scrolling log panel; the right column holds the
+//! sortable quotes table.  When a stock-detail modal is open it overlays the
+//! full frame.
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -8,6 +15,8 @@ use ratatui::{
 
 use super::app::App;
 
+/// Renders the full TUI frame: input box, log panel, quotes table, and
+/// optionally the stock-detail modal.
 pub fn draw(f: &mut Frame, app: &mut App) {
     let outer = Layout::default()
         .direction(Direction::Horizontal)
@@ -25,6 +34,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let input_area = left_split[0];
     let log_area = left_split[1];
 
+    // Border colours swap between input and table to show which is "active".
     let in_input = app.input_mode.toggled;
     let input_border = if in_input {
         Color::Cyan
@@ -68,6 +78,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
+/// Renders the sortable quotes table into `area`.
+///
+/// Each header cell shows its sort key in yellow so users know which key to
+/// press.  The selected row is highlighted in dark gray with bold text, and
+/// `>> ` is drawn in the gutter.
 fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Color) {
     let box_bg = Color::DarkGray;
     let label_sty = Style::default()
@@ -157,6 +172,8 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     f.render_stateful_widget(table, area, &mut app.db_display.table_state);
 }
 
+/// Computes a centred [`Rect`] that occupies `percent_x`% of the width and
+/// `percent_y`% of the height of `r`.
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let vert = Layout::default()
         .direction(Direction::Vertical)
@@ -176,6 +193,12 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(vert[1])[1]
 }
 
+/// Renders the stock-detail overlay modal at 65 × 55% of the terminal area.
+///
+/// Shows the ticker, company name, current price, previous close, and — once
+/// the background fetch completes — the analyst consensus breakdown and price
+/// targets.  While the analysis is loading a "Loading analysis…" placeholder
+/// is shown instead.
 fn draw_stock_modal(f: &mut Frame, app: &mut App) {
     let area = centered_rect(65, 55, f.area());
     f.render_widget(Clear, area);

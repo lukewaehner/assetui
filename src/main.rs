@@ -1,3 +1,8 @@
+//! CLI binary entry point.
+//!
+//! Prompts the user to choose one of three modes, then runs the selected
+//! operation against the configured Postgres database.
+
 use sqlx::{Pool, Postgres};
 use tracing_subscriber::EnvFilter;
 
@@ -6,7 +11,9 @@ use yfinance::db::connection::setup_pool;
 use yfinance::db::quotes::dump_table_to_csv;
 use yfinance::run::fetch_and_store;
 
-// Multi threaded logging setup
+/// Initialises the `tracing` subscriber with an `EnvFilter` so log verbosity
+/// can be controlled via `RUST_LOG`.  Defaults to `info` when the env var is
+/// absent.
 fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(

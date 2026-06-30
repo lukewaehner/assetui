@@ -1,3 +1,10 @@
+//! Async batch-fetch pipeline.
+//!
+//! Spawns one Tokio task per ticker, funnels results through an mpsc channel,
+//! then drains the channel and writes each quote to the database serially.
+//! This keeps DB writes on a single code path while letting all Yahoo Finance
+//! HTTP calls overlap.
+
 use sqlx::{Pool, Postgres};
 use tracing::{debug, error, info, warn};
 use yfinance_rs::{Ticker, YfClient};
@@ -6,6 +13,13 @@ use crate::db::quotes::store_quote_to_db;
 use crate::fetch::{fetch_quote, prepare_tickers};
 use crate::models::QuoteRecord;
 
+/// Fetches real-time quotes for all `tickers` concurrently and stores each
+/// one to the database.
+///
+/// A channel with a buffer of 100 decouples the fetch tasks from the write
+/// loop, so the fetch tasks can proceed without waiting for each DB insert.
+/// Errors on individual tickers are logged and counted but do not abort the
+/// run; the function only returns `Err` on unrecoverable setup failures.
 pub async fn fetch_and_store(
     pool: &Pool<Postgres>,
     tickers: &[String],
@@ -36,6 +50,8 @@ pub async fn fetch_and_store(
         });
     }
 
+    // Drop the original sender so the channel closes once all spawned tasks
+    // finish, which lets the recv loop below terminate naturally.
     drop(tx);
 
     let mut stored = 0usize;
