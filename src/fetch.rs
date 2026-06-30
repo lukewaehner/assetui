@@ -1,3 +1,5 @@
+//! Yahoo Finance API integration.
+
 use tokio::try_join;
 use tracing::{debug, instrument};
 use yfinance_rs::{AnalysisBuilder, Ticker, YfClient};
@@ -33,6 +35,7 @@ pub async fn fetch_quote(
     Ok(Some(quote_record))
 }
 
+/// Fetches a quote for `symbol` and immediately persists it to the database.
 pub async fn fetch_quote_and_store(
     pool: &sqlx::PgPool,
     symbol: &str,
@@ -50,10 +53,12 @@ pub async fn fetch_quote_and_store(
     Ok(Some(quote_record))
 }
 
+/// Pairs each ticker symbol with an initialised [`Ticker`] client ready for async fetching.
 pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
     s.iter().map(|t| (t.clone(), Ticker::new(c, t))).collect()
 }
 
+/// Returns up to `limit` quotes ordered by `as_of DESC, id DESC`.
 pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<QuoteRecord>> {
     sqlx::query_as::<_, QuoteRecord>(
         "SELECT id, ticker, name, price, previous_close, day_volume, as_of
@@ -66,6 +71,7 @@ pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<Q
     .await
 }
 
+/// Returns up to `limit` quotes sorted by `mode` in the given `order`.
 pub async fn fetch_sorted(
     pool: &sqlx::PgPool,
     mode: SortMode,
@@ -100,6 +106,7 @@ pub async fn fetch_sorted(
         .await
 }
 
+/// Fetches analyst consensus and price targets for `symbol` concurrently.
 pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, String> {
     let client = YfClient::default();
     let analysis_builder = AnalysisBuilder::new(&client, symbol);

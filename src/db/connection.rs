@@ -1,11 +1,13 @@
+//! Postgres connection-pool setup.
+
 use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
 use tracing::{debug, info};
 
-pub async fn setup_pool(c: u32) -> Result<Pool<Postgres>, Box<dyn std::error::Error>> {
+pub async fn setup_pool(max_connections: u32) -> Result<Pool<Postgres>, Box<dyn std::error::Error>> {
     let database_url = dotenvy::var("DATABASE_URL")?;
-    debug!("connecting to postgres pool (max_connections={})", c);
+    debug!("connecting to postgres pool (max_connections={})", max_connections);
     let pool = PgPoolOptions::new()
-        .max_connections(c)
+        .max_connections(max_connections)
         .connect(&database_url)
         .await?;
     info!("postgres pool ready");

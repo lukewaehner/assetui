@@ -1,3 +1,5 @@
+//! Ratatui rendering for the TUI binary.
+
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -176,6 +178,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(vert[1])[1]
 }
 
+/// Renders the stock-detail overlay modal at 65 × 55% of the terminal area.
 fn draw_stock_modal(f: &mut Frame, app: &mut App) {
     let area = centered_rect(65, 55, f.area());
     f.render_widget(Clear, area);

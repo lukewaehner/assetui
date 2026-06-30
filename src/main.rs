@@ -1,3 +1,5 @@
+//! CLI binary entry point.
+
 use sqlx::{Pool, Postgres};
 use tracing_subscriber::EnvFilter;
 

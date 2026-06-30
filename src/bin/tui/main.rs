@@ -1,3 +1,5 @@
+//! TUI binary entry point.
+
 mod app;
 mod draw;
 
@@ -69,6 +71,7 @@ async fn main() -> io::Result<()> {
     result
 }
 
+/// Main event loop.
 async fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,

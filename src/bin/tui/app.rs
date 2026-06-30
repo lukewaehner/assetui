@@ -1,3 +1,5 @@
+//! Application state and event handling for the TUI binary.
+
 use std::time::Instant;
 
 use ratatui::widgets::TableState;
@@ -9,49 +11,80 @@ use yfinance::{
     sort::{SortMode, SortOrder},
 };
 
+/// Messages sent from async tasks back to the main event loop.
 pub enum AppEvent {
+    /// Initial page load or a re-fetch triggered by a sort change.
     PageLoaded(Vec<QuoteRecord>),
     FetchSpawned(String),
+    /// A quote was fetched and stored.
     FetchCompleted(QuoteRecord),
+    /// Analyst consensus and price targets loaded for the selected stock.
     StockAnalysisReady(QuoteRecordAnalysis),
+    /// User pressed a sort-column key.
     ChangeSortMode(SortMode),
+    /// User toggled sort direction.
     ChangeSortOrder(SortOrder),
+    /// Informational message for the log panel.
     LogLine(String),
     Error(String),
 }
 
+/// Top-level application state.
 pub struct App {
+    /// Ticker input box state (current text and whether the box is focused).
     pub input_mode: InputMode,
+    /// Set to `true` when the user presses `q`.
     pub should_quit: bool,
+    /// The quotes table and its associated sort/selection state.
     pub db_display: DbDisplay,
+    /// Lines shown in the log panel (most recent at the bottom).
     pub logs: Vec<String>,
+    /// Shared database connection pool passed to async tasks.
     pub pool: sqlx::PgPool,
+    /// Channel used by async tasks to push [`AppEvent`]s back to the loop.
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Current state of the blinking cursor in the input box.
     pub blink_state: bool,
+    /// Timestamp of the last blink toggle, used to drive the 500 ms interval.
     pub last_blink: Instant,
+    /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
 }
 
+/// State for the ticker input box.
 pub struct InputMode {
+    /// Text the user has typed so far.
     pub input: String,
+    /// Whether the input box is currently focused (i.e. typing goes here).
     pub toggled: bool,
 }
 
+/// State for the quotes table on the right side of the layout.
 pub struct DbDisplay {
+    /// Rows currently visible in the table.
     pub rows: Vec<QuoteRecord>,
+    /// Ratatui widget state tracking the selected row index.
     pub table_state: TableState,
+    /// Short status message shown in the table's title bar.
     pub status: String,
+    /// Column the table is currently sorted by.
     pub sort_mode: SortMode,
+    /// Direction of the current sort.
     pub sort_order: SortOrder,
 }
 
+/// State for the stock-detail overlay modal.
 pub struct StockInfoModal {
+    /// The quote row that was selected when `?` was pressed.
     pub stock: QuoteRecord,
+    /// Analyst data fetched in the background.
     pub analysis: Option<QuoteRecordAnalysis>,
+    /// Whether the modal is currently visible.
     pub visible: bool,
 }
 
 impl App {
+    /// Creates a new `App` with sensible defaults.
     pub fn new(pool: sqlx::PgPool, event_tx: mpsc::UnboundedSender<AppEvent>) -> Self {
         Self {
             input_mode: InputMode {
@@ -79,6 +112,7 @@ impl App {
         }
     }
 
+    /// Applies an [`AppEvent`] to the application state.
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::PageLoaded(rows) => {
@@ -140,6 +174,7 @@ impl App {
         });
     }
 
+    /// Routes a single command key to the appropriate state change.
     pub fn handle_command_key(&mut self, key: char) {
         match key.to_ascii_lowercase() {
             'q' => self.should_quit = true,

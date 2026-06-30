@@ -1,8 +1,11 @@
+//! Queries against the `quotes` table.
+
 use sqlx::{Pool, Postgres};
 use tracing::{debug, info, instrument};
 
 use crate::models::QuoteRecord;
 
+/// Inserts a quote into the database and returns the new row's `id`.
 #[instrument(skip(quote, p), fields(ticker = ?quote.ticker))]
 pub async fn store_quote_to_db(
     quote: &QuoteRecord,
@@ -28,6 +31,7 @@ pub async fn store_quote_to_db(
     Ok(id)
 }
 
+/// Returns every row in the `quotes` table with no ordering applied.
 #[instrument(skip(p))]
 pub async fn fetch_all_quotes(
     p: &Pool<Postgres>,
@@ -39,6 +43,7 @@ pub async fn fetch_all_quotes(
     Ok(rows)
 }
 
+/// Dumps every quote to a timestamped CSV file in the current directory.
 pub async fn dump_table_to_csv(p: &Pool<Postgres>) -> Result<(), Box<dyn std::error::Error>> {
     debug!("dumping quotes table to csv");
     let rows: Vec<QuoteRecord> = fetch_all_quotes(p).await?;

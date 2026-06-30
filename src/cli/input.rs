@@ -1,11 +1,18 @@
+//! Interactive stdin prompts for the CLI binary.
+
 use std::io;
 
+/// The three operations the CLI binary supports.
 pub enum Mode {
+    /// Fetch live quotes from Yahoo Finance and write them to the database.
     FetchAndStore,
+    /// Serialise every row in the quotes table to a timestamped CSV file.
     DumpToCsv,
+    /// Read quotes from the database and print them as a formatted table.
     PullFromDb,
 }
 
+/// Prompts the user to pick one of the three [`Mode`] options and returns the selection.
 pub fn select_mode() -> Mode {
     println!("Select mode:");
     println!("1. Fetch and store quotes");
@@ -34,6 +41,7 @@ pub fn select_mode() -> Mode {
     mode.unwrap_or(Mode::FetchAndStore)
 }
 
+/// Prompts the user to enter comma-separated ticker symbols and confirms when they are finished.
 pub fn pick_tickers() -> Vec<String> {
     let mut stocks: Vec<String> = Vec::new();
     let mut done: bool = false;

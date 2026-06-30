@@ -1,3 +1,5 @@
+//! Async batch-fetch pipeline.
+
 use sqlx::{Pool, Postgres};
 use tracing::{debug, error, info, warn};
 use yfinance_rs::{Ticker, YfClient};
@@ -6,6 +8,7 @@ use crate::db::quotes::store_quote_to_db;
 use crate::fetch::{fetch_quote, prepare_tickers};
 use crate::models::QuoteRecord;
 
+/// Fetches real-time quotes for all `tickers` concurrently and stores each one to the database.
 pub async fn fetch_and_store(
     pool: &Pool<Postgres>,
     tickers: &[String],

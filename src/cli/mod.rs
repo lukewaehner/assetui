@@ -1,3 +1,5 @@
+//! Terminal-specific presentation for the CLI binary.
+
 pub mod input;
 pub mod output;
 
