@@ -11,7 +11,7 @@ use super::app::App;
 pub fn draw(f: &mut Frame, app: &mut App) {
     let outer = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
         .split(f.area());
 
     let left = outer[0];
@@ -26,16 +26,31 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let log_area = left_split[1];
 
     let in_input = app.input_mode.toggled;
-    let input_border = if in_input { Color::Cyan } else { Color::DarkGray };
-    let db_border = if in_input { Color::DarkGray } else { Color::Cyan };
+    let input_border = if in_input {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+    let db_border = if in_input {
+        Color::DarkGray
+    } else {
+        Color::Cyan
+    };
 
-    let cursor = if in_input && app.blink_state { "▌" } else { " " };
+    let cursor = if in_input && app.blink_state {
+        "▌"
+    } else {
+        " "
+    };
     let input_display = format!("{}{}", app.input_mode.input, cursor);
     let input_block = Block::default()
         .title("Query")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(input_border));
-    f.render_widget(Paragraph::new(input_display.as_str()).block(input_block), input_area);
+    f.render_widget(
+        Paragraph::new(input_display.as_str()).block(input_block),
+        input_area,
+    );
 
     let log_block = Block::default()
         .title("Logs")
@@ -55,8 +70,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Color) {
     let box_bg = Color::DarkGray;
-    let label_sty = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
-    let key_sty = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let label_sty = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let key_sty = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
     let cell_sty = Style::default().bg(box_bg);
 
     let hcell = |label: &'static str, key: &'static str| -> Cell<'static> {
@@ -69,7 +88,8 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
 
     let header = Row::new(vec![
         hcell("ID ", "(d)"),
-        hcell("Ticker ", "(n)"),
+        hcell("Ticker ", "(t)"),
+        hcell("Name", "(n)"),
         hcell("Price ", "(p)"),
         hcell("Prev Close ", "(c)"),
         hcell("Volume ", "(v)"),
@@ -78,13 +98,29 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     .bottom_margin(1);
 
     let rows = app.db_display.rows.iter().map(|q| {
-        let price = q.price.map(|p| format!("{p:.2}")).unwrap_or_else(|| "-".to_string());
-        let prev = q.previous_close.map(|p| format!("{p:.2}")).unwrap_or_else(|| "-".to_string());
-        let vol = q.day_volume.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".to_string());
-        let as_of = q.as_of.map(|dt| dt.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "-".to_string());
+        let price = q
+            .price
+            .map(|p| format!("{p:.2}"))
+            .unwrap_or_else(|| "-".to_string());
+        let prev = q
+            .previous_close
+            .map(|p| format!("{p:.2}"))
+            .unwrap_or_else(|| "-".to_string());
+        let vol = q
+            .day_volume
+            .map(|v| format!("{v:.0}"))
+            .unwrap_or_else(|| "-".to_string());
+        let as_of = q
+            .as_of
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "-".to_string());
         Row::new(vec![
-            Cell::from(q.id.map(|id| id.to_string()).unwrap_or_else(|| "-".to_string())),
-            Cell::from(q.ticker.clone().unwrap()),
+            Cell::from(
+                q.id.map(|id| id.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            Cell::from(q.ticker.as_deref().unwrap_or("-")),
+            Cell::from(q.name.as_deref().unwrap_or("-")),
             Cell::from(price),
             Cell::from(prev),
             Cell::from(vol),
@@ -93,12 +129,13 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     });
 
     let widths = [
-        Constraint::Length(8),
-        Constraint::Length(12),
+        Constraint::Length(6),
+        Constraint::Length(10),
+        Constraint::Length(24),
         Constraint::Length(11),
         Constraint::Length(15),
         Constraint::Length(13),
-        Constraint::Length(22),
+        Constraint::Length(12),
     ];
 
     let title = format!("Quote{}", app.db_display.status);
@@ -110,7 +147,11 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         )
-        .row_highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .row_highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol(">> ");
 
     f.render_stateful_widget(table, area, &mut app.db_display.table_state);
@@ -136,7 +177,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn draw_stock_modal(f: &mut Frame, app: &mut App) {
-    let area = centered_rect(60, 40, f.area());
+    let area = centered_rect(65, 55, f.area());
     f.render_widget(Clear, area);
     let modal = Block::bordered()
         .title("Stock Info")
@@ -145,11 +186,201 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
     let inner = modal.inner(area);
     f.render_widget(modal, area);
 
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // ticker + name
+            Constraint::Length(1), // price + prev close
+            Constraint::Length(1), // blank
+            Constraint::Min(0),    // analysis
+        ])
+        .split(inner);
+
     let stock = &app.stock_modal.stock;
-    let text = format!(
-        "Ticker: {}, Price: {}",
-        stock.ticker.as_deref().unwrap_or("-"),
-        stock.price.map(|p| format!("{:.2}", p)).unwrap_or("-".into())
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                stock.ticker.as_deref().unwrap_or("-"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  —  "),
+            Span::raw(stock.name.as_deref().unwrap_or("-")),
+        ])),
+        sections[0],
     );
-    f.render_widget(Paragraph::new(text), inner);
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Price: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                stock
+                    .price
+                    .map(|p| format!("${p:.2}"))
+                    .unwrap_or_else(|| "-".into()),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw("    "),
+            Span::styled("Prev Close: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                stock
+                    .previous_close
+                    .map(|p| format!("${p:.2}"))
+                    .unwrap_or_else(|| "-".into()),
+                Style::default().fg(Color::Yellow),
+            ),
+        ])),
+        sections[1],
+    );
+
+    match &app.stock_modal.analysis {
+        None => {
+            f.render_widget(Paragraph::new("  Loading analysis..."), sections[3]);
+        }
+        Some(analysis) => {
+            let analysis_sections = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1), // "Analyst Consensus" heading
+                    Constraint::Length(1), // period + consensus rating
+                    Constraint::Length(1), // blank
+                    Constraint::Length(2), // buy/sell breakdown table
+                    Constraint::Length(1), // blank
+                    Constraint::Length(1), // "Price Target" heading
+                    Constraint::Length(1), // mean / low / high / analysts
+                    Constraint::Min(0),
+                ])
+                .split(sections[3]);
+
+            f.render_widget(
+                Paragraph::new(Span::styled(
+                    "Analyst Consensus",
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                )),
+                analysis_sections[0],
+            );
+
+            if let Some(rec) = &analysis.recommendation_summary {
+                let period_str = rec
+                    .latest_period
+                    .as_ref()
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "-".into());
+                let mean_str = rec
+                    .mean
+                    .map(|m| format!("{m:.2}"))
+                    .unwrap_or_else(|| "-".into());
+                let rating = rec.mean_rating_text.as_deref().unwrap_or("-");
+                let rating_color = match rating.to_lowercase().as_str() {
+                    "strong buy" => Color::LightGreen,
+                    "buy" => Color::Green,
+                    "hold" => Color::Yellow,
+                    "sell" => Color::Red,
+                    "strong sell" => Color::LightRed,
+                    _ => Color::White,
+                };
+
+                f.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled("Period: ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(period_str),
+                        Span::raw("    "),
+                        Span::styled("Consensus: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            rating,
+                            Style::default()
+                                .fg(rating_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("  ({mean_str})"),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+                    analysis_sections[1],
+                );
+
+                let fmt_u = |v: Option<u32>| v.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
+                f.render_widget(
+                    Table::new(
+                        [
+                            Row::new([
+                                Cell::from("Str Buy").style(
+                                    Style::default()
+                                        .fg(Color::LightGreen)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Cell::from("Buy").style(Style::default().fg(Color::Green)),
+                                Cell::from("Hold").style(Style::default().fg(Color::Yellow)),
+                                Cell::from("Sell").style(Style::default().fg(Color::Red)),
+                                Cell::from("Str Sell").style(
+                                    Style::default()
+                                        .fg(Color::LightRed)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            Row::new([
+                                Cell::from(fmt_u(rec.strong_buy)),
+                                Cell::from(fmt_u(rec.buy)),
+                                Cell::from(fmt_u(rec.hold)),
+                                Cell::from(fmt_u(rec.sell)),
+                                Cell::from(fmt_u(rec.strong_sell)),
+                            ]),
+                        ],
+                        [Constraint::Ratio(1, 5); 5],
+                    ),
+                    analysis_sections[3],
+                );
+            }
+
+            f.render_widget(
+                Paragraph::new(Span::styled(
+                    "Price Target",
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                )),
+                analysis_sections[5],
+            );
+
+            if let Some(pt) = &analysis.price_target {
+                let mean_str = pt
+                    .mean
+                    .as_ref()
+                    .map(|p| format!("${:.2}", p.amount()))
+                    .unwrap_or_else(|| "-".into());
+                let low_str = pt
+                    .low
+                    .as_ref()
+                    .map(|p| format!("${:.2}", p.amount()))
+                    .unwrap_or_else(|| "-".into());
+                let high_str = pt
+                    .high
+                    .as_ref()
+                    .map(|p| format!("${:.2}", p.amount()))
+                    .unwrap_or_else(|| "-".into());
+
+                f.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled("Mean: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(mean_str, Style::default().fg(Color::Yellow)),
+                        Span::raw("    "),
+                        Span::styled("Low: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(low_str, Style::default().fg(Color::Red)),
+                        Span::raw("    "),
+                        Span::styled("High: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(high_str, Style::default().fg(Color::Green)),
+                        Span::raw("    "),
+                        Span::styled("Analysts: ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(
+                            pt.number_of_analysts
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "-".into()),
+                        ),
+                    ])),
+                    analysis_sections[6],
+                );
+            }
+        }
+    }
 }

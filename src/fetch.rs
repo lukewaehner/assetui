@@ -1,6 +1,8 @@
+use tokio::try_join;
 use tracing::{debug, instrument};
-use yfinance_rs::{Ticker, YfClient};
+use yfinance_rs::{AnalysisBuilder, Ticker, YfClient};
 
+use crate::models::QuoteRecordAnalysis;
 use crate::sort::{SortMode, SortOrder};
 use crate::{db, models::QuoteRecord};
 
@@ -19,7 +21,8 @@ pub async fn fetch_quote(
     );
     let quote_record = QuoteRecord {
         id: None, // Set by the database
-        ticker: quote.name.clone(),
+        ticker: Some(symbol.to_string()),
+        name: quote.name.clone(),
         price: quote.price.map(|p| p.into_inner().as_f64()),
         previous_close: quote.previous_close.map(|p| p.into_inner().as_f64()),
         day_volume: quote
@@ -57,7 +60,7 @@ pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
 
 pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<QuoteRecord>> {
     sqlx::query_as::<_, QuoteRecord>(
-        "SELECT id, ticker, price, previous_close, day_volume, as_of
+        "SELECT id, ticker, name, price, previous_close, day_volume, as_of
               FROM quotes
               ORDER BY as_of DESC, id DESC
               LIMIT $1",
@@ -83,6 +86,7 @@ pub async fn fetch_sorted(
         SortMode::ByPrevClose => "previous_close",
         SortMode::ByVolume => "day_volume",
         SortMode::ByAsOf => "as_of",
+        SortMode::ByName => "name",
     };
     let direction = match order {
         SortOrder::Ascending => "ASC",
@@ -90,7 +94,7 @@ pub async fn fetch_sorted(
     };
 
     let query = format!(
-        "SELECT id, ticker, price, previous_close, day_volume, as_of
+        "SELECT id, ticker, name, price, previous_close, day_volume, as_of
               FROM quotes
               ORDER BY {column} {direction}, id DESC
               LIMIT $1"
@@ -100,4 +104,21 @@ pub async fn fetch_sorted(
         .bind(limit)
         .fetch_all(pool)
         .await
+}
+
+pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, String> {
+    let client = YfClient::default();
+    let analysis_builder = AnalysisBuilder::new(&client, symbol);
+
+    let (rec, pt) = try_join!(
+        analysis_builder.recommendations_summary(),
+        analysis_builder.analyst_price_target(None),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(QuoteRecordAnalysis {
+        ticker: Some(symbol.to_string()),
+        recommendation_summary: Some(rec),
+        price_target: Some(pt),
+    })
 }

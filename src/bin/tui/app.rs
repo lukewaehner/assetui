@@ -4,8 +4,8 @@ use ratatui::widgets::TableState;
 use tokio::sync::mpsc;
 
 use yfinance::{
-    fetch::fetch_sorted,
-    models::QuoteRecord,
+    fetch::{fetch_analysis, fetch_sorted},
+    models::{QuoteRecord, QuoteRecordAnalysis},
     sort::{SortMode, SortOrder},
 };
 
@@ -13,6 +13,7 @@ pub enum AppEvent {
     PageLoaded(Vec<QuoteRecord>),
     FetchSpawned(String),
     FetchCompleted(QuoteRecord),
+    StockAnalysisReady(QuoteRecordAnalysis),
     ChangeSortMode(SortMode),
     ChangeSortOrder(SortOrder),
     LogLine(String),
@@ -46,6 +47,7 @@ pub struct DbDisplay {
 
 pub struct StockInfoModal {
     pub stock: QuoteRecord,
+    pub analysis: Option<QuoteRecordAnalysis>,
     pub visible: bool,
 }
 
@@ -71,6 +73,7 @@ impl App {
             last_blink: Instant::now(),
             stock_modal: StockInfoModal {
                 stock: QuoteRecord::default(),
+                analysis: None,
                 visible: false,
             },
         }
@@ -115,6 +118,9 @@ impl App {
                 self.db_display.sort_order = order;
                 self.spawn_reload();
             }
+            AppEvent::StockAnalysisReady(analysis) => {
+                self.stock_modal.analysis = Some(analysis);
+            }
         }
     }
 
@@ -139,14 +145,15 @@ impl App {
         match key.to_ascii_lowercase() {
             'q' => self.should_quit = true,
             'i' => self.input_mode.toggled = !self.input_mode.toggled,
-            'd' | 'p' | 'c' | 'v' | 'a' | 'n' => {
+            'd' | 'p' | 'c' | 'v' | 'a' | 'n' | 't' => {
                 let mode = match key.to_ascii_lowercase() {
                     'd' => SortMode::ById,
                     'p' => SortMode::ByPrice,
                     'c' => SortMode::ByPrevClose,
                     'v' => SortMode::ByVolume,
                     'a' => SortMode::ByAsOf,
-                    'n' => SortMode::ByTicker,
+                    'n' => SortMode::ByName,
+                    't' => SortMode::ByTicker,
                     _ => unreachable!(),
                 };
                 self.handle_event(AppEvent::ChangeSortMode(mode));
@@ -185,15 +192,33 @@ impl App {
                     self.stock_modal.stock = QuoteRecord {
                         id: row.id,
                         ticker: row.ticker.clone(),
+                        name: row.name.clone(),
                         price: row.price,
                         previous_close: row.previous_close,
                         day_volume: row.day_volume,
                         as_of: row.as_of,
                     };
+                    self.stock_modal.analysis = None;
                     self.stock_modal.visible = true;
+                    self.spawn_analysis(&row.ticker.clone().unwrap());
                 }
             }
             _ => {}
         }
+    }
+
+    fn spawn_analysis(&self, symbol: &str) {
+        let tx = self.event_tx.clone();
+        let symbol = symbol.to_owned();
+        tokio::spawn(async move {
+            match fetch_analysis(&symbol).await {
+                Ok(a) => {
+                    let _ = tx.send(AppEvent::StockAnalysisReady(a));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
+                }
+            }
+        });
     }
 }

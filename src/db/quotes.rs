@@ -18,13 +18,14 @@ pub async fn store_quote_to_db(
     // (ON CONFLICT DO NOTHING means RETURNING yields no row in that case).
     let id: Option<i32> = sqlx::query_scalar(
         "
-        INSERT INTO quotes (ticker, price, previous_close, day_volume, as_of)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO quotes (ticker, name, price, previous_close, day_volume, as_of)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (ticker, as_of) DO NOTHING
         RETURNING id
         ",
     )
     .bind(quote.ticker.clone())
+    .bind(quote.name.clone())
     .bind(quote.price)
     .bind(quote.previous_close)
     .bind(quote.day_volume)

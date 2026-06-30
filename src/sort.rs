@@ -11,6 +11,7 @@ pub enum SortOrder {
 pub enum SortMode {
     ById,
     ByTicker,
+    ByName,
     ByPrice,
     ByPrevClose,
     ByVolume,
