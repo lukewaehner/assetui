@@ -22,3 +22,43 @@ pub enum SortMode {
     ByVolume,
     ByAsOf,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sort_order_clone() {
+        let original = SortOrder::Ascending;
+        let cloned = original.clone();
+        assert_eq!(cloned, SortOrder::Ascending);
+    }
+
+    #[test]
+    fn test_sort_order_copy() {
+        let a = SortOrder::Descending;
+        let b = a;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_sort_mode_all_variants_are_distinct() {
+        let mut variants = vec![
+            SortMode::ById,
+            SortMode::ByTicker,
+            SortMode::ByName,
+            SortMode::ByPrice,
+            SortMode::ByPrevClose,
+            SortMode::ByVolume,
+            SortMode::ByAsOf,
+        ];
+        variants.dedup();
+        assert_eq!(variants.len(), 7);
+    }
+
+    #[test]
+    fn test_sort_mode_debug() {
+        let debug_str = format!("{:?}", SortMode::ByPrice);
+        assert_eq!(debug_str, "ByPrice");
+    }
+}

@@ -4,7 +4,7 @@ A Rust tool for pulling stock quotes from Yahoo Finance and keeping a local hist
 
 ## What it does
 
-Every fetch stores a timestamped snapshot of a quote (price, previous close, volume) in Postgres. Duplicate fetches — same ticker at the same `as_of` timestamp — are silently ignored, so you can run it on a schedule without cluttering the table.
+Every fetch stores a timestamped snapshot of a quote (price, previous close, volume) in Postgres. Duplicate fetches - same ticker at the same `as_of` timestamp - are silently ignored, so you can run it on a schedule without cluttering the table.
 
 The TUI loads your most recent 200 quotes on startup, lets you sort by any column, and has a detail modal (press `?`) that pulls analyst consensus and price targets for the selected stock.
 
@@ -36,9 +36,9 @@ cargo run
 
 Prompts you to pick a mode:
 
-1. **Fetch and store** — enter comma-separated tickers (e.g. `AAPL,MSFT,GOOG`), fetches them in parallel
-2. **Dump to CSV** — writes the full quotes table to `quotes_dump_YYYYMMDDHHMMSS.csv`
-3. **Pull from DB** — prints a formatted table of everything stored
+1. **Fetch and store** - enter comma-separated tickers (e.g. `AAPL,MSFT,GOOG`), fetches them in parallel
+2. **Dump to CSV** - writes the full quotes table to `quotes_dump_YYYYMMDDHHMMSS.csv`
+3. **Pull from DB** - prints a formatted table of everything stored
 
 Log verbosity is controlled via `RUST_LOG` (defaults to `info`).
 

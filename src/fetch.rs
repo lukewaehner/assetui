@@ -77,7 +77,7 @@ pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
     s.iter().map(|t| (t.clone(), Ticker::new(c, t))).collect()
 }
 
-/// Returns up to `limit` quotes ordered by `as_of DESC, id DESC` — the most
+/// Returns up to `limit` quotes ordered by `as_of DESC, id DESC` - the most
 /// recently fetched records first.
 pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<QuoteRecord>> {
     sqlx::query_as::<_, QuoteRecord>(
@@ -149,4 +149,34 @@ pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, String>
         recommendation_summary: Some(rec),
         price_target: Some(pt),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_tickers;
+    use yfinance_rs::YfClient;
+
+    #[test]
+    fn test_prepare_tickers_empty() {
+        let client = YfClient::default();
+        let result = prepare_tickers(&[], &client);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_prepare_tickers_count() {
+        let client = YfClient::default();
+        let symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
+        let result = prepare_tickers(&symbols, &client);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_prepare_tickers_symbols_preserved() {
+        let client = YfClient::default();
+        let symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
+        let result = prepare_tickers(&symbols, &client);
+        assert_eq!(result[0].0, "AAPL");
+        assert_eq!(result[1].0, "MSFT");
+    }
 }

@@ -66,3 +66,61 @@ pub async fn print_tickers(p: &Pool<Postgres>) {
 
     println!("{table}");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ticker_row;
+    use crate::models::QuoteRecord;
+
+    #[test]
+    fn test_ticker_row_returns_five_cells() {
+        let qr = QuoteRecord {
+            id: Some(1),
+            ticker: Some("AAPL".to_string()),
+            name: Some("Apple Inc.".to_string()),
+            price: Some(150.0),
+            previous_close: Some(148.0),
+            day_volume: Some(1_000_000.0),
+            as_of: Some(chrono::Utc::now()),
+        };
+        let cells = ticker_row(&qr);
+        assert_eq!(cells.len(), 5);
+    }
+
+    #[test]
+    fn test_ticker_row_handles_all_none() {
+        let qr = QuoteRecord::default();
+        let cells = ticker_row(&qr);
+        assert_eq!(cells.len(), 5);
+    }
+
+    #[test]
+    fn test_ticker_row_price_above_prev_close() {
+        let qr = QuoteRecord {
+            id: None,
+            ticker: Some("TSLA".to_string()),
+            name: Some("Tesla Inc.".to_string()),
+            price: Some(100.0),
+            previous_close: Some(90.0),
+            day_volume: Some(500_000.0),
+            as_of: None,
+        };
+        let cells = ticker_row(&qr);
+        assert_eq!(cells.len(), 5);
+    }
+
+    #[test]
+    fn test_ticker_row_price_below_prev_close() {
+        let qr = QuoteRecord {
+            id: None,
+            ticker: Some("TSLA".to_string()),
+            name: Some("Tesla Inc.".to_string()),
+            price: Some(80.0),
+            previous_close: Some(90.0),
+            day_volume: Some(500_000.0),
+            as_of: None,
+        };
+        let cells = ticker_row(&qr);
+        assert_eq!(cells.len(), 5);
+    }
+}

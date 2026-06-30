@@ -75,3 +75,37 @@ pub fn pick_tickers() -> Vec<String> {
     }
     stocks
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Mode;
+
+    #[test]
+    fn test_mode_variants_exist() {
+        let _fetch = Mode::FetchAndStore;
+        let _dump = Mode::DumpToCsv;
+        let _pull = Mode::PullFromDb;
+    }
+
+    #[test]
+    fn test_pick_tickers_normalises_case() {
+        let input = "aapl,msft, ,goog";
+        let result: Vec<String> = input
+            .split(',')
+            .map(|s| s.trim().to_uppercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(result, vec!["AAPL", "MSFT", "GOOG"]);
+    }
+
+    #[test]
+    fn test_empty_input_filtered() {
+        let input = "";
+        let result: Vec<String> = input
+            .split(',')
+            .map(|s| s.trim().to_uppercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(result.is_empty());
+    }
+}

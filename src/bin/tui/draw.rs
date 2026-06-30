@@ -12,6 +12,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
 };
+use yfinance::models::QuoteRecord;
 
 use super::app::App;
 
@@ -195,8 +196,8 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 /// Renders the stock-detail overlay modal at 65 × 55% of the terminal area.
 ///
-/// Shows the ticker, company name, current price, previous close, and — once
-/// the background fetch completes — the analyst consensus breakdown and price
+/// Shows the ticker, company name, current price, previous close, and - once
+/// the background fetch completes - the analyst consensus breakdown and price
 /// targets.  While the analysis is loading a "Loading analysis…" placeholder
 /// is shown instead.
 fn draw_stock_modal(f: &mut Frame, app: &mut App) {
@@ -229,7 +230,7 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("  —  "),
+            Span::raw("  -  "),
             Span::raw(stock.name.as_deref().unwrap_or("-")),
         ])),
         sections[0],
@@ -243,7 +244,7 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
                     .price
                     .map(|p| format!("${p:.2}"))
                     .unwrap_or_else(|| "-".into()),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(configure_stock_price_color(stock)),
             ),
             Span::raw("    "),
             Span::styled("Prev Close: ", Style::default().fg(Color::DarkGray)),
@@ -405,5 +406,17 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
                 );
             }
         }
+    }
+}
+
+fn configure_stock_price_color(stock: &QuoteRecord) -> Color {
+    let price = stock.price.unwrap_or_default();
+    let prev = stock.previous_close.unwrap_or_default();
+    let diff = price - prev;
+
+    match diff {
+        d if d > 0.0 => Color::Green,
+        d if d < 0.0 => Color::Red,
+        _ => Color::Yellow,
     }
 }

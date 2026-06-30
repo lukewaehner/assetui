@@ -273,3 +273,138 @@ impl App {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use yfinance::models::QuoteRecord;
+    use yfinance::sort::{SortMode, SortOrder};
+
+    fn make_test_app() -> (App, mpsc::UnboundedReceiver<AppEvent>) {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/nonexistent_test_db").unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        (App::new(pool, tx), rx)
+    }
+
+    #[tokio::test]
+    async fn test_app_new_default_state() {
+        let (app, _rx) = make_test_app();
+        assert!(!app.should_quit);
+        assert!(!app.input_mode.toggled);
+        assert!(app.db_display.rows.is_empty());
+        assert!(app.logs.is_empty());
+        assert!(!app.stock_modal.visible);
+        assert_eq!(app.db_display.sort_mode, SortMode::ById);
+        assert_eq!(app.db_display.sort_order, SortOrder::Descending);
+    }
+
+    #[tokio::test]
+    async fn test_handle_event_page_loaded() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord::default()]));
+        assert_eq!(app.db_display.rows.len(), 1);
+        assert!(app.db_display.status.is_empty());
+        assert_eq!(app.db_display.table_state.selected(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_handle_event_fetch_spawned() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::FetchSpawned("AAPL".to_string()));
+        assert!(app.db_display.status.contains("AAPL"));
+        assert_eq!(app.logs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_handle_event_fetch_completed() {
+        let (mut app, _rx) = make_test_app();
+        let record = QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        };
+        app.handle_event(AppEvent::FetchCompleted(record));
+        assert_eq!(app.db_display.rows.len(), 1);
+        assert_eq!(app.logs.len(), 1);
+        assert!(app.logs[0].contains("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_event_log_line() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::LogLine("hello".to_string()));
+        assert_eq!(app.logs.last(), Some(&"hello".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_handle_event_error() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::Error("oops".to_string()));
+        assert!(app.db_display.status.contains("oops"));
+        assert!(app.logs.iter().any(|l| l.contains("oops")));
+    }
+
+    #[tokio::test]
+    async fn test_command_key_q_quits() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_command_key('q');
+        assert!(app.should_quit);
+    }
+
+    #[tokio::test]
+    async fn test_command_key_i_toggles_input() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_command_key('i');
+        assert!(app.input_mode.toggled);
+        app.handle_command_key('i');
+        assert!(!app.input_mode.toggled);
+    }
+
+    #[tokio::test]
+    async fn test_command_key_navigation_j_wraps() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![
+            QuoteRecord::default(),
+            QuoteRecord::default(),
+            QuoteRecord::default(),
+        ]));
+        assert_eq!(app.db_display.table_state.selected(), Some(0));
+        app.handle_command_key('j');
+        assert_eq!(app.db_display.table_state.selected(), Some(1));
+        app.handle_command_key('j');
+        assert_eq!(app.db_display.table_state.selected(), Some(2));
+        app.handle_command_key('j'); // wraps back to 0
+        assert_eq!(app.db_display.table_state.selected(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_command_key_navigation_k_wraps() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![
+            QuoteRecord::default(),
+            QuoteRecord::default(),
+            QuoteRecord::default(),
+        ]));
+        assert_eq!(app.db_display.table_state.selected(), Some(0));
+        app.handle_command_key('k'); // wraps from 0 to 2
+        assert_eq!(app.db_display.table_state.selected(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_command_key_o_toggles_sort_order() {
+        let (mut app, _rx) = make_test_app();
+        assert_eq!(app.db_display.sort_order, SortOrder::Descending);
+        app.handle_command_key('o');
+        assert_eq!(app.db_display.sort_order, SortOrder::Ascending);
+        app.handle_command_key('o');
+        assert_eq!(app.db_display.sort_order, SortOrder::Descending);
+    }
+
+    #[tokio::test]
+    async fn test_command_key_sort_by_price() {
+        let (mut app, _rx) = make_test_app();
+        assert_eq!(app.db_display.sort_mode, SortMode::ById);
+        app.handle_command_key('p');
+        assert_eq!(app.db_display.sort_mode, SortMode::ByPrice);
+    }
+}

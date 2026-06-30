@@ -77,7 +77,7 @@ async fn main() -> io::Result<()> {
 /// Main event loop.
 ///
 /// Drains pending [`AppEvent`]s, toggles the cursor blink, redraws the frame,
-/// then polls for terminal input — all within a 100 ms tick.  Exits when
+/// then polls for terminal input - all within a 100 ms tick.  Exits when
 /// [`App::should_quit`] is set.
 async fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,

@@ -42,3 +42,61 @@ pub struct QuoteRecordAnalysis {
     /// Analyst price-target consensus (mean, low, high).
     pub price_target: Option<PriceTarget>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn test_quote_record_default_has_all_none() {
+        let record = QuoteRecord::default();
+        assert!(record.id.is_none());
+        assert!(record.ticker.is_none());
+        assert!(record.name.is_none());
+        assert!(record.price.is_none());
+        assert!(record.previous_close.is_none());
+        assert!(record.day_volume.is_none());
+        assert!(record.as_of.is_none());
+    }
+
+    #[test]
+    fn test_quote_record_construction() {
+        let now = Utc::now();
+        let record = QuoteRecord {
+            id: Some(42),
+            ticker: Some("AAPL".to_string()),
+            name: Some("Apple Inc.".to_string()),
+            price: Some(189.50),
+            previous_close: Some(187.25),
+            day_volume: Some(55_000_000.0),
+            as_of: Some(now),
+        };
+        assert_eq!(record.id, Some(42));
+        assert_eq!(record.ticker.as_deref(), Some("AAPL"));
+        assert_eq!(record.name.as_deref(), Some("Apple Inc."));
+        assert_eq!(record.price, Some(189.50));
+        assert_eq!(record.previous_close, Some(187.25));
+        assert_eq!(record.day_volume, Some(55_000_000.0));
+        assert!(record.as_of.is_some());
+    }
+
+    #[test]
+    fn test_quote_record_analysis_default() {
+        let analysis = QuoteRecordAnalysis::default();
+        assert!(analysis.ticker.is_none());
+        assert!(analysis.recommendation_summary.is_none());
+        assert!(analysis.price_target.is_none());
+    }
+
+    #[test]
+    fn test_quote_record_debug_contains_ticker() {
+        let record = QuoteRecord {
+            ticker: Some("TSLA".to_string()),
+            as_of: Some(Utc::now()),
+            ..Default::default()
+        };
+        let debug_str = format!("{:?}", record);
+        assert!(debug_str.contains("TSLA"));
+    }
+}
