@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use yfinance_rs::{PriceTarget, RecommendationSummary};
 
 /// A single stock quote snapshot, shared across the fetch layer, database operations, and CSV exports.
-#[derive(sqlx::FromRow, serde::Serialize, Default, Debug)]
+#[derive(sqlx::FromRow, serde::Serialize, Clone, Default, Debug)]
 pub struct QuoteRecord {
     /// Database-assigned row ID.
     pub id: Option<i32>,

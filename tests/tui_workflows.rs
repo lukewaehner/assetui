@@ -1,6 +1,6 @@
 use chrono::{TimeZone, Utc};
 use yfinance::db::quotes::store_quote_to_db;
-use yfinance::fetch::{fetch_recent, fetch_sorted};
+use yfinance::fetch::fetch_sorted;
 use yfinance::models::QuoteRecord;
 use yfinance::sort::{SortMode, SortOrder};
 
@@ -29,7 +29,7 @@ async fn test_tui_initial_load_returns_recent_200(pool: sqlx::PgPool) {
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let rows = fetch_recent(&pool, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
 
     assert_eq!(rows.len(), 10, "all 10 quotes should be returned");
 
@@ -55,7 +55,7 @@ async fn test_tui_new_fetch_appears_at_top_of_recent(pool: sqlx::PgPool) {
     let new_quote = tui_quote("NEWT", 999.0, 100);
     store_quote_to_db(&new_quote, &pool).await.unwrap();
 
-    let rows = fetch_recent(&pool, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
 
     assert_eq!(rows.len(), 6, "should have 6 rows total");
     assert_eq!(
@@ -174,7 +174,7 @@ async fn test_tui_page_limit_matches_startup(pool: sqlx::PgPool) {
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let rows = fetch_recent(&pool, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
 
     assert_eq!(rows.len(), 200, "fetch_recent must respect the 200-row limit");
 

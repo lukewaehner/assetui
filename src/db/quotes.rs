@@ -4,13 +4,14 @@ use sqlx::{Pool, Postgres};
 use tracing::{debug, info, instrument};
 
 use crate::models::QuoteRecord;
+use crate::AppError;
 
 /// Inserts a quote into the database and returns the new row's `id`.
 #[instrument(skip(quote, p), fields(ticker = ?quote.ticker))]
 pub async fn store_quote_to_db(
     quote: &QuoteRecord,
     p: &Pool<Postgres>,
-) -> Result<Option<i32>, Box<dyn std::error::Error>> {
+) -> Result<Option<i32>, AppError> {
     debug!("inserting quote into postgres");
     let id: Option<i32> = sqlx::query_scalar(
         "
@@ -20,8 +21,8 @@ pub async fn store_quote_to_db(
         RETURNING id
         ",
     )
-    .bind(quote.ticker.clone())
-    .bind(quote.name.clone())
+    .bind(quote.ticker.as_deref())
+    .bind(quote.name.as_deref())
     .bind(quote.price)
     .bind(quote.previous_close)
     .bind(quote.day_volume)
@@ -33,18 +34,19 @@ pub async fn store_quote_to_db(
 
 /// Returns every row in the `quotes` table with no ordering applied.
 #[instrument(skip(p))]
-pub async fn fetch_all_quotes(
-    p: &Pool<Postgres>,
-) -> Result<Vec<QuoteRecord>, Box<dyn std::error::Error>> {
+pub async fn fetch_all_quotes(p: &Pool<Postgres>) -> Result<Vec<QuoteRecord>, AppError> {
     debug!("pulling quotes from postgres");
-    let rows = sqlx::query_as::<_, QuoteRecord>("SELECT * FROM quotes")
-        .fetch_all(p)
-        .await?;
+    let rows = sqlx::query_as::<_, QuoteRecord>(
+        "SELECT id, ticker, name, price, previous_close, day_volume, as_of FROM quotes",
+    )
+    .fetch_all(p)
+    .await?;
     Ok(rows)
 }
 
 /// Dumps every quote to a timestamped CSV file in the current directory.
-pub async fn dump_table_to_csv(p: &Pool<Postgres>) -> Result<(), Box<dyn std::error::Error>> {
+#[instrument(skip(p))]
+pub async fn dump_table_to_csv(p: &Pool<Postgres>) -> Result<(), AppError> {
     debug!("dumping quotes table to csv");
     let rows: Vec<QuoteRecord> = fetch_all_quotes(p).await?;
     let path = format!(
