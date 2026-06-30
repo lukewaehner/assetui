@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeZone, Utc};
 use yfinance::db::quotes::{dump_table_to_csv, fetch_all_quotes, store_quote_to_db};
-use yfinance::fetch::{fetch_recent, fetch_sorted};
+use yfinance::fetch::fetch_sorted;
 use yfinance::models::QuoteRecord;
 use yfinance::sort::{SortMode, SortOrder};
 
@@ -97,7 +97,9 @@ async fn test_historical_tracking_same_ticker_two_timestamps(pool: sqlx::PgPool)
         "expected 2 rows for same ticker at different timestamps"
     );
 
-    let recent = fetch_recent(&pool, 1).await.expect("fetch_recent failed");
+    let recent = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 1)
+        .await
+        .expect("fetch_sorted failed");
     assert_eq!(recent.len(), 1, "limit of 1 should return exactly 1 row");
     assert_eq!(recent[0].as_of, Some(t2), "most-recent row should be t2");
     assert_eq!(
@@ -358,30 +360,22 @@ async fn test_store_many_then_paginate(pool: sqlx::PgPool) {
         .expect("fetch_all_quotes failed");
     assert_eq!(all.len(), 15, "expected 15 rows after storing 15 quotes");
 
-    let page_5 = fetch_recent(&pool, 5)
+    let page_5 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 5)
         .await
-        .expect("fetch_recent(5) failed");
-    assert_eq!(
-        page_5.len(),
-        5,
-        "fetch_recent(5) should return exactly 5 rows"
-    );
+        .expect("fetch_sorted(5) failed");
+    assert_eq!(page_5.len(), 5, "fetch_sorted(5) should return exactly 5 rows");
 
-    let page_15 = fetch_recent(&pool, 15)
+    let page_15 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 15)
         .await
-        .expect("fetch_recent(15) failed");
-    assert_eq!(
-        page_15.len(),
-        15,
-        "fetch_recent(15) should return all 15 rows"
-    );
+        .expect("fetch_sorted(15) failed");
+    assert_eq!(page_15.len(), 15, "fetch_sorted(15) should return all 15 rows");
 
-    let page_20 = fetch_recent(&pool, 20)
+    let page_20 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 20)
         .await
-        .expect("fetch_recent(20) failed");
+        .expect("fetch_sorted(20) failed");
     assert_eq!(
         page_20.len(),
         15,
-        "fetch_recent(20) should return all 15 rows when limit exceeds count"
+        "fetch_sorted(20) should return all 15 rows when limit exceeds count"
     );
 }

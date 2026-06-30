@@ -1,8 +1,12 @@
 //! Table rendering for the CLI binary.
 
-use crate::{db::quotes::fetch_all_quotes, models::QuoteRecord};
+use crate::{db::quotes::fetch_all_quotes, models::QuoteRecord, AppError};
 use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use sqlx::{Pool, Postgres};
+
+fn opt_fmt<T, F: Fn(T) -> String>(v: Option<T>, f: F) -> String {
+    v.map(f).unwrap_or_else(|| "N/A".to_string())
+}
 
 /// Formats a single [`QuoteRecord`] as a row of [`Cell`]s for comfy-table.
 ///
@@ -10,26 +14,10 @@ use sqlx::{Pool, Postgres};
 /// close, red when below, and unstyled when the comparison cannot be made.
 fn ticker_row(qr: &QuoteRecord) -> Vec<Cell> {
     let name = qr.name.as_deref().unwrap_or("Unknown");
-
-    let price_str = qr
-        .price
-        .map(|p| format!("${:.2}", p))
-        .unwrap_or_else(|| "N/A".to_string());
-
-    let prev_close_str = qr
-        .previous_close
-        .map(|p| format!("${:.2}", p))
-        .unwrap_or_else(|| "N/A".to_string());
-
-    let volume_str = qr
-        .day_volume
-        .map(|v| format!("{:.2}", v))
-        .unwrap_or_else(|| "N/A".to_string());
-
-    let as_of_str = qr
-        .as_of
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| "N/A".to_string());
+    let price_str = opt_fmt(qr.price, |p| format!("${p:.2}"));
+    let prev_close_str = opt_fmt(qr.previous_close, |p| format!("${p:.2}"));
+    let volume_str = opt_fmt(qr.day_volume, |v| format!("{v:.2}"));
+    let as_of_str = opt_fmt(qr.as_of, |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string());
 
     let price_cell = match (qr.price, qr.previous_close) {
         (Some(p), Some(pc)) if p > pc => Cell::new(price_str).fg(Color::Green),
@@ -48,8 +36,8 @@ fn ticker_row(qr: &QuoteRecord) -> Vec<Cell> {
 
 /// Fetches all quotes from the database and prints them as a UTF-8 table to
 /// stdout.
-pub async fn print_tickers(p: &Pool<Postgres>) {
-    let rows = fetch_all_quotes(p).await.unwrap();
+pub async fn print_tickers(p: &Pool<Postgres>) -> Result<(), AppError> {
+    let rows = fetch_all_quotes(p).await?;
 
     let mut table = Table::new();
     table.load_preset(UTF8_FULL).set_header(vec![
@@ -65,6 +53,7 @@ pub async fn print_tickers(p: &Pool<Postgres>) {
     }
 
     println!("{table}");
+    Ok(())
 }
 
 #[cfg(test)]

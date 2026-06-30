@@ -19,27 +19,18 @@ pub fn select_mode() -> Mode {
     println!("1. Fetch and store quotes");
     println!("2. Dump quotes table to CSV");
     println!("3. Pull quotes from DB and display");
-    let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .expect("Failed to read input");
-    let mut mode: Option<Mode> = None;
-    while mode.is_none() {
-        mode = match input.trim() {
-            "1" => Some(Mode::FetchAndStore),
-            "2" => Some(Mode::DumpToCsv),
-            "3" => Some(Mode::PullFromDb),
-            _ => {
-                println!("Invalid selection, please enter 1, 2, or 3:");
-                input.clear();
-                io::stdin()
-                    .read_line(&mut input)
-                    .expect("Failed to read input");
-                None
-            }
+    loop {
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read input");
+        match input.trim() {
+            "1" => return Mode::FetchAndStore,
+            "2" => return Mode::DumpToCsv,
+            "3" => return Mode::PullFromDb,
+            _ => println!("Invalid selection, please enter 1, 2, or 3:"),
         }
     }
-    mode.unwrap_or(Mode::FetchAndStore)
 }
 
 /// Prompts the user to enter comma-separated ticker symbols and confirms
@@ -57,14 +48,16 @@ pub fn pick_tickers() -> Vec<String> {
         io::stdin()
             .read_line(&mut tickers_input)
             .expect("Failed to read input");
+        let before = stocks.len();
         stocks.extend(
             tickers_input
                 .split(',')
                 .map(|s| s.trim().to_uppercase())
                 .filter(|s| !s.is_empty()),
         );
-        if stocks.is_empty() {
+        if stocks.len() == before {
             println!("No valid tickers entered, please try again.");
+            continue;
         }
         println!("Are you done entering tickers? (y/n):");
         let mut done_input = String::new();

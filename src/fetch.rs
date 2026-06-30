@@ -11,7 +11,7 @@ use yfinance_rs::{AnalysisBuilder, Ticker, YfClient};
 
 use crate::models::QuoteRecordAnalysis;
 use crate::sort::{SortMode, SortOrder};
-use crate::{db, models::QuoteRecord};
+use crate::{db, models::QuoteRecord, AppError};
 
 /// Fetches a real-time quote for `symbol` using an already-initialised
 /// [`Ticker`] and converts it into a [`QuoteRecord`].
@@ -25,7 +25,7 @@ use crate::{db, models::QuoteRecord};
 pub async fn fetch_quote(
     symbol: &str,
     ticker: &Ticker,
-) -> Result<Option<QuoteRecord>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Option<QuoteRecord>, AppError> {
     debug!("requesting quote from yfinance");
     let quote = ticker.quote().await?;
     debug!(
@@ -34,15 +34,12 @@ pub async fn fetch_quote(
         "received quote payload"
     );
     let quote_record = QuoteRecord {
-        id: None, // Set by the database
+        id: None,
         ticker: Some(symbol.to_string()),
         name: quote.name.clone(),
         price: quote.price.map(|p| p.into_inner().as_f64()),
         previous_close: quote.previous_close.map(|p| p.into_inner().as_f64()),
-        day_volume: quote
-            .day_volume
-            .as_ref()
-            .map(|p| p.clone().into_inner().as_decimal().as_f64()),
+        day_volume: quote.day_volume.map(|p| p.into_inner().as_decimal().as_f64()),
         as_of: quote.as_of,
     };
     Ok(Some(quote_record))
@@ -54,10 +51,11 @@ pub async fn fetch_quote(
 /// input box.  After storing, the returned record has its `id` field set to
 /// the database-assigned value so the TUI can display it without a follow-up
 /// query.
+#[instrument(skip(pool), fields(symbol = %symbol))]
 pub async fn fetch_quote_and_store(
     pool: &sqlx::PgPool,
     symbol: &str,
-) -> Result<Option<QuoteRecord>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Option<QuoteRecord>, AppError> {
     let client = YfClient::default();
     let ticker = Ticker::new(&client, symbol);
 
@@ -65,9 +63,7 @@ pub async fn fetch_quote_and_store(
         return Ok(None);
     };
 
-    quote_record.id = db::quotes::store_quote_to_db(&quote_record, pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    quote_record.id = db::quotes::store_quote_to_db(&quote_record, pool).await?;
     Ok(Some(quote_record))
 }
 
@@ -77,18 +73,15 @@ pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
     s.iter().map(|t| (t.clone(), Ticker::new(c, t))).collect()
 }
 
-/// Returns up to `limit` quotes ordered by `as_of DESC, id DESC` - the most
+/// Returns up to `limit` quotes ordered by `as_of DESC, id DESC` — the most
 /// recently fetched records first.
+///
+/// # Deprecated
+///
+/// Use [`fetch_sorted`] with [`SortMode::ByAsOf`] and [`SortOrder::Descending`] instead.
+#[deprecated(note = "use fetch_sorted(pool, SortMode::ByAsOf, SortOrder::Descending, limit) instead")]
 pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<QuoteRecord>> {
-    sqlx::query_as::<_, QuoteRecord>(
-        "SELECT id, ticker, name, price, previous_close, day_volume, as_of
-              FROM quotes
-              ORDER BY as_of DESC, id DESC
-              LIMIT $1",
-    )
-    .bind(limit)
-    .fetch_all(pool)
-    .await
+    fetch_sorted(pool, SortMode::ByAsOf, SortOrder::Descending, limit).await
 }
 
 /// Returns up to `limit` quotes sorted by `mode` in the given `order`.
@@ -134,15 +127,15 @@ pub async fn fetch_sorted(
 ///
 /// Both requests are fired at the same time via [`tokio::try_join!`]; either
 /// one failing aborts the whole call.
-pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, String> {
+#[instrument(fields(symbol = %symbol))]
+pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, AppError> {
     let client = YfClient::default();
     let analysis_builder = AnalysisBuilder::new(&client, symbol);
 
     let (rec, pt) = try_join!(
         analysis_builder.recommendations_summary(),
         analysis_builder.analyst_price_target(None),
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
 
     Ok(QuoteRecordAnalysis {
         ticker: Some(symbol.to_string()),

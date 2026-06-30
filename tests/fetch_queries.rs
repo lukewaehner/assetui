@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeZone, Utc};
 use yfinance::db::quotes::store_quote_to_db;
-use yfinance::fetch::{fetch_recent, fetch_sorted};
+use yfinance::fetch::fetch_sorted;
 use yfinance::models::QuoteRecord;
 use yfinance::sort::{SortMode, SortOrder};
 
@@ -18,7 +18,9 @@ fn make_quote(ticker: &str, price: f64, as_of: DateTime<Utc>) -> QuoteRecord {
 
 #[sqlx::test]
 async fn test_fetch_recent_empty(pool: sqlx::PgPool) {
-    let rows = fetch_recent(&pool, 10).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 10)
+        .await
+        .unwrap();
     assert!(rows.is_empty(), "expected empty vec from fresh DB");
 }
 
@@ -30,8 +32,10 @@ async fn test_fetch_recent_respects_limit(pool: sqlx::PgPool) {
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let rows = fetch_recent(&pool, 3).await.unwrap();
-    assert_eq!(rows.len(), 3, "fetch_recent should respect the limit of 3");
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 3)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 3, "fetch_sorted should respect the limit of 3");
 }
 
 #[sqlx::test]
@@ -50,7 +54,9 @@ async fn test_fetch_recent_ordering(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    let rows = fetch_recent(&pool, 3).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 3)
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[0].ticker.as_deref(), Some("THIRD"));
     assert_eq!(rows[1].ticker.as_deref(), Some("SECOND"));
@@ -125,7 +131,7 @@ async fn test_fetch_sorted_by_ticker_asc(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    assert!(rows.len() >= 2);
+    assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].ticker.as_deref(), Some("AAA"));
     assert_eq!(rows[1].ticker.as_deref(), Some("ZZZ"));
 }

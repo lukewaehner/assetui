@@ -3,9 +3,8 @@
 //! Prompts the user to choose one of three modes, then runs the selected
 //! operation against the configured Postgres database.
 
-use sqlx::{Pool, Postgres};
 use tracing_subscriber::EnvFilter;
-
+use yfinance::AppError;
 use yfinance::cli::{Mode, pick_tickers, print_tickers, select_mode};
 use yfinance::db::connection::setup_pool;
 use yfinance::db::quotes::dump_table_to_csv;
@@ -24,19 +23,16 @@ fn init_tracing() {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Three modes
-    // 1. Fetch and store quotes (default)
-    // 2. Dump quotes table to CSV
-    // 3. Pull quotes from DB and display
+async fn main() -> Result<(), AppError> {
     init_tracing();
 
-    let pool: Pool<Postgres> = setup_pool(5).await?;
+    let database_url = dotenvy::var("DATABASE_URL")?;
+    let pool = setup_pool(&database_url, 5).await?;
 
     match select_mode() {
         Mode::FetchAndStore => fetch_and_store(&pool, &pick_tickers()).await?,
         Mode::DumpToCsv => dump_table_to_csv(&pool).await?,
-        Mode::PullFromDb => print_tickers(&pool).await,
+        Mode::PullFromDb => print_tickers(&pool).await?,
     }
 
     Ok(())

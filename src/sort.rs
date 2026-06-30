@@ -2,8 +2,9 @@
 //! and the fetch layer (which translates it into SQL `ORDER BY` clauses).
 
 /// Direction of a sort operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SortOrder {
+    #[default]
     Ascending,
     Descending,
 }
@@ -12,8 +13,9 @@ pub enum SortOrder {
 ///
 /// Each variant maps 1:1 to a column name in `fetch_sorted`.  The mapping
 /// lives there rather than here so the database layer owns all SQL concerns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SortMode {
+    #[default]
     ById,
     ByTicker,
     ByName,
@@ -43,7 +45,8 @@ mod tests {
 
     #[test]
     fn test_sort_mode_all_variants_are_distinct() {
-        let mut variants = vec![
+        use std::collections::HashSet;
+        let variants = [
             SortMode::ById,
             SortMode::ByTicker,
             SortMode::ByName,
@@ -52,8 +55,8 @@ mod tests {
             SortMode::ByVolume,
             SortMode::ByAsOf,
         ];
-        variants.dedup();
-        assert_eq!(variants.len(), 7);
+        let set: HashSet<SortMode> = variants.iter().copied().collect();
+        assert_eq!(set.len(), variants.len());
     }
 
     #[test]

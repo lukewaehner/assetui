@@ -20,22 +20,22 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::mpsc;
 
-use yfinance::fetch::{fetch_quote_and_store, fetch_recent};
+use yfinance::fetch::fetch_sorted;
+use yfinance::sort::{SortMode, SortOrder};
 
 use app::{App, AppEvent};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let database_url = dotenvy::var("DATABASE_URL").unwrap_or_else(|_| {
-        eprintln!("DATABASE_URL not set in environment");
-        std::process::exit(1);
-    });
+    let database_url = dotenvy::var("DATABASE_URL").map_err(|_| {
+        io::Error::new(io::ErrorKind::NotFound, "DATABASE_URL not set in environment")
+    })?;
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
         .await
-        .expect("failed to connecto db");
+        .expect("failed to connect to db");
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
 
@@ -43,12 +43,12 @@ async fn main() -> io::Result<()> {
         let pool = pool.clone();
         let tx = event_tx.clone();
         tokio::spawn(async move {
-            match fetch_recent(&pool, 200).await {
+            match fetch_sorted(&pool, SortMode::ById, SortOrder::Descending, 200).await {
                 Ok(rows) => {
                     let _ = tx.send(AppEvent::PageLoaded(rows));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("Failed to fetch recent quotes: {}", e)));
+                    let _ = tx.send(AppEvent::Error(format!("Failed to fetch quotes: {e}")));
                 }
             }
         });
@@ -121,7 +121,7 @@ async fn run<B: ratatui::backend::Backend>(
                         let pool = app.pool.clone();
                         tokio::spawn(async move {
                             let _ = tx.send(AppEvent::FetchSpawned(symbol.clone()));
-                            match fetch_quote_and_store(&pool, &symbol).await {
+                            match yfinance::fetch::fetch_quote_and_store(&pool, &symbol).await {
                                 Ok(Some(record)) => {
                                     let _ = tx.send(AppEvent::FetchCompleted(record));
                                 }

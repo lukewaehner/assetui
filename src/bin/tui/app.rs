@@ -138,10 +138,9 @@ impl App {
                 self.logs.push(format!("[INFO] fetching {symbol}"));
             }
             AppEvent::FetchCompleted(record) => {
-                let name = record.ticker.clone().unwrap_or_else(|| "?".to_string());
+                let name = record.ticker.as_deref().unwrap_or("?");
                 self.db_display.status = format!("stored {name}");
                 self.logs.push(format!("[SUCCESS] stored {name}"));
-                // Insert at position 0 to match the fetch_recent ordering (newest first).
                 self.db_display.rows.insert(0, record);
             }
             AppEvent::LogLine(line) => {
@@ -194,19 +193,13 @@ impl App {
         match key.to_ascii_lowercase() {
             'q' => self.should_quit = true,
             'i' => self.input_mode.toggled = !self.input_mode.toggled,
-            'd' | 'p' | 'c' | 'v' | 'a' | 'n' | 't' => {
-                let mode = match key.to_ascii_lowercase() {
-                    'd' => SortMode::ById,
-                    'p' => SortMode::ByPrice,
-                    'c' => SortMode::ByPrevClose,
-                    'v' => SortMode::ByVolume,
-                    'a' => SortMode::ByAsOf,
-                    'n' => SortMode::ByName,
-                    't' => SortMode::ByTicker,
-                    _ => unreachable!(),
-                };
-                self.handle_event(AppEvent::ChangeSortMode(mode));
-            }
+            'd' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ById)),
+            'p' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByPrice)),
+            'c' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByPrevClose)),
+            'v' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByVolume)),
+            'a' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByAsOf)),
+            'n' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByName)),
+            't' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByTicker)),
             'j' if !self.db_display.rows.is_empty() => {
                 let len = self.db_display.rows.len();
                 let i = self
@@ -238,18 +231,14 @@ impl App {
                 if let Some(i) = self.db_display.table_state.selected()
                     && let Some(row) = self.db_display.rows.get(i)
                 {
-                    self.stock_modal.stock = QuoteRecord {
-                        id: row.id,
-                        ticker: row.ticker.clone(),
-                        name: row.name.clone(),
-                        price: row.price,
-                        previous_close: row.previous_close,
-                        day_volume: row.day_volume,
-                        as_of: row.as_of,
-                    };
+                    let stock = row.clone();
+                    let ticker = stock.ticker.clone();
+                    self.stock_modal.stock = stock;
                     self.stock_modal.analysis = None;
                     self.stock_modal.visible = true;
-                    self.spawn_analysis(&row.ticker.clone().unwrap());
+                    if let Some(t) = ticker.as_deref() {
+                        self.spawn_analysis(t);
+                    }
                 }
             }
             _ => {}

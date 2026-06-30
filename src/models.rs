@@ -10,7 +10,7 @@ use yfinance_rs::{PriceTarget, RecommendationSummary};
 ///
 /// Derives `sqlx::FromRow` for automatic mapping from Postgres result rows,
 /// and `serde::Serialize` so rows can be written directly to CSV.
-#[derive(sqlx::FromRow, serde::Serialize, Default, Debug)]
+#[derive(sqlx::FromRow, serde::Serialize, Clone, Default, Debug)]
 pub struct QuoteRecord {
     /// Database-assigned row ID; `None` before the record has been stored.
     pub id: Option<i32>,

@@ -69,8 +69,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .border_style(Style::default().fg(Color::DarkGray));
     let visible = log_area.height.saturating_sub(2) as usize;
     let start = app.logs.len().saturating_sub(visible);
-    let log_text = app.logs[start..].join("\n");
-    f.render_widget(Paragraph::new(log_text).block(log_block), log_area);
+    let log_lines: Vec<Line> = app.logs[start..].iter().map(|s| Line::raw(s.as_str())).collect();
+    f.render_widget(Paragraph::new(log_lines).block(log_block), log_area);
 
     draw_quotes_table(f, right, app, db_border);
 
@@ -114,33 +114,29 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     .bottom_margin(1);
 
     let rows = app.db_display.rows.iter().map(|q| {
-        let price = q
-            .price
-            .map(|p| format!("{p:.2}"))
-            .unwrap_or_else(|| "-".to_string());
-        let prev = q
-            .previous_close
-            .map(|p| format!("{p:.2}"))
-            .unwrap_or_else(|| "-".to_string());
-        let vol = q
-            .day_volume
-            .map(|v| format!("{v:.0}"))
-            .unwrap_or_else(|| "-".to_string());
-        let as_of = q
-            .as_of
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| "-".to_string());
         Row::new(vec![
-            Cell::from(
-                q.id.map(|id| id.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-            ),
+            match q.id {
+                Some(id) => Cell::from(id.to_string()),
+                None => Cell::from("-"),
+            },
             Cell::from(q.ticker.as_deref().unwrap_or("-")),
             Cell::from(q.name.as_deref().unwrap_or("-")),
-            Cell::from(price),
-            Cell::from(prev),
-            Cell::from(vol),
-            Cell::from(as_of),
+            match q.price {
+                Some(p) => Cell::from(format!("{p:.2}")),
+                None => Cell::from("-"),
+            },
+            match q.previous_close {
+                Some(p) => Cell::from(format!("{p:.2}")),
+                None => Cell::from("-"),
+            },
+            match q.day_volume {
+                Some(v) => Cell::from(format!("{v:.0}")),
+                None => Cell::from("-"),
+            },
+            match q.as_of {
+                Some(dt) => Cell::from(dt.format("%Y-%m-%d").to_string()),
+                None => Cell::from("-"),
+            },
         ])
     });
 
@@ -175,21 +171,24 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
 
 /// Computes a centred [`Rect`] that occupies `percent_x`% of the width and
 /// `percent_y`% of the height of `r`.
+///
+/// Uses `Fill(1)` for the padding halves so the modal stays perfectly centred
+/// regardless of whether `100 - percent` is even or odd.
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let vert = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Fill(1),
             Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Fill(1),
         ])
         .split(r);
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Fill(1),
             Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Fill(1),
         ])
         .split(vert[1])[1]
 }
@@ -413,10 +412,13 @@ fn configure_stock_price_color(stock: &QuoteRecord) -> Color {
     let price = stock.price.unwrap_or_default();
     let prev = stock.previous_close.unwrap_or_default();
     let diff = price - prev;
-
-    match diff {
-        d if d > 0.0 => Color::Green,
-        d if d < 0.0 => Color::Red,
-        _ => Color::Yellow,
+    // Use an epsilon band so rounding to display precision doesn't trigger a
+    // false green/red when price and prev are effectively equal.
+    if diff > 0.001 {
+        Color::Green
+    } else if diff < -0.001 {
+        Color::Red
+    } else {
+        Color::Yellow
     }
 }

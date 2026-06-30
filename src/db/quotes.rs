@@ -4,6 +4,7 @@ use sqlx::{Pool, Postgres};
 use tracing::{debug, info, instrument};
 
 use crate::models::QuoteRecord;
+use crate::AppError;
 
 /// Inserts a quote into the database and returns the new row's `id`.
 ///
@@ -15,7 +16,7 @@ use crate::models::QuoteRecord;
 pub async fn store_quote_to_db(
     quote: &QuoteRecord,
     p: &Pool<Postgres>,
-) -> Result<Option<i32>, Box<dyn std::error::Error>> {
+) -> Result<Option<i32>, AppError> {
     debug!("inserting quote into postgres");
     let id: Option<i32> = sqlx::query_scalar(
         "
@@ -25,8 +26,8 @@ pub async fn store_quote_to_db(
         RETURNING id
         ",
     )
-    .bind(quote.ticker.clone())
-    .bind(quote.name.clone())
+    .bind(quote.ticker.as_deref())
+    .bind(quote.name.as_deref())
     .bind(quote.price)
     .bind(quote.previous_close)
     .bind(quote.day_volume)
@@ -41,13 +42,13 @@ pub async fn store_quote_to_db(
 /// Primarily used by the CSV dump and the CLI display path, where the caller
 /// controls presentation order.
 #[instrument(skip(p))]
-pub async fn fetch_all_quotes(
-    p: &Pool<Postgres>,
-) -> Result<Vec<QuoteRecord>, Box<dyn std::error::Error>> {
+pub async fn fetch_all_quotes(p: &Pool<Postgres>) -> Result<Vec<QuoteRecord>, AppError> {
     debug!("pulling quotes from postgres");
-    let rows = sqlx::query_as::<_, QuoteRecord>("SELECT * FROM quotes")
-        .fetch_all(p)
-        .await?;
+    let rows = sqlx::query_as::<_, QuoteRecord>(
+        "SELECT id, ticker, name, price, previous_close, day_volume, as_of FROM quotes",
+    )
+    .fetch_all(p)
+    .await?;
     Ok(rows)
 }
 
@@ -55,7 +56,8 @@ pub async fn fetch_all_quotes(
 ///
 /// The filename is `quotes_dump_YYYYMMDDHHMMSS.csv`.  Rows are serialised
 /// using `QuoteRecord`'s `serde::Serialize` implementation.
-pub async fn dump_table_to_csv(p: &Pool<Postgres>) -> Result<(), Box<dyn std::error::Error>> {
+#[instrument(skip(p))]
+pub async fn dump_table_to_csv(p: &Pool<Postgres>) -> Result<(), AppError> {
     debug!("dumping quotes table to csv");
     let rows: Vec<QuoteRecord> = fetch_all_quotes(p).await?;
     let path = format!(

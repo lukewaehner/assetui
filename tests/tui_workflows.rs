@@ -1,6 +1,6 @@
 use chrono::{TimeZone, Utc};
 use yfinance::db::quotes::store_quote_to_db;
-use yfinance::fetch::{fetch_recent, fetch_sorted};
+use yfinance::fetch::fetch_sorted;
 use yfinance::models::QuoteRecord;
 use yfinance::sort::{SortMode, SortOrder};
 
@@ -32,7 +32,7 @@ fn tui_quote(ticker: &str, price: f64, seq: u32) -> QuoteRecord {
 // Test 1 – startup load returns all rows when under the 200-row page limit
 // ---------------------------------------------------------------------------
 
-/// The TUI calls `fetch_recent(&pool, 200)` on startup to populate the
+/// The TUI calls `fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)` on startup to populate the
 /// initial table.  Verify that when fewer than 200 rows exist every row is
 /// returned and they arrive newest-first.
 #[sqlx::test]
@@ -44,7 +44,7 @@ async fn test_tui_initial_load_returns_recent_200(pool: sqlx::PgPool) {
     }
 
     // Simulate TUI startup.
-    let rows = fetch_recent(&pool, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
 
     // All 10 rows should be present (200-row limit not reached).
     assert_eq!(rows.len(), 10, "all 10 quotes should be returned");
@@ -84,7 +84,7 @@ async fn test_tui_new_fetch_appears_at_top_of_recent(pool: sqlx::PgPool) {
     store_quote_to_db(&new_quote, &pool).await.unwrap();
 
     // Refresh the TUI table.
-    let rows = fetch_recent(&pool, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
 
     assert_eq!(rows.len(), 6, "should have 6 rows total");
     assert_eq!(
@@ -233,7 +233,7 @@ async fn test_tui_page_limit_matches_startup(pool: sqlx::PgPool) {
     }
 
     // Simulate TUI startup with a 200-row page.
-    let rows = fetch_recent(&pool, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
 
     assert_eq!(rows.len(), 200, "fetch_recent must respect the 200-row limit");
 

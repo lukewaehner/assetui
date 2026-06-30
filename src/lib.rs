@@ -12,3 +12,8 @@ pub mod fetch;
 pub mod models;
 pub mod run;
 pub mod sort;
+
+/// Shared error type used throughout the crate.
+///
+/// `Send + Sync` bounds allow errors to cross `tokio::spawn` boundaries.
+pub type AppError = Box<dyn std::error::Error + Send + Sync>;
