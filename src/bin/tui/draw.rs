@@ -69,6 +69,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.stock_modal.visible {
         draw_stock_modal(f, app);
     }
+
+    let area = f.area();
+    app.notifications.render(f, area);
 }
 
 fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Color) {
