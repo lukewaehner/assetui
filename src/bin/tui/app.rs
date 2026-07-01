@@ -5,9 +5,12 @@
 //! and mutates state; [`draw`](super::draw::draw) then renders the current
 //! state on the next frame.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::widgets::TableState;
+use ratatui_notifications::{
+    Animation, Anchor, AutoDismiss, Level, Notification, Notifications, SlideDirection,
+};
 use tokio::sync::mpsc;
 
 use yfinance::{
@@ -57,6 +60,8 @@ pub struct App {
     pub last_blink: Instant,
     /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
+    /// Slide-in error notifications shown top-right.
+    pub notifications: Notifications,
 }
 
 /// State for the ticker input box.
@@ -118,6 +123,7 @@ impl App {
                 analysis: None,
                 visible: false,
             },
+            notifications: Notifications::new(),
         }
     }
 
@@ -149,6 +155,17 @@ impl App {
             AppEvent::Error(e) => {
                 self.db_display.status = format!("Error: {e}");
                 self.logs.push(format!("[ERROR] {e}"));
+                if let Ok(notif) = Notification::new(e)
+                    .title("Error")
+                    .level(Level::Error)
+                    .anchor(Anchor::TopRight)
+                    .animation(Animation::Slide)
+                    .slide_direction(SlideDirection::FromRight)
+                    .auto_dismiss(AutoDismiss::After(Duration::from_secs(5)))
+                    .build()
+                {
+                    let _ = self.notifications.add(notif);
+                }
             }
             AppEvent::ChangeSortMode(mode) => {
                 self.logs.push(format!("[SORT] mode → {mode:?}"));

@@ -63,7 +63,23 @@ pub async fn fetch_quote_and_store(
         return Ok(None);
     };
 
-    quote_record.id = db::quotes::store_quote_to_db(&quote_record, pool).await?;
+    quote_record.id = match db::quotes::store_quote_to_db(&quote_record, pool).await? {
+        id @ Some(_) => id,
+        // ON CONFLICT DO NOTHING fired (same ticker+as_of already in DB).
+        // Look up the existing row's id so the caller always gets a fully
+        // populated record even when the market data hasn't changed.
+        None => {
+            sqlx::query_scalar(
+                "SELECT id FROM quotes \
+                 WHERE ticker IS NOT DISTINCT FROM $1 \
+                 AND as_of IS NOT DISTINCT FROM $2",
+            )
+            .bind(quote_record.ticker.as_deref())
+            .bind(quote_record.as_of)
+            .fetch_optional(pool)
+            .await?
+        }
+    };
     Ok(Some(quote_record))
 }
 

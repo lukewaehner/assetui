@@ -77,6 +77,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.stock_modal.visible {
         draw_stock_modal(f, app);
     }
+
+    let area = f.area();
+    app.notifications.render(f, area);
 }
 
 /// Renders the sortable quotes table into `area`.

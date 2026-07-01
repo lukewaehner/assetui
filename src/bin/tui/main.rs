@@ -83,7 +83,11 @@ async fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    io::Error: From<B::Error>,
+{
+    let mut last_tick = Instant::now();
     loop {
         while let Ok(event) = event_rx.try_recv() {
             app.handle_event(event);
@@ -94,6 +98,9 @@ async fn run<B: ratatui::backend::Backend>(
             app.blink_state = !app.blink_state;
             app.last_blink = now;
         }
+
+        app.notifications.tick(last_tick.elapsed());
+        last_tick = Instant::now();
 
         terminal.draw(|f| draw::draw(f, app))?;
 
