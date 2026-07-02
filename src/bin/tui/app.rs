@@ -1,12 +1,15 @@
 //! Application state and event handling for the TUI binary.
 //!
-//! The event loop in `main.rs` owns the terminal and translates raw key events
-//! into [`AppEvent`] variants.  [`App::handle_event`] processes those events
-//! and mutates state; [`draw`](super::draw::draw) then renders the current
-//! state on the next frame.
+//! The event loop in `main.rs` owns the terminal and forwards raw key events
+//! to [`App::handle_key`].  Async tasks report back through [`AppEvent`]
+//! variants which [`App::handle_event`] applies to state;
+//! [`draw`](super::draw::draw) then renders the current state on the next
+//! frame.
 
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
+use crossterm::event::KeyCode;
 use ratatui::widgets::TableState;
 use ratatui_notifications::{
     Anchor, Animation, AutoDismiss, Level, Notification, Notifications, SlideDirection,
@@ -14,10 +17,16 @@ use ratatui_notifications::{
 use tokio::sync::mpsc;
 
 use yfinance::{
-    fetch::{fetch_analysis, fetch_sorted},
+    fetch::{fetch_analysis, fetch_quote_and_store, fetch_sorted},
     models::{QuoteRecord, QuoteRecordAnalysis},
     sort::{SortMode, SortOrder},
 };
+
+/// Maximum number of rows fetched from the database per reload.
+const PAGE_FETCH_LIMIT: i64 = 200;
+
+/// Interval at which the input-box cursor toggles visibility.
+const BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Messages sent from async tasks back to the main event loop.
 pub enum AppEvent {
@@ -29,12 +38,6 @@ pub enum AppEvent {
     FetchCompleted(QuoteRecord),
     /// Analyst consensus and price targets loaded for the selected stock.
     StockAnalysisReady(QuoteRecordAnalysis),
-    /// User pressed a sort-column key.
-    ChangeSortMode(SortMode),
-    /// User toggled sort direction.
-    ChangeSortOrder(SortOrder),
-    /// Pagination
-    Paginate(i32),
     /// Informational message for the log panel.
     LogLine(String),
     /// Error message; also shown in the status bar.
@@ -58,7 +61,7 @@ pub struct App {
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Current state of the blinking cursor in the input box.
     pub blink_state: bool,
-    /// Timestamp of the last blink toggle, used to drive the 500 ms interval.
+    /// Timestamp of the last blink toggle, used to drive the blink interval.
     pub last_blink: Instant,
     /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
@@ -76,8 +79,9 @@ pub struct InputMode {
 
 /// State for the quotes table on the right side of the layout.
 pub struct DbDisplay {
-    /// Rows currently visible in the table.
-    pub stocks: StockDisplayState,
+    /// All rows fetched from the database; the visible page is a window into
+    /// this, derived from `page` and `page_size` via [`Self::window_range`].
+    pub rows: Vec<QuoteRecord>,
     /// Ratatui widget state tracking the selected row index.
     pub table_state: TableState,
     /// Short status message shown in the table's title bar.
@@ -92,9 +96,32 @@ pub struct DbDisplay {
     pub page_size: usize,
 }
 
-pub struct StockDisplayState {
-    pub rows: Vec<QuoteRecord>,
-    pub window: Vec<QuoteRecord>,
+impl DbDisplay {
+    /// Returns the total number of pages given the current row count and page size.
+    pub fn total_pages(&self) -> usize {
+        if self.rows.is_empty() {
+            1
+        } else {
+            self.rows.len().div_ceil(self.page_size)
+        }
+    }
+
+    /// Returns the index range of `rows` visible on the current page.
+    pub fn window_range(&self) -> Range<usize> {
+        let start = (self.page * self.page_size).min(self.rows.len());
+        let end = (start + self.page_size).min(self.rows.len());
+        start..end
+    }
+
+    /// Returns the slice of `rows` visible on the current page.
+    pub fn window(&self) -> &[QuoteRecord] {
+        &self.rows[self.window_range()]
+    }
+
+    /// Returns the number of rows visible on the current page.
+    pub fn window_len(&self) -> usize {
+        self.window_range().len()
+    }
 }
 
 /// State for the stock-detail overlay modal.
@@ -105,6 +132,20 @@ pub struct StockInfoModal {
     pub analysis: Option<QuoteRecordAnalysis>,
     /// Whether the modal is currently visible.
     pub visible: bool,
+}
+
+/// Maps a sort-column key to its [`SortMode`], or `None` for non-sort keys.
+fn sort_mode_for_key(key: char) -> Option<SortMode> {
+    Some(match key {
+        'd' => SortMode::ById,
+        't' => SortMode::ByTicker,
+        'n' => SortMode::ByName,
+        'p' => SortMode::ByPrice,
+        'c' => SortMode::ByPrevClose,
+        'v' => SortMode::ByVolume,
+        'a' => SortMode::ByAsOf,
+        _ => return None,
+    })
 }
 
 impl App {
@@ -118,10 +159,7 @@ impl App {
             },
             should_quit: false,
             db_display: DbDisplay {
-                stocks: StockDisplayState {
-                    rows: Vec::new(),
-                    window: Vec::new(),
-                },
+                rows: Vec::new(),
                 status: String::from("Loading..."),
                 table_state: TableState::default(),
                 sort_mode: SortMode::ById,
@@ -143,14 +181,24 @@ impl App {
         }
     }
 
+    /// Advances time-based state: toggles the cursor blink when its interval
+    /// elapses and ticks the notification animations.
+    pub fn tick(&mut self, elapsed: Duration) {
+        let now = Instant::now();
+        if now.duration_since(self.last_blink) >= BLINK_INTERVAL {
+            self.blink_state = !self.blink_state;
+            self.last_blink = now;
+        }
+        self.notifications.tick(elapsed);
+    }
+
     /// Applies an [`AppEvent`] to the application state.
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::PageLoaded(rows) => {
                 self.db_display.status = String::new();
-                self.db_display.stocks.rows = rows;
+                self.db_display.rows = rows;
                 self.db_display.page = 0;
-                self.compute_window();
                 self.reset_selection();
             }
             AppEvent::FetchSpawned(symbol) => {
@@ -161,64 +209,190 @@ impl App {
                 let name = record.ticker.as_deref().unwrap_or("?");
                 self.db_display.status = format!("stored {name}");
                 self.logs.push(format!("[SUCCESS] stored {name}"));
-                self.db_display.stocks.rows.insert(0, record);
-                self.compute_window();
+                self.db_display.rows.insert(0, record);
                 self.reset_selection();
             }
             AppEvent::LogLine(line) => {
                 self.logs.push(line);
             }
-            AppEvent::Error(e) => {
-                self.db_display.status = format!("Error: {e}");
-                self.logs.push(format!("[ERROR] {e}"));
-                if let Ok(notif) = Notification::new(e)
-                    .title("Error")
-                    .level(Level::Error)
-                    .anchor(Anchor::TopRight)
-                    .animation(Animation::Slide)
-                    .slide_direction(SlideDirection::FromRight)
-                    .auto_dismiss(AutoDismiss::After(Duration::from_secs(5)))
-                    .build()
-                {
-                    let _ = self.notifications.add(notif);
-                }
-            }
-            AppEvent::ChangeSortMode(mode) => {
-                self.logs.push(format!("[SORT] mode → {mode:?}"));
-                self.db_display.sort_mode = mode;
-                self.spawn_reload();
-            }
-            AppEvent::ChangeSortOrder(order) => {
-                self.logs.push(format!("[SORT] order → {order:?}"));
-                self.db_display.sort_order = order;
-                self.spawn_reload();
-            }
+            AppEvent::Error(e) => self.push_error(e),
             AppEvent::StockAnalysisReady(analysis) => {
                 self.stock_modal.analysis = Some(analysis);
-            }
-            AppEvent::Paginate(delta) => {
-                let total = self.total_pages();
-                let new_page = if delta > 0 {
-                    (self.db_display.page + 1).min(total.saturating_sub(1))
-                } else {
-                    self.db_display.page.saturating_sub(1)
-                };
-                if new_page != self.db_display.page {
-                    self.db_display.page = new_page;
-                    self.compute_window();
-                    self.reset_selection();
-                }
             }
         }
     }
 
-    /// Returns the total number of pages given the current row count and page size.
-    pub fn total_pages(&self) -> usize {
-        let len = self.db_display.stocks.rows.len();
-        if len == 0 {
-            1
+    /// Records an error in the status bar and log panel, and raises a
+    /// slide-in notification.
+    fn push_error(&mut self, e: String) {
+        self.db_display.status = format!("Error: {e}");
+        self.logs.push(format!("[ERROR] {e}"));
+        if let Ok(notif) = Notification::new(e)
+            .title("Error")
+            .level(Level::Error)
+            .anchor(Anchor::TopRight)
+            .animation(Animation::Slide)
+            .slide_direction(SlideDirection::FromRight)
+            .auto_dismiss(AutoDismiss::After(Duration::from_secs(5)))
+            .build()
+        {
+            let _ = self.notifications.add(notif);
+        }
+    }
+
+    /// Routes a raw terminal key press to the appropriate state change.
+    ///
+    /// While the input box is focused, printable characters edit the input
+    /// text; otherwise they are treated as command keys.
+    pub fn handle_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => {
+                if self.stock_modal.visible {
+                    self.stock_modal.visible = false;
+                } else {
+                    self.input_mode.toggled = false;
+                }
+            }
+            KeyCode::Char(c) if self.input_mode.toggled => self.input_mode.input.push(c),
+            KeyCode::Char(c) => self.handle_command_key(c),
+            KeyCode::Backspace if self.input_mode.toggled => {
+                self.input_mode.input.pop();
+            }
+            KeyCode::Enter if self.input_mode.toggled => self.submit_input(),
+            _ => {}
+        }
+    }
+
+    /// Routes a single command key to the appropriate state change.
+    ///
+    /// Only called when the input box is not focused; while focused, characters
+    /// are appended to [`InputMode::input`] instead.
+    pub fn handle_command_key(&mut self, key: char) {
+        let key = key.to_ascii_lowercase();
+        if let Some(mode) = sort_mode_for_key(key) {
+            self.set_sort_mode(mode);
+            return;
+        }
+        match key {
+            'q' => self.should_quit = true,
+            'i' => self.input_mode.toggled = !self.input_mode.toggled,
+            'j' => self.move_selection(1),
+            'k' => self.move_selection(-1),
+            // Paginate: h = prev page, l = next page
+            'h' => self.paginate(-1),
+            'l' => self.paginate(1),
+            'o' => self.toggle_sort_order(),
+            '?' => self.open_stock_modal(),
+            _ => {}
+        }
+    }
+
+    /// Takes the current input-box text as a ticker symbol and spawns a fetch
+    /// for it.  Empty input is ignored.
+    fn submit_input(&mut self) {
+        let symbol = self.input_mode.input.trim().to_uppercase();
+        self.input_mode.input.clear();
+        if !symbol.is_empty() {
+            self.spawn_fetch(symbol);
+        }
+    }
+
+    /// Spawns a task to fetch and store a quote for `symbol`, reporting
+    /// progress and the result back as [`AppEvent`]s.
+    fn spawn_fetch(&self, symbol: String) {
+        let tx = self.event_tx.clone();
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(AppEvent::FetchSpawned(symbol.clone()));
+            match fetch_quote_and_store(&pool, &symbol).await {
+                Ok(Some(record)) => {
+                    let _ = tx.send(AppEvent::FetchCompleted(record));
+                }
+                Ok(None) => {
+                    let _ = tx.send(AppEvent::LogLine(format!("no quote found for {symbol}")));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("{symbol}: {e}")));
+                }
+            }
+        });
+    }
+
+    /// Sets the sort column and re-fetches the table.
+    fn set_sort_mode(&mut self, mode: SortMode) {
+        self.logs.push(format!("[SORT] mode → {mode:?}"));
+        self.db_display.sort_mode = mode;
+        self.spawn_reload();
+    }
+
+    /// Flips the sort direction and re-fetches the table.
+    fn toggle_sort_order(&mut self) {
+        let order = match self.db_display.sort_order {
+            SortOrder::Ascending => SortOrder::Descending,
+            SortOrder::Descending => SortOrder::Ascending,
+        };
+        self.logs.push(format!("[SORT] order → {order:?}"));
+        self.db_display.sort_order = order;
+        self.spawn_reload();
+    }
+
+    /// Moves to the next (`delta > 0`) or previous page, clamped to the valid
+    /// page range.
+    fn paginate(&mut self, delta: i32) {
+        let total = self.db_display.total_pages();
+        let new_page = if delta > 0 {
+            (self.db_display.page + 1).min(total.saturating_sub(1))
         } else {
-            len.div_ceil(self.db_display.page_size)
+            self.db_display.page.saturating_sub(1)
+        };
+        if new_page != self.db_display.page {
+            self.db_display.page = new_page;
+            self.reset_selection();
+        }
+    }
+
+    /// Moves the table selection by `delta`, wrapping at the ends of the
+    /// current page.  Does nothing when the page is empty.
+    fn move_selection(&mut self, delta: i32) {
+        let len = self.db_display.window_len();
+        if len == 0 {
+            return;
+        }
+        let i = self
+            .db_display
+            .table_state
+            .selected()
+            .map(|i| {
+                if delta > 0 {
+                    if i >= len - 1 { 0 } else { i + 1 }
+                } else if i == 0 {
+                    len - 1
+                } else {
+                    i - 1
+                }
+            })
+            .unwrap_or(0);
+        self.db_display.table_state.select(Some(i));
+    }
+
+    /// Opens the stock-detail modal for the selected row and starts fetching
+    /// its analyst data in the background.
+    fn open_stock_modal(&mut self) {
+        let Some(stock) = self
+            .db_display
+            .table_state
+            .selected()
+            .and_then(|i| self.db_display.window().get(i))
+            .cloned()
+        else {
+            return;
+        };
+        let ticker = stock.ticker.clone();
+        self.stock_modal.stock = stock;
+        self.stock_modal.analysis = None;
+        self.stock_modal.visible = true;
+        if let Some(t) = ticker.as_deref() {
+            self.spawn_analysis(t);
         }
     }
 
@@ -242,36 +416,21 @@ impl App {
 
         // Jump to the page that contains the previously-selected row.
         let target_page = global_idx.map(|gi| gi / size).unwrap_or(0);
-        self.db_display.page = target_page.min(self.total_pages().saturating_sub(1));
-        self.compute_window();
+        self.db_display.page = target_page.min(self.db_display.total_pages().saturating_sub(1));
 
         // Restore the local selection inside the new window.
-        let local = global_idx
-            .map(|gi| gi % size)
-            .unwrap_or(0)
-            .min(self.db_display.stocks.window.len().saturating_sub(1));
-        if self.db_display.stocks.window.is_empty() {
+        let win_len = self.db_display.window_len();
+        if win_len == 0 {
             self.db_display.table_state.select(None);
         } else {
+            let local = global_idx.map(|gi| gi % size).unwrap_or(0).min(win_len - 1);
             self.db_display.table_state.select(Some(local));
         }
     }
 
-    /// Recomputes `stocks.window` from `stocks.rows`, `page`, and `page_size`.
-    /// Does not touch the table selection — callers are responsible for that.
-    fn compute_window(&mut self) {
-        let start = self.db_display.page * self.db_display.page_size;
-        let end = (start + self.db_display.page_size).min(self.db_display.stocks.rows.len());
-        self.db_display.stocks.window = if start < self.db_display.stocks.rows.len() {
-            self.db_display.stocks.rows[start..end].to_vec()
-        } else {
-            Vec::new()
-        };
-    }
-
     /// Selects row 0 in the current window, or clears selection if empty.
     fn reset_selection(&mut self) {
-        if self.db_display.stocks.window.is_empty() {
+        if self.db_display.window_len() == 0 {
             self.db_display.table_state.select(None);
         } else {
             self.db_display.table_state.select(Some(0));
@@ -286,82 +445,15 @@ impl App {
         let mode = self.db_display.sort_mode;
         let order = self.db_display.sort_order;
         tokio::spawn(async move {
-            match fetch_sorted(&pool, mode, order, 200).await {
+            match fetch_sorted(&pool, mode, order, PAGE_FETCH_LIMIT).await {
                 Ok(rows) => {
                     let _ = tx.send(AppEvent::PageLoaded(rows));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("Failed to sort quotes: {e}")));
+                    let _ = tx.send(AppEvent::Error(format!("Failed to fetch quotes: {e}")));
                 }
             }
         });
-    }
-
-    /// Routes a single command key to the appropriate state change.
-    ///
-    /// Only called when the input box is not focused; while focused, characters
-    /// are appended to [`InputMode::input`] directly in the event loop.
-    pub fn handle_command_key(&mut self, key: char) {
-        match key.to_ascii_lowercase() {
-            'q' => self.should_quit = true,
-            'i' => self.input_mode.toggled = !self.input_mode.toggled,
-            'd' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ById)),
-            'p' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByPrice)),
-            'c' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByPrevClose)),
-            'v' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByVolume)),
-            'a' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByAsOf)),
-            'n' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByName)),
-            't' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByTicker)),
-            'j' if !self.db_display.stocks.window.is_empty() => {
-                let len = self.db_display.stocks.window.len();
-                let i = self
-                    .db_display
-                    .table_state
-                    .selected()
-                    .map(|i| if i >= len - 1 { 0 } else { i + 1 })
-                    .unwrap_or(0);
-                self.db_display.table_state.select(Some(i));
-            }
-            'k' if !self.db_display.stocks.window.is_empty() => {
-                let len = self.db_display.stocks.window.len();
-                let i = self
-                    .db_display
-                    .table_state
-                    .selected()
-                    .map(|i| if i == 0 { len - 1 } else { i - 1 })
-                    .unwrap_or(0);
-                self.db_display.table_state.select(Some(i));
-            }
-            // Paginate: h = prev page, l = next page
-            'h' => {
-                self.handle_event(AppEvent::Paginate(-1));
-            }
-            'l' => {
-                self.handle_event(AppEvent::Paginate(1));
-            }
-            'o' => {
-                let order = match self.db_display.sort_order {
-                    SortOrder::Ascending => SortOrder::Descending,
-                    SortOrder::Descending => SortOrder::Ascending,
-                };
-                self.handle_event(AppEvent::ChangeSortOrder(order));
-            }
-            '?' => {
-                if let Some(i) = self.db_display.table_state.selected()
-                    && let Some(row) = self.db_display.stocks.window.get(i)
-                {
-                    let stock = row.clone();
-                    let ticker = stock.ticker.clone();
-                    self.stock_modal.stock = stock;
-                    self.stock_modal.analysis = None;
-                    self.stock_modal.visible = true;
-                    if let Some(t) = ticker.as_deref() {
-                        self.spawn_analysis(t);
-                    }
-                }
-            }
-            _ => {}
-        }
     }
 
     /// Spawns a background task to fetch analyst data for `symbol` and sends
@@ -395,12 +487,16 @@ mod tests {
         (App::new(pool, tx), rx)
     }
 
+    fn n_records(n: usize) -> Vec<QuoteRecord> {
+        (0..n).map(|_| QuoteRecord::default()).collect()
+    }
+
     #[tokio::test]
     async fn test_app_new_default_state() {
         let (app, _rx) = make_test_app();
         assert!(!app.should_quit);
         assert!(!app.input_mode.toggled);
-        assert!(app.db_display.stocks.rows.is_empty());
+        assert!(app.db_display.rows.is_empty());
         assert!(app.logs.is_empty());
         assert!(!app.stock_modal.visible);
         assert_eq!(app.db_display.sort_mode, SortMode::ById);
@@ -411,7 +507,7 @@ mod tests {
     async fn test_handle_event_page_loaded() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord::default()]));
-        assert_eq!(app.db_display.stocks.rows.len(), 1);
+        assert_eq!(app.db_display.rows.len(), 1);
         assert!(app.db_display.status.is_empty());
         assert_eq!(app.db_display.table_state.selected(), Some(0));
     }
@@ -432,7 +528,7 @@ mod tests {
             ..Default::default()
         };
         app.handle_event(AppEvent::FetchCompleted(record));
-        assert_eq!(app.db_display.stocks.rows.len(), 1);
+        assert_eq!(app.db_display.rows.len(), 1);
         assert_eq!(app.logs.len(), 1);
         assert!(app.logs[0].contains("AAPL"));
     }
@@ -471,11 +567,7 @@ mod tests {
     #[tokio::test]
     async fn test_command_key_navigation_j_wraps() {
         let (mut app, _rx) = make_test_app();
-        app.handle_event(AppEvent::PageLoaded(vec![
-            QuoteRecord::default(),
-            QuoteRecord::default(),
-            QuoteRecord::default(),
-        ]));
+        app.handle_event(AppEvent::PageLoaded(n_records(3)));
         assert_eq!(app.db_display.table_state.selected(), Some(0));
         app.handle_command_key('j');
         assert_eq!(app.db_display.table_state.selected(), Some(1));
@@ -488,11 +580,7 @@ mod tests {
     #[tokio::test]
     async fn test_command_key_navigation_k_wraps() {
         let (mut app, _rx) = make_test_app();
-        app.handle_event(AppEvent::PageLoaded(vec![
-            QuoteRecord::default(),
-            QuoteRecord::default(),
-            QuoteRecord::default(),
-        ]));
+        app.handle_event(AppEvent::PageLoaded(n_records(3)));
         assert_eq!(app.db_display.table_state.selected(), Some(0));
         app.handle_command_key('k'); // wraps from 0 to 2
         assert_eq!(app.db_display.table_state.selected(), Some(2));
@@ -514,5 +602,28 @@ mod tests {
         assert_eq!(app.db_display.sort_mode, SortMode::ById);
         app.handle_command_key('p');
         assert_eq!(app.db_display.sort_mode, SortMode::ByPrice);
+    }
+
+    #[tokio::test]
+    async fn test_window_follows_page() {
+        let (mut app, _rx) = make_test_app();
+        // Default page_size is 25, so 30 rows span two pages: 25 + 5.
+        app.handle_event(AppEvent::PageLoaded(n_records(30)));
+        assert_eq!(app.db_display.total_pages(), 2);
+        assert_eq!(app.db_display.window_len(), 25);
+        app.handle_command_key('l');
+        assert_eq!(app.db_display.page, 1);
+        assert_eq!(app.db_display.window_len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_paginate_clamps_at_bounds() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(n_records(30)));
+        app.handle_command_key('h'); // already on first page
+        assert_eq!(app.db_display.page, 0);
+        app.handle_command_key('l');
+        app.handle_command_key('l'); // already on last page
+        assert_eq!(app.db_display.page, 1);
     }
 }
