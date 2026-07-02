@@ -16,11 +16,13 @@ use ratatui_notifications::{
 };
 use tokio::sync::mpsc;
 
+use yfinance::fetch::fetch_chart_data;
 use yfinance::{
     fetch::{fetch_analysis, fetch_quote_and_store, fetch_sorted},
     models::{QuoteRecord, QuoteRecordAnalysis},
     sort::{SortMode, SortOrder},
 };
+use yfinance_rs::Candle;
 
 /// Maximum number of rows fetched from the database per reload.
 const PAGE_FETCH_LIMIT: i64 = 200;
@@ -38,6 +40,8 @@ pub enum AppEvent {
     FetchCompleted(QuoteRecord),
     /// Analyst consensus and price targets loaded for the selected stock.
     StockAnalysisReady(QuoteRecordAnalysis),
+    /// Stock price history loaded for the selected stock
+    ChartDataReady(Vec<Candle>),
     /// Informational message for the log panel.
     LogLine(String),
     /// Error message; also shown in the status bar.
@@ -130,8 +134,12 @@ pub struct StockInfoModal {
     pub stock: QuoteRecord,
     /// Analyst data fetched in the background; `None` while loading.
     pub analysis: Option<QuoteRecordAnalysis>,
-    /// Whether the modal is currently visible.
-    pub visible: bool,
+    /// Whether the info modal is currently visible.
+    pub info_visible: bool,
+    /// Whether the chart modal is visible
+    pub chart_visible: bool,
+    /// Stock price history fetched in the bg, None while loading
+    pub chart_data: Option<Vec<Candle>>,
 }
 
 /// Maps a sort-column key to its [`SortMode`], or `None` for non-sort keys.
@@ -175,7 +183,9 @@ impl App {
             stock_modal: StockInfoModal {
                 stock: QuoteRecord::default(),
                 analysis: None,
-                visible: false,
+                info_visible: false,
+                chart_visible: false,
+                chart_data: None,
             },
             notifications: Notifications::new(),
         }
@@ -219,6 +229,9 @@ impl App {
             AppEvent::StockAnalysisReady(analysis) => {
                 self.stock_modal.analysis = Some(analysis);
             }
+            AppEvent::ChartDataReady(data) => {
+                self.stock_modal.chart_data = Some(data);
+            }
         }
     }
 
@@ -247,8 +260,9 @@ impl App {
     pub fn handle_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
-                if self.stock_modal.visible {
-                    self.stock_modal.visible = false;
+                if self.stock_modal.info_visible || self.stock_modal.chart_visible {
+                    self.stock_modal.info_visible = false;
+                    self.stock_modal.chart_visible = false;
                 } else {
                     self.input_mode.toggled = false;
                 }
@@ -259,6 +273,7 @@ impl App {
                 self.input_mode.input.pop();
             }
             KeyCode::Enter if self.input_mode.toggled => self.submit_input(),
+            KeyCode::Enter => self.open_chart_modal(),
             _ => {}
         }
     }
@@ -269,6 +284,7 @@ impl App {
     /// are appended to [`InputMode::input`] instead.
     pub fn handle_command_key(&mut self, key: char) {
         let key = key.to_ascii_lowercase();
+        // Return early if the key corresponds to a sort order
         if let Some(mode) = sort_mode_for_key(key) {
             self.set_sort_mode(mode);
             return;
@@ -282,7 +298,7 @@ impl App {
             'h' => self.paginate(-1),
             'l' => self.paginate(1),
             'o' => self.toggle_sort_order(),
-            '?' => self.open_stock_modal(),
+            '?' => self.open_info_modal(),
             _ => {}
         }
     }
@@ -377,7 +393,7 @@ impl App {
 
     /// Opens the stock-detail modal for the selected row and starts fetching
     /// its analyst data in the background.
-    fn open_stock_modal(&mut self) {
+    fn open_info_modal(&mut self) {
         let Some(stock) = self
             .db_display
             .table_state
@@ -390,9 +406,30 @@ impl App {
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
         self.stock_modal.analysis = None;
-        self.stock_modal.visible = true;
+        self.stock_modal.info_visible = true;
         if let Some(t) = ticker.as_deref() {
             self.spawn_analysis(t);
+        }
+    }
+
+    /// Opens the stock-chart modal for the selected row and starts fetching
+    /// its pricing data in the background.
+    fn open_chart_modal(&mut self) {
+        let Some(stock) = self
+            .db_display
+            .table_state
+            .selected()
+            .and_then(|i| self.db_display.window().get(i))
+            .cloned()
+        else {
+            return;
+        };
+        let ticker = stock.ticker.clone();
+        self.stock_modal.stock = stock;
+        self.stock_modal.analysis = None;
+        self.stock_modal.chart_visible = true;
+        if let Some(t) = ticker.as_deref() {
+            self.spawn_chart_data(t);
         }
     }
 
@@ -472,6 +509,21 @@ impl App {
             }
         });
     }
+
+    fn spawn_chart_data(&self, symbol: &str) {
+        let tx = self.event_tx.clone();
+        let symbol = symbol.to_owned();
+        tokio::spawn(async move {
+            match fetch_chart_data(&symbol).await {
+                Ok(a) => {
+                    let _ = tx.send(AppEvent::ChartDataReady(a));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -498,7 +550,8 @@ mod tests {
         assert!(!app.input_mode.toggled);
         assert!(app.db_display.rows.is_empty());
         assert!(app.logs.is_empty());
-        assert!(!app.stock_modal.visible);
+        assert!(!app.stock_modal.info_visible);
+        assert!(!app.stock_modal.chart_visible);
         assert_eq!(app.db_display.sort_mode, SortMode::ById);
         assert_eq!(app.db_display.sort_order, SortOrder::Descending);
     }

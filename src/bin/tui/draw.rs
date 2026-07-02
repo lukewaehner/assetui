@@ -9,10 +9,13 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols::Marker,
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
+    widgets::{
+        Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, Paragraph, Row, Table,
+    },
 };
-use yfinance_rs::{Price, PriceTarget, RecommendationSummary};
+use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
 use yfinance::models::{QuoteRecord, QuoteRecordAnalysis};
 
@@ -38,8 +41,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_logs(f, log_area, app);
     draw_quotes_table(f, right, app, db_border);
 
-    if app.stock_modal.visible {
+    if app.stock_modal.info_visible {
         draw_stock_modal(f, app);
+    }
+
+    if app.stock_modal.chart_visible {
+        draw_chart_modal(f, app);
     }
 
     let area = f.area();
@@ -416,6 +423,72 @@ fn rating_color(rating: &str) -> Color {
         "strong sell" => Color::LightRed,
         _ => Color::White,
     }
+}
+
+fn draw_chart_modal(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(65, 55, f.area());
+    f.render_widget(Clear, area);
+    let stock = &app.stock_modal.stock;
+    let modal = Block::bordered().title("YTD").style(Style::default());
+
+    let inner = modal.inner(area);
+    f.render_widget(modal, area);
+
+    match &app.stock_modal.chart_data {
+        None => {
+            f.render_widget(Paragraph::new("  Loading data..."), inner);
+        }
+        Some(candles) => {
+            draw_stock_chart(f, inner, candles, stock.ticker.as_deref().unwrap_or("-"))
+        }
+    }
+}
+
+fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str) {
+    // Pull data into (index, close) pairs for the chart
+    let data = candles
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i as f64, c.ohlc.close.as_decimal().round_dp(2).as_f64()))
+        .collect::<Vec<(f64, f64)>>();
+
+    let dataset = Dataset::default()
+        .name(ticker)
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Color::Blue)
+        .data(&data);
+
+    let xmax = (candles.len().saturating_sub(1)) as f64;
+    let mid_idx = candles.len() / 2;
+
+    let x_labels = if candles.is_empty() {
+        vec![String::new(), String::new(), String::new()]
+    } else {
+        vec![
+            candles[0].ts.format("%b %d").to_string(),
+            candles[mid_idx].ts.format("%b %d").to_string(),
+            candles[candles.len() - 1].ts.format("%b %d").to_string(),
+        ]
+    };
+    let x_axis = Axis::default()
+        .title("Time")
+        .bounds([0.0, xmax])
+        .labels(x_labels);
+
+    let (ymin, ymax) = data
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(min, max), (_, y)| {
+            (min.min(*y), max.max(*y))
+        });
+    let y_axis = Axis::default().title("Price").bounds([ymin, ymax]).labels([
+        ymin.to_string(),
+        (ymin + (ymax - ymin) / 2.0).to_string(),
+        ymax.to_string(),
+    ]);
+
+    let chart = Chart::new(vec![dataset]).x_axis(x_axis).y_axis(y_axis);
+    f.render_widget(chart, area);
 }
 
 /// Green when the price is above the previous close, red when below, yellow

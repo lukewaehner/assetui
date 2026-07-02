@@ -7,11 +7,11 @@
 
 use tokio::try_join;
 use tracing::{debug, instrument};
-use yfinance_rs::{AnalysisBuilder, Ticker, YfClient};
+use yfinance_rs::{AnalysisBuilder, Candle, HistoryBuilder, Interval, Range, Ticker, YfClient};
 
 use crate::models::QuoteRecordAnalysis;
 use crate::sort::{SortMode, SortOrder};
-use crate::{db, models::QuoteRecord, AppError};
+use crate::{AppError, db, models::QuoteRecord};
 
 /// Fetches a real-time quote for `symbol` using an already-initialised
 /// [`Ticker`] and converts it into a [`QuoteRecord`].
@@ -22,10 +22,7 @@ use crate::{db, models::QuoteRecord, AppError};
 /// The `id` field of the returned record is always `None`; it gets set once
 /// the record is written to the database.
 #[instrument(skip(ticker), fields(symbol = %symbol))]
-pub async fn fetch_quote(
-    symbol: &str,
-    ticker: &Ticker,
-) -> Result<Option<QuoteRecord>, AppError> {
+pub async fn fetch_quote(symbol: &str, ticker: &Ticker) -> Result<Option<QuoteRecord>, AppError> {
     debug!("requesting quote from yfinance");
     let quote = ticker.quote().await?;
     debug!(
@@ -39,7 +36,9 @@ pub async fn fetch_quote(
         name: quote.name.clone(),
         price: quote.price.map(|p| p.into_inner().as_f64()),
         previous_close: quote.previous_close.map(|p| p.into_inner().as_f64()),
-        day_volume: quote.day_volume.map(|p| p.into_inner().as_decimal().as_f64()),
+        day_volume: quote
+            .day_volume
+            .map(|p| p.into_inner().as_decimal().as_f64()),
         as_of: quote.as_of,
     };
     Ok(Some(quote_record))
@@ -95,7 +94,9 @@ pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
 /// # Deprecated
 ///
 /// Use [`fetch_sorted`] with [`SortMode::ByAsOf`] and [`SortOrder::Descending`] instead.
-#[deprecated(note = "use fetch_sorted(pool, SortMode::ByAsOf, SortOrder::Descending, limit) instead")]
+#[deprecated(
+    note = "use fetch_sorted(pool, SortMode::ByAsOf, SortOrder::Descending, limit) instead"
+)]
 pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<QuoteRecord>> {
     fetch_sorted(pool, SortMode::ByAsOf, SortOrder::Descending, limit).await
 }
@@ -158,6 +159,21 @@ pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, AppErro
         recommendation_summary: Some(rec),
         price_target: Some(pt),
     })
+}
+
+/// Fetches YTD ticker history
+///
+/// Both requests are fired at the same time via [`tokio::try_join!`]; either
+/// one failing aborts the whole call.
+#[instrument(fields(symbol = %symbol))]
+pub async fn fetch_chart_data(symbol: &str) -> Result<Vec<Candle>, AppError> {
+    let client = YfClient::default();
+    let history = HistoryBuilder::new(&client, symbol)
+        .range(Range::Ytd)
+        .interval(Interval::D1)
+        .fetch()
+        .await?;
+    Ok(history)
 }
 
 #[cfg(test)]

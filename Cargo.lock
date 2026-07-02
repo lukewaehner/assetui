@@ -4085,6 +4085,7 @@ dependencies = [
  "dotenvy",
  "ratatui",
  "ratatui-notifications",
+ "rust_decimal",
  "serde",
  "sqlx",
  "tokio",
