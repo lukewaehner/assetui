@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::widgets::TableState;
 use ratatui_notifications::{
-    Animation, Anchor, AutoDismiss, Level, Notification, Notifications, SlideDirection,
+    Anchor, Animation, AutoDismiss, Level, Notification, Notifications, SlideDirection,
 };
 use tokio::sync::mpsc;
 
@@ -33,6 +33,8 @@ pub enum AppEvent {
     ChangeSortMode(SortMode),
     /// User toggled sort direction.
     ChangeSortOrder(SortOrder),
+    /// Pagination
+    Paginate(i32),
     /// Informational message for the log panel.
     LogLine(String),
     /// Error message; also shown in the status bar.
@@ -75,7 +77,7 @@ pub struct InputMode {
 /// State for the quotes table on the right side of the layout.
 pub struct DbDisplay {
     /// Rows currently visible in the table.
-    pub rows: Vec<QuoteRecord>,
+    pub stocks: StockDisplayState,
     /// Ratatui widget state tracking the selected row index.
     pub table_state: TableState,
     /// Short status message shown in the table's title bar.
@@ -84,6 +86,15 @@ pub struct DbDisplay {
     pub sort_mode: SortMode,
     /// Direction of the current sort.
     pub sort_order: SortOrder,
+    /// Current page index (0-based).
+    pub page: usize,
+    /// Number of rows per page.
+    pub page_size: usize,
+}
+
+pub struct StockDisplayState {
+    pub rows: Vec<QuoteRecord>,
+    pub window: Vec<QuoteRecord>,
 }
 
 /// State for the stock-detail overlay modal.
@@ -107,11 +118,16 @@ impl App {
             },
             should_quit: false,
             db_display: DbDisplay {
-                rows: Vec::new(),
+                stocks: StockDisplayState {
+                    rows: Vec::new(),
+                    window: Vec::new(),
+                },
                 status: String::from("Loading..."),
                 table_state: TableState::default(),
                 sort_mode: SortMode::ById,
                 sort_order: SortOrder::Descending,
+                page: 0,
+                page_size: 25,
             },
             logs: Vec::new(),
             pool,
@@ -132,12 +148,10 @@ impl App {
         match event {
             AppEvent::PageLoaded(rows) => {
                 self.db_display.status = String::new();
-                self.db_display.rows = rows;
-                if !self.db_display.rows.is_empty()
-                    && self.db_display.table_state.selected().is_none()
-                {
-                    self.db_display.table_state.select(Some(0));
-                }
+                self.db_display.stocks.rows = rows;
+                self.db_display.page = 0;
+                self.compute_window();
+                self.reset_selection();
             }
             AppEvent::FetchSpawned(symbol) => {
                 self.db_display.status = format!("fetching {symbol}…");
@@ -147,7 +161,9 @@ impl App {
                 let name = record.ticker.as_deref().unwrap_or("?");
                 self.db_display.status = format!("stored {name}");
                 self.logs.push(format!("[SUCCESS] stored {name}"));
-                self.db_display.rows.insert(0, record);
+                self.db_display.stocks.rows.insert(0, record);
+                self.compute_window();
+                self.reset_selection();
             }
             AppEvent::LogLine(line) => {
                 self.logs.push(line);
@@ -180,6 +196,85 @@ impl App {
             AppEvent::StockAnalysisReady(analysis) => {
                 self.stock_modal.analysis = Some(analysis);
             }
+            AppEvent::Paginate(delta) => {
+                let total = self.total_pages();
+                let new_page = if delta > 0 {
+                    (self.db_display.page + 1).min(total.saturating_sub(1))
+                } else {
+                    self.db_display.page.saturating_sub(1)
+                };
+                if new_page != self.db_display.page {
+                    self.db_display.page = new_page;
+                    self.compute_window();
+                    self.reset_selection();
+                }
+            }
+        }
+    }
+
+    /// Returns the total number of pages given the current row count and page size.
+    pub fn total_pages(&self) -> usize {
+        let len = self.db_display.stocks.rows.len();
+        if len == 0 {
+            1
+        } else {
+            len.div_ceil(self.db_display.page_size)
+        }
+    }
+
+    /// Updates `page_size` to `size` and shifts the visible page so the
+    /// globally-selected row stays on screen.  Called every frame from the
+    /// draw function so that terminal resizes are reflected immediately.
+    pub fn set_page_size(&mut self, size: usize) {
+        let size = size.max(1);
+        if self.db_display.page_size == size {
+            return;
+        }
+        // Remember which global row index is currently selected so we can
+        // keep it visible after the page boundaries shift.
+        let global_idx = self
+            .db_display
+            .table_state
+            .selected()
+            .map(|i| self.db_display.page * self.db_display.page_size + i);
+
+        self.db_display.page_size = size;
+
+        // Jump to the page that contains the previously-selected row.
+        let target_page = global_idx.map(|gi| gi / size).unwrap_or(0);
+        self.db_display.page = target_page.min(self.total_pages().saturating_sub(1));
+        self.compute_window();
+
+        // Restore the local selection inside the new window.
+        let local = global_idx
+            .map(|gi| gi % size)
+            .unwrap_or(0)
+            .min(self.db_display.stocks.window.len().saturating_sub(1));
+        if self.db_display.stocks.window.is_empty() {
+            self.db_display.table_state.select(None);
+        } else {
+            self.db_display.table_state.select(Some(local));
+        }
+    }
+
+    /// Recomputes `stocks.window` from `stocks.rows`, `page`, and `page_size`.
+    /// Does not touch the table selection — callers are responsible for that.
+    fn compute_window(&mut self) {
+        let start = self.db_display.page * self.db_display.page_size;
+        let end = (start + self.db_display.page_size).min(self.db_display.stocks.rows.len());
+        self.db_display.stocks.window = if start < self.db_display.stocks.rows.len() {
+            self.db_display.stocks.rows[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+    }
+
+    /// Selects row 0 in the current window, or clears selection if empty.
+    fn reset_selection(&mut self) {
+        if self.db_display.stocks.window.is_empty() {
+            self.db_display.table_state.select(None);
+        } else {
+            self.db_display.table_state.select(Some(0));
         }
     }
 
@@ -217,8 +312,8 @@ impl App {
             'a' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByAsOf)),
             'n' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByName)),
             't' => self.handle_event(AppEvent::ChangeSortMode(SortMode::ByTicker)),
-            'j' if !self.db_display.rows.is_empty() => {
-                let len = self.db_display.rows.len();
+            'j' if !self.db_display.stocks.window.is_empty() => {
+                let len = self.db_display.stocks.window.len();
                 let i = self
                     .db_display
                     .table_state
@@ -227,8 +322,8 @@ impl App {
                     .unwrap_or(0);
                 self.db_display.table_state.select(Some(i));
             }
-            'k' if !self.db_display.rows.is_empty() => {
-                let len = self.db_display.rows.len();
+            'k' if !self.db_display.stocks.window.is_empty() => {
+                let len = self.db_display.stocks.window.len();
                 let i = self
                     .db_display
                     .table_state
@@ -236,6 +331,13 @@ impl App {
                     .map(|i| if i == 0 { len - 1 } else { i - 1 })
                     .unwrap_or(0);
                 self.db_display.table_state.select(Some(i));
+            }
+            // Paginate: h = prev page, l = next page
+            'h' => {
+                self.handle_event(AppEvent::Paginate(-1));
+            }
+            'l' => {
+                self.handle_event(AppEvent::Paginate(1));
             }
             'o' => {
                 let order = match self.db_display.sort_order {
@@ -246,7 +348,7 @@ impl App {
             }
             '?' => {
                 if let Some(i) = self.db_display.table_state.selected()
-                    && let Some(row) = self.db_display.rows.get(i)
+                    && let Some(row) = self.db_display.stocks.window.get(i)
                 {
                     let stock = row.clone();
                     let ticker = stock.ticker.clone();
@@ -298,7 +400,7 @@ mod tests {
         let (app, _rx) = make_test_app();
         assert!(!app.should_quit);
         assert!(!app.input_mode.toggled);
-        assert!(app.db_display.rows.is_empty());
+        assert!(app.db_display.stocks.rows.is_empty());
         assert!(app.logs.is_empty());
         assert!(!app.stock_modal.visible);
         assert_eq!(app.db_display.sort_mode, SortMode::ById);
@@ -309,7 +411,7 @@ mod tests {
     async fn test_handle_event_page_loaded() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord::default()]));
-        assert_eq!(app.db_display.rows.len(), 1);
+        assert_eq!(app.db_display.stocks.rows.len(), 1);
         assert!(app.db_display.status.is_empty());
         assert_eq!(app.db_display.table_state.selected(), Some(0));
     }
@@ -330,7 +432,7 @@ mod tests {
             ..Default::default()
         };
         app.handle_event(AppEvent::FetchCompleted(record));
-        assert_eq!(app.db_display.rows.len(), 1);
+        assert_eq!(app.db_display.stocks.rows.len(), 1);
         assert_eq!(app.logs.len(), 1);
         assert!(app.logs[0].contains("AAPL"));
     }

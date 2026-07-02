@@ -28,7 +28,10 @@ use app::{App, AppEvent};
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let database_url = dotenvy::var("DATABASE_URL").map_err(|_| {
-        io::Error::new(io::ErrorKind::NotFound, "DATABASE_URL not set in environment")
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "DATABASE_URL not set in environment",
+        )
     })?;
 
     let pool = PgPoolOptions::new()

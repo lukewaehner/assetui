@@ -69,7 +69,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .border_style(Style::default().fg(Color::DarkGray));
     let visible = log_area.height.saturating_sub(2) as usize;
     let start = app.logs.len().saturating_sub(visible);
-    let log_lines: Vec<Line> = app.logs[start..].iter().map(|s| Line::raw(s.as_str())).collect();
+    let log_lines: Vec<Line> = app.logs[start..]
+        .iter()
+        .map(|s| Line::raw(s.as_str()))
+        .collect();
     f.render_widget(Paragraph::new(log_lines).block(log_block), log_area);
 
     draw_quotes_table(f, right, app, db_border);
@@ -88,6 +91,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// press.  The selected row is highlighted in dark gray with bold text, and
 /// `>> ` is drawn in the gutter.
 fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Color) {
+    // 2 borders + 1 header row + 1 header bottom-margin = 4 overhead rows.
+    let page_size = area.height.saturating_sub(4).max(1) as usize;
+    app.set_page_size(page_size);
+
     let box_bg = Color::DarkGray;
     let label_sty = Style::default()
         .fg(Color::White)
@@ -116,7 +123,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     ])
     .bottom_margin(1);
 
-    let rows = app.db_display.rows.iter().map(|q| {
+    let rows = app.db_display.stocks.window.iter().map(|q| {
         Row::new(vec![
             match q.id {
                 Some(id) => Cell::from(id.to_string()),
@@ -153,7 +160,13 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         Constraint::Length(12),
     ];
 
-    let title = format!("Quote{}", app.db_display.status);
+    let total_pages = app.total_pages();
+    let page = app.db_display.page + 1;
+    let title = if app.db_display.status.is_empty() {
+        format!("Quotes [{page}/{total_pages}]  h/l to paginate")
+    } else {
+        format!("Quotes [{page}/{total_pages}] — {}", app.db_display.status)
+    };
     let table = Table::new(rows, widths)
         .header(header)
         .block(
