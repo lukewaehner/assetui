@@ -12,7 +12,8 @@ use ratatui::{
     symbols::Marker,
     text::{Line, Span},
     widgets::{
-        Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, Paragraph, Row, Table,
+        Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, LegendPosition, Paragraph,
+        Row, Table,
     },
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
@@ -429,7 +430,9 @@ fn draw_chart_modal(f: &mut Frame, app: &mut App) {
     let area = centered_rect(65, 55, f.area());
     f.render_widget(Clear, area);
     let stock = &app.stock_modal.stock;
-    let modal = Block::bordered().title("YTD").style(Style::default());
+    let modal = Block::bordered()
+        .title(format!("YTD - {}", stock.ticker.as_deref().unwrap_or("")))
+        .style(Style::default());
 
     let inner = modal.inner(area);
     f.render_widget(modal, area);
@@ -445,49 +448,110 @@ fn draw_chart_modal(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str) {
-    // Pull data into (index, close) pairs for the chart
+    if candles.is_empty() {
+        f.render_widget(Paragraph::new("  No chart data."), area);
+        return;
+    }
+
+    // Pull data into (index, close) pairs for the chart.
     let data = candles
         .iter()
         .enumerate()
         .map(|(i, c)| (i as f64, c.ohlc.close.as_decimal().round_dp(2).as_f64()))
         .collect::<Vec<(f64, f64)>>();
 
-    let dataset = Dataset::default()
-        .name(ticker)
+    // Overall performance drives the line/legend colour; per-day direction
+    // drives the individual dot colours.
+    let first = data[0].1;
+    let last = data[data.len() - 1].1;
+    let change = last - first;
+    let pct = if first != 0.0 {
+        change / first * 100.0
+    } else {
+        0.0
+    };
+    let trend_up = change >= 0.0;
+    let trend_color = if trend_up { Color::Green } else { Color::Red };
+    let sign = if trend_up { "+" } else { "" };
+
+    // Split closes into up/down days (vs. the previous close) so each point can
+    // be drawn as an individually coloured dot on top of the trend line.
+    let mut up_pts: Vec<(f64, f64)> = Vec::new();
+    let mut down_pts: Vec<(f64, f64)> = Vec::new();
+    for (i, &pt) in data.iter().enumerate() {
+        let prev = if i == 0 { pt.1 } else { data[i - 1].1 };
+        if pt.1 >= prev {
+            up_pts.push(pt);
+        } else {
+            down_pts.push(pt);
+        }
+    }
+
+    let legend = format!("{ticker}  ${last:.2}  ({sign}{pct:.1}%)");
+    let trend_line = Dataset::default()
+        .name(legend)
         .marker(Marker::Braille)
         .graph_type(GraphType::Line)
-        .style(Color::Blue)
+        .style(Style::default().fg(trend_color))
         .data(&data);
+    let up_dots = Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Scatter)
+        .style(Style::default().fg(Color::LightGreen))
+        .data(&up_pts);
+    let down_dots = Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Scatter)
+        .style(Style::default().fg(Color::LightRed))
+        .data(&down_pts);
+
+    let axis_style = Style::default().fg(Color::DarkGray);
+    let title_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(Color::Gray);
 
     let xmax = (candles.len().saturating_sub(1)) as f64;
     let mid_idx = candles.len() / 2;
-
-    let x_labels = if candles.is_empty() {
-        vec![String::new(), String::new(), String::new()]
-    } else {
-        vec![
-            candles[0].ts.format("%b %d").to_string(),
-            candles[mid_idx].ts.format("%b %d").to_string(),
-            candles[candles.len() - 1].ts.format("%b %d").to_string(),
-        ]
+    let date_label = |i: usize| {
+        Line::from(Span::styled(
+            candles[i].ts.format("%b %d").to_string(),
+            label_style,
+        ))
     };
     let x_axis = Axis::default()
-        .title("Time")
+        .title(Span::styled("Time", title_style))
+        .style(axis_style)
         .bounds([0.0, xmax])
-        .labels(x_labels);
+        .labels([
+            date_label(0),
+            date_label(mid_idx),
+            date_label(candles.len() - 1),
+        ]);
 
     let (ymin, ymax) = data
         .iter()
         .fold((f64::MAX, f64::MIN), |(min, max), (_, y)| {
             (min.min(*y), max.max(*y))
         });
-    let y_axis = Axis::default().title("Price").bounds([ymin, ymax]).labels([
-        ymin.to_string(),
-        (ymin + (ymax - ymin) / 2.0).to_string(),
-        ymax.to_string(),
-    ]);
+    // Pad the bounds a touch so the line never rides the top/bottom edge.
+    let pad = ((ymax - ymin) * 0.04).max(0.01);
+    let (ylo, yhi) = (ymin - pad, ymax + pad);
+    let price_label = |v: f64| Line::from(Span::styled(format!("{v:.2}"), label_style));
+    let y_axis = Axis::default()
+        .title(Span::styled("Price", title_style))
+        .style(axis_style)
+        .bounds([ylo, yhi])
+        .labels([
+            price_label(ylo),
+            price_label((ylo + yhi) / 2.0),
+            price_label(yhi),
+        ]);
 
-    let chart = Chart::new(vec![dataset]).x_axis(x_axis).y_axis(y_axis);
+    let chart = Chart::new(vec![trend_line, up_dots, down_dots])
+        .x_axis(x_axis)
+        .y_axis(y_axis)
+        .legend_position(Some(LegendPosition::TopLeft));
     f.render_widget(chart, area);
 }
 
