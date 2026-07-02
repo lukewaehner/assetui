@@ -260,6 +260,12 @@ impl App {
 
     /// Routes a single command key to the appropriate state change.
     pub fn handle_command_key(&mut self, key: char) {
+        if self.stock_modal.info_visible || self.stock_modal.chart_visible {
+            if key == '?' {
+                self.open_info_modal()
+            }
+            return;
+        }
         let key = key.to_ascii_lowercase();
         if let Some(mode) = sort_mode_for_key(key) {
             self.set_sort_mode(mode);
@@ -373,9 +379,14 @@ impl App {
         };
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
-        self.stock_modal.analysis = None;
+        self.stock_modal.chart_visible = false;
         self.stock_modal.info_visible = true;
-        if let Some(t) = ticker.as_deref() {
+
+        let has_analysis: bool = self.stock_modal.analysis.is_some()
+            && self.stock_modal.analysis.as_ref().unwrap().ticker == ticker;
+
+        if !has_analysis && let Some(t) = ticker.as_deref() {
+            self.stock_modal.analysis = None;
             self.spawn_analysis(t);
         }
     }
@@ -392,7 +403,7 @@ impl App {
         };
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
-        self.stock_modal.analysis = None;
+        self.stock_modal.info_visible = false;
         self.stock_modal.chart_visible = true;
         if let Some(t) = ticker.as_deref() {
             self.spawn_chart_data(t);
@@ -554,6 +565,51 @@ mod tests {
         app.handle_event(AppEvent::Error("oops".to_string()));
         assert!(app.db_display.status.contains("oops"));
         assert!(app.logs.iter().any(|l| l.contains("oops")));
+    }
+
+    fn analysis_for(ticker: &str) -> QuoteRecordAnalysis {
+        QuoteRecordAnalysis {
+            ticker: Some(ticker.to_string()),
+            recommendation_summary: None,
+            price_target: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_info_reuses_matching_analysis() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.analysis = Some(analysis_for("AAPL"));
+        app.open_info_modal();
+        assert!(app.stock_modal.analysis.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_analysis_survives_chart_visit_for_same_ticker() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.analysis = Some(analysis_for("AAPL"));
+        app.open_chart_modal();
+        app.open_info_modal();
+        assert!(app.stock_modal.analysis.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_open_info_refetches_on_ticker_mismatch() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.analysis = Some(analysis_for("TSLA"));
+        app.open_info_modal();
+        assert!(app.stock_modal.analysis.is_none());
     }
 
     #[tokio::test]
