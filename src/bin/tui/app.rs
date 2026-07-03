@@ -16,6 +16,7 @@ use ratatui_notifications::{
 };
 use tokio::sync::mpsc;
 
+use super::theme::Theme;
 use yfinance::fetch::fetch_chart_data;
 use yfinance::{
     fetch::{fetch_analysis, fetch_quote_and_store, fetch_sorted},
@@ -71,6 +72,8 @@ pub struct App {
     pub stock_modal: StockInfoModal,
     /// Slide-in error notifications shown top-right.
     pub notifications: Notifications,
+    /// Colour palette used by every draw call.
+    pub theme: Theme,
 }
 
 /// State for the ticker input box.
@@ -188,6 +191,7 @@ impl App {
                 chart_data: None,
             },
             notifications: Notifications::new(),
+            theme: super::theme::MUTED,
         }
     }
 

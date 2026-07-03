@@ -5,6 +5,7 @@
 
 mod app;
 mod draw;
+mod theme;
 
 use std::io;
 use std::time::{Duration, Instant};
