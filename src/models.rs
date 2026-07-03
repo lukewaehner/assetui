@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use yfinance_rs::{PriceTarget, RecommendationSummary};
+use yfinance_rs::{PriceTarget, QuoteUpdate, RecommendationSummary};
 
 /// A single stock quote snapshot, shared across the fetch layer, database
 /// operations, and CSV exports.
@@ -41,6 +41,45 @@ pub struct QuoteRecordAnalysis {
     pub recommendation_summary: Option<RecommendationSummary>,
     /// Analyst price-target consensus (mean, low, high).
     pub price_target: Option<PriceTarget>,
+}
+
+pub struct QuoteTick {
+    pub ticker: Option<String>,
+    pub price: Option<f64>,
+    pub previous_close: Option<f64>,
+    pub day_volume: Option<f64>,
+    pub as_of: Option<DateTime<Utc>>,
+}
+
+impl From<QuoteUpdate> for QuoteTick {
+    fn from(update: QuoteUpdate) -> Self {
+        Self {
+            ticker: Some(update.instrument.symbol.to_string()),
+            price: update.price.map(|p| p.as_decimal().round_dp(2).as_f64()),
+            previous_close: update
+                .previous_close
+                .map(|p| p.as_decimal().round_dp(2).as_f64()),
+            day_volume: update.volume.map(|v| v.into_inner().as_decimal().as_f64()),
+            as_of: Some(update.ts),
+        }
+    }
+}
+
+impl QuoteTick {
+    pub fn apply(&self, rows: &mut [QuoteRecord]) -> Option<usize> {
+        let ticker = self.ticker.as_deref()?;
+        let i = rows.iter().position(|r| {
+            r.ticker
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case(ticker))
+        })?;
+        let row = &mut rows[i];
+        row.price = self.price.or(row.price);
+        row.previous_close = self.previous_close.or(row.previous_close);
+        row.day_volume = self.day_volume.or(row.day_volume);
+        row.as_of = self.as_of.or(row.as_of);
+        Some(i)
+    }
 }
 
 #[cfg(test)]
@@ -98,5 +137,88 @@ mod tests {
         };
         let debug_str = format!("{:?}", record);
         assert!(debug_str.contains("TSLA"));
+    }
+
+    /// A tick updates the matching row in place, matches the ticker
+    /// case-insensitively, and leaves every other row untouched.
+    #[test]
+    fn test_apply_updates_matching_row() {
+        let mut rows = vec![
+            QuoteRecord {
+                ticker: Some("AAPL".to_string()),
+                price: Some(100.0),
+                ..Default::default()
+            },
+            QuoteRecord {
+                ticker: Some("TSLA".to_string()),
+                price: Some(200.0),
+                ..Default::default()
+            },
+        ];
+        let now = Utc::now();
+        // Lowercase ticker exercises the case-insensitive match.
+        let tick = QuoteTick {
+            ticker: Some("aapl".to_string()),
+            price: Some(150.0),
+            previous_close: Some(140.0),
+            day_volume: Some(1_000.0),
+            as_of: Some(now),
+        };
+
+        assert_eq!(tick.apply(&mut rows), Some(0));
+        assert_eq!(rows[0].price, Some(150.0));
+        assert_eq!(rows[0].previous_close, Some(140.0));
+        assert_eq!(rows[0].day_volume, Some(1_000.0));
+        assert_eq!(rows[0].as_of, Some(now));
+        // The non-matching row is left alone.
+        assert_eq!(rows[1].price, Some(200.0));
+    }
+
+    /// A tick for a ticker not present in `rows` returns `None` and mutates
+    /// nothing (display-only no-op, no insert, no panic).
+    #[test]
+    fn test_apply_unknown_ticker_is_noop() {
+        let mut rows = vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(100.0),
+            ..Default::default()
+        }];
+        let tick = QuoteTick {
+            ticker: Some("NVDA".to_string()),
+            price: Some(999.0),
+            previous_close: None,
+            day_volume: None,
+            as_of: Some(Utc::now()),
+        };
+
+        assert_eq!(tick.apply(&mut rows), None);
+        assert_eq!(rows[0].price, Some(100.0));
+    }
+
+    /// A diff-only tick carries only the fields that changed; the rest arrive
+    /// as `None` and must preserve the row's existing values rather than blank
+    /// them out (regression test for the earlier `.unwrap()` panic).
+    #[test]
+    fn test_apply_diff_only_preserves_existing_fields() {
+        let mut rows = vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(100.0),
+            previous_close: Some(99.0),
+            day_volume: Some(5_000.0),
+            ..Default::default()
+        }];
+        // Only the price moved; every other field is absent.
+        let tick = QuoteTick {
+            ticker: Some("AAPL".to_string()),
+            price: Some(101.0),
+            previous_close: None,
+            day_volume: None,
+            as_of: Some(Utc::now()),
+        };
+
+        assert_eq!(tick.apply(&mut rows), Some(0));
+        assert_eq!(rows[0].price, Some(101.0)); // updated
+        assert_eq!(rows[0].previous_close, Some(99.0)); // preserved
+        assert_eq!(rows[0].day_volume, Some(5_000.0)); // preserved
     }
 }

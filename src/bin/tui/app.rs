@@ -15,6 +15,7 @@ use ratatui_notifications::{
     Anchor, Animation, AutoDismiss, Level, Notification, Notifications, SlideDirection,
 };
 use tokio::sync::mpsc;
+use yfinance::models::QuoteTick;
 
 use super::theme::Theme;
 use yfinance::fetch::fetch_chart_data;
@@ -45,6 +46,8 @@ pub enum AppEvent {
     ChartDataReady(Vec<Candle>),
     /// Informational message for the log panel.
     LogLine(String),
+    /// A quote update is returned from the stream.
+    QuoteTick(QuoteTick),
     /// Error message; also shown in the status bar.
     Error(String),
 }
@@ -235,6 +238,11 @@ impl App {
             }
             AppEvent::ChartDataReady(data) => {
                 self.stock_modal.chart_data = Some(data);
+            }
+            AppEvent::QuoteTick(tick) => {
+                let range = self.db_display.window_range();
+                tick.apply(&mut self.db_display.rows[range]);
+                self.logs.push(format!("[TICK]"));
             }
         }
     }
