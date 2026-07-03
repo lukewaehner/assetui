@@ -328,10 +328,9 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
     let area = centered_rect(65, 55, f.area());
     f.render_widget(Clear, area);
     let stock = &app.stock_modal.stock;
-    let modal = modal_block(
-        format!("{} · info", stock.ticker.as_deref().unwrap_or("-")),
-        &t,
-    );
+    // Cut title since the ticker is already inside the modal body
+    // Helps avoid modal title being too long
+    let modal = modal_block("".into(), &t);
 
     let inner = modal.inner(area);
     f.render_widget(modal, area);
