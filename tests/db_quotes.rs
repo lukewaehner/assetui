@@ -19,9 +19,16 @@ fn make_quote(ticker: &str) -> QuoteRecord {
 async fn test_store_returns_id(pool: sqlx::PgPool) {
     let quote = make_quote("AAPL");
     let result = store_quote_to_db(&quote, &pool).await;
-    assert!(result.is_ok(), "store_quote_to_db returned an error: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "store_quote_to_db returned an error: {:?}",
+        result
+    );
     let id = result.unwrap();
-    assert!(id.is_some(), "expected Some(id) for a fresh insert, got None");
+    assert!(
+        id.is_some(),
+        "expected Some(id) for a fresh insert, got None"
+    );
     assert!(id.unwrap() > 0, "returned id should be positive");
 }
 
@@ -57,7 +64,11 @@ async fn test_fetch_all_empty(pool: sqlx::PgPool) {
     let rows = fetch_all_quotes(&pool)
         .await
         .expect("fetch_all_quotes should succeed on empty db");
-    assert!(rows.is_empty(), "expected empty vec on a fresh db, got {} rows", rows.len());
+    assert!(
+        rows.is_empty(),
+        "expected empty vec on a fresh db, got {} rows",
+        rows.len()
+    );
 }
 
 /// Storing two quotes with distinct tickers then fetching returns both.
@@ -66,8 +77,12 @@ async fn test_fetch_all_returns_stored(pool: sqlx::PgPool) {
     let q1 = make_quote("GOOG");
     let q2 = make_quote("TSLA");
 
-    store_quote_to_db(&q1, &pool).await.expect("store q1 failed");
-    store_quote_to_db(&q2, &pool).await.expect("store q2 failed");
+    store_quote_to_db(&q1, &pool)
+        .await
+        .expect("store q1 failed");
+    store_quote_to_db(&q2, &pool)
+        .await
+        .expect("store q2 failed");
 
     let rows = fetch_all_quotes(&pool)
         .await
@@ -94,7 +109,11 @@ async fn test_dump_to_csv_creates_file(pool: sqlx::PgPool) {
         .expect("store failed");
 
     let result = dump_table_to_csv(&pool).await;
-    assert!(result.is_ok(), "dump_table_to_csv returned an error: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "dump_table_to_csv returned an error: {:?}",
+        result
+    );
 
     // Find the generated CSV file and clean it up.
     let csv_file = std::fs::read_dir(".")
@@ -106,7 +125,10 @@ async fn test_dump_to_csv_creates_file(pool: sqlx::PgPool) {
             name_str.starts_with("quotes_dump_") && name_str.ends_with(".csv")
         });
 
-    assert!(csv_file.is_some(), "no quotes_dump_*.csv file found after dump");
+    assert!(
+        csv_file.is_some(),
+        "no quotes_dump_*.csv file found after dump"
+    );
 
     // Clean up.
     if let Some(file) = csv_file {

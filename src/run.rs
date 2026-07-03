@@ -9,10 +9,10 @@ use sqlx::{Pool, Postgres};
 use tracing::{debug, error, info, warn};
 use yfinance_rs::{Ticker, YfClient};
 
+use crate::AppError;
 use crate::db::quotes::store_quote_to_db;
 use crate::fetch::{fetch_quote, prepare_tickers};
 use crate::models::QuoteRecord;
-use crate::AppError;
 
 const CHANNEL_BUFFER: usize = 100;
 
@@ -24,10 +24,7 @@ const CHANNEL_BUFFER: usize = 100;
 /// each DB insert.  Errors on individual tickers are logged and counted but
 /// do not abort the run; the function only returns `Err` on unrecoverable
 /// setup failures.  A warning is logged when any individual tickers fail.
-pub async fn fetch_and_store(
-    pool: &Pool<Postgres>,
-    tickers: &[String],
-) -> Result<(), AppError> {
+pub async fn fetch_and_store(pool: &Pool<Postgres>, tickers: &[String]) -> Result<(), AppError> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<QuoteRecord>(CHANNEL_BUFFER);
 
     let client: YfClient = YfClient::default();

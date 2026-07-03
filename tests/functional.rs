@@ -363,12 +363,20 @@ async fn test_store_many_then_paginate(pool: sqlx::PgPool) {
     let page_5 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 5)
         .await
         .expect("fetch_sorted(5) failed");
-    assert_eq!(page_5.len(), 5, "fetch_sorted(5) should return exactly 5 rows");
+    assert_eq!(
+        page_5.len(),
+        5,
+        "fetch_sorted(5) should return exactly 5 rows"
+    );
 
     let page_15 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 15)
         .await
         .expect("fetch_sorted(15) failed");
-    assert_eq!(page_15.len(), 15, "fetch_sorted(15) should return all 15 rows");
+    assert_eq!(
+        page_15.len(),
+        15,
+        "fetch_sorted(15) should return all 15 rows"
+    );
 
     let page_20 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 20)
         .await

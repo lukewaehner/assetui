@@ -1,6 +1,6 @@
 //! Table rendering for the CLI binary.
 
-use crate::{db::quotes::fetch_all_quotes, models::QuoteRecord, AppError};
+use crate::{AppError, db::quotes::fetch_all_quotes, models::QuoteRecord};
 use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use sqlx::{Pool, Postgres};
 
@@ -17,7 +17,9 @@ fn ticker_row(qr: &QuoteRecord) -> Vec<Cell> {
     let price_str = opt_fmt(qr.price, |p| format!("${p:.2}"));
     let prev_close_str = opt_fmt(qr.previous_close, |p| format!("${p:.2}"));
     let volume_str = opt_fmt(qr.day_volume, |v| format!("{v:.2}"));
-    let as_of_str = opt_fmt(qr.as_of, |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string());
+    let as_of_str = opt_fmt(qr.as_of, |dt| {
+        dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+    });
 
     let price_cell = match (qr.price, qr.previous_close) {
         (Some(p), Some(pc)) if p > pc => Cell::new(price_str).fg(Color::Green),

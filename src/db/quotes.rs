@@ -3,8 +3,8 @@
 use sqlx::{Pool, Postgres};
 use tracing::{debug, info, instrument};
 
-use crate::models::QuoteRecord;
 use crate::AppError;
+use crate::models::QuoteRecord;
 
 /// Inserts a quote into the database and returns the new row's `id`.
 ///
