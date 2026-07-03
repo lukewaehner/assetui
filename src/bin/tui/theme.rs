@@ -6,6 +6,8 @@
 //! with the todo-oriented fields replaced by market-sentiment colours
 //! (up / down / neutral).
 
+use std::process::Command;
+
 use ratatui::style::Color;
 
 /// A complete colour palette for the TUI.
@@ -69,3 +71,90 @@ pub const MUTED: Theme = Theme {
     down_strong: rgb(0xf0, 0x9a, 0x9a),
     neutral: rgb(0xd4, 0xb0, 0x6a),
 };
+
+/// The active colour scheme, following the macOS system appearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Appearance {
+    Light,
+    Dark,
+}
+
+/// Light companion to [`MUTED`]: a soft off-white background with a steel-blue
+/// accent and market colours darkened for contrast on a light surface.
+pub const LIGHT: Theme = Theme {
+    bg: rgb(0xf4, 0xf5, 0xf7),
+    panel: rgb(0xea, 0xec, 0xf0),
+    border: rgb(0xcf, 0xd4, 0xdc),
+    fg: rgb(0x22, 0x27, 0x2f),
+    dim: rgb(0x6b, 0x72, 0x80),
+    accent: rgb(0x3a, 0x63, 0x8f),
+    cursor: rgb(0xd4, 0xdd, 0xe8),
+    statusbar: rgb(0xe0, 0xe3, 0xe9),
+    status_fg: rgb(0x3a, 0x41, 0x50),
+    mode_fg: rgb(0xf4, 0xf5, 0xf7),
+    mode_bg: rgb(0x3a, 0x63, 0x8f),
+    up: rgb(0x2f, 0x8a, 0x4e),
+    up_strong: rgb(0x1e, 0x6b, 0x38),
+    down: rgb(0xc0, 0x3a, 0x3a),
+    down_strong: rgb(0x9a, 0x24, 0x24),
+    neutral: rgb(0xb0, 0x82, 0x1a),
+};
+
+impl Theme {
+    /// Selects the palette matching a system [`Appearance`].
+    pub const fn for_appearance(appearance: Appearance) -> Theme {
+        match appearance {
+            Appearance::Light => LIGHT,
+            Appearance::Dark => MUTED,
+        }
+    }
+}
+
+/// Maps the stdout of `defaults read -g AppleInterfaceStyle` to an
+/// [`Appearance`]. macOS prints `Dark` in dark mode; in light mode the key is
+/// absent, so empty/failed output maps to Light.
+pub fn parse_appearance(defaults_stdout: &str) -> Appearance {
+    if defaults_stdout.trim() == "Dark" {
+        Appearance::Dark
+    } else {
+        Appearance::Light
+    }
+}
+
+/// Reads the current macOS system appearance via
+/// `defaults read -g AppleInterfaceStyle`. Any failure (non-macOS host, missing
+/// binary) is treated as [`Appearance::Dark`], preserving the original default.
+/// A non-zero exit (light mode, where the key is absent) yields empty stdout,
+/// which `parse_appearance` maps to Light.
+pub fn detect_appearance() -> Appearance {
+    match Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+    {
+        Ok(output) => parse_appearance(&String::from_utf8_lossy(&output.stdout)),
+        Err(_) => Appearance::Dark,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_appearance_dark() {
+        assert_eq!(parse_appearance("Dark\n"), Appearance::Dark);
+    }
+
+    #[test]
+    fn test_parse_appearance_light_variants() {
+        assert_eq!(parse_appearance(""), Appearance::Light);
+        assert_eq!(parse_appearance("Light"), Appearance::Light);
+        assert_eq!(parse_appearance("garbage"), Appearance::Light);
+    }
+
+    #[test]
+    fn test_for_appearance_selects_palette() {
+        assert_eq!(Theme::for_appearance(Appearance::Dark).bg, MUTED.bg);
+        assert_eq!(Theme::for_appearance(Appearance::Light).bg, LIGHT.bg);
+    }
+}

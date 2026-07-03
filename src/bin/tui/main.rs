@@ -41,6 +41,7 @@ async fn main() -> io::Result<()> {
 
     let mut app = App::new(pool, event_tx);
     app.spawn_reload();
+    app.spawn_theme_watcher();
 
     // Sets up the terminal (raw mode + alternate screen) and installs a panic
     // hook that restores it, so a panic doesn't leave the shell garbled.

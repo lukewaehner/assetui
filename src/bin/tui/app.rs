@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use yfinance::models::QuoteTick;
 use yfinance::stream::start_quote_stream;
 
-use super::theme::Theme;
+use super::theme::{Appearance, Theme};
 use yfinance::fetch::fetch_chart_data;
 use yfinance::{
     fetch::{fetch_analysis, fetch_quote_and_store, fetch_sorted},
@@ -51,6 +51,8 @@ pub enum AppEvent {
     QuoteTick(QuoteTick),
     /// A stream was started for the current window of tickers
     StreamStarted(StreamHandle),
+    /// The macOS system appearance changed; swap palettes.
+    ThemeChanged(Appearance),
     /// Error message; also shown in the status bar.
     Error(String),
 }
@@ -78,6 +80,9 @@ pub struct App {
     pub stock_modal: StockInfoModal,
     /// Slide-in error notifications shown top-right.
     pub notifications: Notifications,
+    /// The system appearance the current [`theme`](Self::theme) was derived
+    /// from; seeds the watcher and is updated on each `ThemeChanged`.
+    pub appearance: Appearance,
     /// Colour palette used by every draw call.
     pub theme: Theme,
     /// Handler for the live quotes stream
@@ -187,6 +192,7 @@ impl App {
     /// Creates a new `App` with sensible defaults.  The table starts sorted by
     /// `id DESC` to show the most recently stored quotes first.
     pub fn new(pool: sqlx::PgPool, event_tx: mpsc::UnboundedSender<AppEvent>) -> Self {
+        let appearance = super::theme::detect_appearance();
         Self {
             input_mode: InputMode {
                 input: String::new(),
@@ -215,7 +221,8 @@ impl App {
                 chart_data: None,
             },
             notifications: Notifications::new(),
-            theme: super::theme::MUTED,
+            appearance,
+            theme: Theme::for_appearance(appearance),
             stream_handle: None,
             subscribed_symbols: Vec::new(),
         }
@@ -270,6 +277,10 @@ impl App {
             }
             AppEvent::StreamStarted(handle) => {
                 self.stream_handle = Some(handle);
+            }
+            AppEvent::ThemeChanged(appearance) => {
+                self.appearance = appearance;
+                self.theme = Theme::for_appearance(appearance);
             }
         }
     }
@@ -565,6 +576,30 @@ impl App {
         }
     }
 
+    /// Spawns a background task that polls the macOS system appearance every two
+    /// seconds and sends [`AppEvent::ThemeChanged`] whenever it flips. The
+    /// blocking `defaults` call runs off the render loop.
+    pub fn spawn_theme_watcher(&self) {
+        let tx = self.event_tx.clone();
+        // Seed from the appearance already detected in `App::new` so startup
+        // performs a single `defaults` read and there is no window where the
+        // watcher's baseline disagrees with the rendered theme.
+        let mut last = self.appearance;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                ticker.tick().await;
+                let current = poll_appearance().await;
+                if current != last {
+                    last = current;
+                    if tx.send(AppEvent::ThemeChanged(current)).is_err() {
+                        break; // event loop is gone
+                    }
+                }
+            }
+        });
+    }
+
     /// Spawns a task to re-fetch the current page with the active sort applied,
     /// then sends a [`AppEvent::PageLoaded`] back when done.
     pub fn spawn_reload(&self) {
@@ -632,6 +667,19 @@ impl App {
         }
         self.subscribed_symbols = tickers.clone();
         self.spawn_stream(tickers);
+    }
+}
+
+/// Async counterpart to `theme::detect_appearance`, used by the watcher task so
+/// the `defaults` subprocess never blocks the render loop.
+async fn poll_appearance() -> Appearance {
+    match tokio::process::Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+        .await
+    {
+        Ok(output) => super::theme::parse_appearance(&String::from_utf8_lossy(&output.stdout)),
+        Err(_) => Appearance::Dark,
     }
 }
 
