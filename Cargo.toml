@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["full"] }
-yfinance-rs = "0.9.0"
+yfinance-rs = { version = "0.9.0", features = ["stream"] }
 sqlx = { version = "0.9.0", features = [
   "runtime-tokio",
   "postgres",
