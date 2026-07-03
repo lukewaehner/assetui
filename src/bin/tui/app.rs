@@ -15,17 +15,17 @@ use ratatui_notifications::{
     Anchor, Animation, AutoDismiss, Level, Notification, Notifications, SlideDirection,
 };
 use tokio::sync::mpsc;
-use yfinance::models::QuoteTick;
-use yfinance::stream::start_quote_stream;
 
 use super::theme::{Appearance, Theme};
-use yfinance::fetch::fetch_chart_data;
 use yfinance::{
-    fetch::{fetch_analysis, fetch_quote_and_store, fetch_sorted},
-    models::{QuoteRecord, QuoteRecordAnalysis},
+    models::{QuoteRecord, QuoteRecordAnalysis, QuoteTick},
     sort::{SortMode, SortOrder},
 };
 use yfinance_rs::{Candle, StreamHandle};
+
+/// Async task spawners (`spawn_*`, `resubscribe_stream`) live in a submodule to
+/// keep this file focused on synchronous state, input, and event handling.
+mod tasks;
 
 /// Maximum number of rows fetched from the database per reload.
 const PAGE_FETCH_LIMIT: i64 = 200;
@@ -189,6 +189,8 @@ fn sort_mode_for_key(key: char) -> Option<SortMode> {
 }
 
 impl App {
+    // ---- Construction & lifecycle ----
+
     /// Creates a new `App` with sensible defaults.  The table starts sorted by
     /// `id DESC` to show the most recently stored quotes first.
     pub fn new(pool: sqlx::PgPool, event_tx: mpsc::UnboundedSender<AppEvent>) -> Self {
@@ -238,6 +240,8 @@ impl App {
         }
         self.notifications.tick(elapsed);
     }
+
+    // ---- Event handling ----
 
     /// Applies an [`AppEvent`] to the application state.
     pub fn handle_event(&mut self, event: AppEvent) {
@@ -302,6 +306,8 @@ impl App {
             let _ = self.notifications.add(notif);
         }
     }
+
+    // ---- Input & key handling ----
 
     /// Routes a raw terminal key press to the appropriate state change.
     ///
@@ -373,58 +379,7 @@ impl App {
         }
     }
 
-    /// Spawns a task to fetch and store a quote for `symbol`, reporting
-    /// progress and the result back as [`AppEvent`]s.
-    fn spawn_fetch(&self, symbol: String) {
-        let tx = self.event_tx.clone();
-        let pool = self.pool.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(AppEvent::FetchSpawned(symbol.clone()));
-            match fetch_quote_and_store(&pool, &symbol).await {
-                Ok(Some(record)) => {
-                    let _ = tx.send(AppEvent::FetchCompleted(record));
-                }
-                Ok(None) => {
-                    let _ = tx.send(AppEvent::LogLine(format!("no quote found for {symbol}")));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("{symbol}: {e}")));
-                }
-            }
-        });
-    }
-
-    /// Spawns a task to start a live quote stream for symbols
-    /// sends incoming ticks back as [`AppEvent::QuoteTick`]s, and logs the stream lifecycle.
-    fn spawn_stream(&self, symbols: Vec<String>) {
-        let tx = self.event_tx.clone();
-        let count = symbols.len();
-        tokio::spawn(async move {
-            match start_quote_stream(symbols).await {
-                Ok(Some((handle, mut receiver))) => {
-                    let _ = tx.send(AppEvent::StreamStarted(handle));
-                    let _ = tx.send(AppEvent::LogLine(format!(
-                        "[STREAM] connected: {count} tickers"
-                    )));
-                    while let Some(update) = receiver.recv().await {
-                        if tx
-                            .send(AppEvent::QuoteTick(QuoteTick::from(update)))
-                            .is_err()
-                        {
-                            break; // Event loop is gone
-                        };
-                    }
-                    let _ = tx.send(AppEvent::LogLine("quote stream ended".to_string()));
-                }
-                Ok(None) => {
-                    let _ = tx.send(AppEvent::LogLine("no symbols to stream".to_string()));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("stream error: {e}")));
-                }
-            }
-        });
-    }
+    // ---- Navigation, sort & selection ----
 
     /// Sets the sort column and re-fetches the table.
     fn set_sort_mode(&mut self, mode: SortMode) {
@@ -484,6 +439,50 @@ impl App {
         self.db_display.table_state.select(Some(i));
     }
 
+    /// Updates `page_size` to `size` and shifts the visible page so the
+    /// globally-selected row stays on screen.  Called every frame from the
+    /// draw function so that terminal resizes are reflected immediately.
+    pub fn set_page_size(&mut self, size: usize) {
+        let size = size.max(1);
+        if self.db_display.page_size == size {
+            return;
+        }
+        // Remember which global row index is currently selected so we can
+        // keep it visible after the page boundaries shift.
+        let global_idx = self
+            .db_display
+            .table_state
+            .selected()
+            .map(|i| self.db_display.page * self.db_display.page_size + i);
+
+        self.db_display.page_size = size;
+
+        // Jump to the page that contains the previously-selected row.
+        let target_page = global_idx.map(|gi| gi / size).unwrap_or(0);
+        self.db_display.page = target_page.min(self.db_display.total_pages().saturating_sub(1));
+
+        // Restore the local selection inside the new window.
+        let win_len = self.db_display.window_len();
+        if win_len == 0 {
+            self.db_display.table_state.select(None);
+        } else {
+            let local = global_idx.map(|gi| gi % size).unwrap_or(0).min(win_len - 1);
+            self.db_display.table_state.select(Some(local));
+        }
+        self.resubscribe_stream();
+    }
+
+    /// Selects row 0 in the current window, or clears selection if empty.
+    fn reset_selection(&mut self) {
+        if self.db_display.window_len() == 0 {
+            self.db_display.table_state.select(None);
+        } else {
+            self.db_display.table_state.select(Some(0));
+        }
+    }
+
+    // ---- Modals ----
+
     /// Opens the stock-detail modal for the selected row and starts fetching
     /// its analyst data in the background.
     fn open_info_modal(&mut self) {
@@ -532,154 +531,6 @@ impl App {
         if let Some(t) = ticker.as_deref() {
             self.spawn_chart_data(t);
         }
-    }
-
-    /// Updates `page_size` to `size` and shifts the visible page so the
-    /// globally-selected row stays on screen.  Called every frame from the
-    /// draw function so that terminal resizes are reflected immediately.
-    pub fn set_page_size(&mut self, size: usize) {
-        let size = size.max(1);
-        if self.db_display.page_size == size {
-            return;
-        }
-        // Remember which global row index is currently selected so we can
-        // keep it visible after the page boundaries shift.
-        let global_idx = self
-            .db_display
-            .table_state
-            .selected()
-            .map(|i| self.db_display.page * self.db_display.page_size + i);
-
-        self.db_display.page_size = size;
-
-        // Jump to the page that contains the previously-selected row.
-        let target_page = global_idx.map(|gi| gi / size).unwrap_or(0);
-        self.db_display.page = target_page.min(self.db_display.total_pages().saturating_sub(1));
-
-        // Restore the local selection inside the new window.
-        let win_len = self.db_display.window_len();
-        if win_len == 0 {
-            self.db_display.table_state.select(None);
-        } else {
-            let local = global_idx.map(|gi| gi % size).unwrap_or(0).min(win_len - 1);
-            self.db_display.table_state.select(Some(local));
-        }
-        self.resubscribe_stream();
-    }
-
-    /// Selects row 0 in the current window, or clears selection if empty.
-    fn reset_selection(&mut self) {
-        if self.db_display.window_len() == 0 {
-            self.db_display.table_state.select(None);
-        } else {
-            self.db_display.table_state.select(Some(0));
-        }
-    }
-
-    /// Spawns a background task that polls the macOS system appearance every two
-    /// seconds and sends [`AppEvent::ThemeChanged`] whenever it flips. The
-    /// blocking `defaults` call runs off the render loop.
-    pub fn spawn_theme_watcher(&self) {
-        let tx = self.event_tx.clone();
-        // Seed from the appearance already detected in `App::new` so startup
-        // performs a single `defaults` read and there is no window where the
-        // watcher's baseline disagrees with the rendered theme.
-        let mut last = self.appearance;
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(2));
-            loop {
-                ticker.tick().await;
-                let current = poll_appearance().await;
-                if current != last {
-                    last = current;
-                    if tx.send(AppEvent::ThemeChanged(current)).is_err() {
-                        break; // event loop is gone
-                    }
-                }
-            }
-        });
-    }
-
-    /// Spawns a task to re-fetch the current page with the active sort applied,
-    /// then sends a [`AppEvent::PageLoaded`] back when done.
-    pub fn spawn_reload(&self) {
-        let pool = self.pool.clone();
-        let tx = self.event_tx.clone();
-        let mode = self.db_display.sort_mode;
-        let order = self.db_display.sort_order;
-        tokio::spawn(async move {
-            match fetch_sorted(&pool, mode, order, PAGE_FETCH_LIMIT).await {
-                Ok(rows) => {
-                    let _ = tx.send(AppEvent::PageLoaded(rows));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("Failed to fetch quotes: {e}")));
-                }
-            }
-        });
-    }
-
-    /// Spawns a background task to fetch analyst data for `symbol` and sends
-    /// the result back as [`AppEvent::StockAnalysisReady`].
-    fn spawn_analysis(&self, symbol: &str) {
-        let tx = self.event_tx.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_analysis(&symbol).await {
-                Ok(a) => {
-                    let _ = tx.send(AppEvent::StockAnalysisReady(a));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
-                }
-            }
-        });
-    }
-
-    fn spawn_chart_data(&self, symbol: &str) {
-        let tx = self.event_tx.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_chart_data(&symbol).await {
-                Ok(a) => {
-                    let _ = tx.send(AppEvent::ChartDataReady(a));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
-                }
-            }
-        });
-    }
-
-    /// Restarts the quote stream when the visible tickers differ from the
-    /// currently-subscribed set, aborting the previous stream first. The
-    /// symbol-set equality check makes this a no-op when nothing changed, so it
-    /// is safe to call from every window-change site.
-    ///
-    // TODO(STREAM): debounce if pagination thrash causes reconnect spam.
-    fn resubscribe_stream(&mut self) {
-        let tickers = self.db_display.window_tickers();
-        if self.subscribed_symbols == tickers {
-            return;
-        }
-        if let Some(handle) = self.stream_handle.take() {
-            handle.abort();
-        }
-        self.subscribed_symbols = tickers.clone();
-        self.spawn_stream(tickers);
-    }
-}
-
-/// Async counterpart to `theme::detect_appearance`, used by the watcher task so
-/// the `defaults` subprocess never blocks the render loop.
-async fn poll_appearance() -> Appearance {
-    match tokio::process::Command::new("defaults")
-        .args(["read", "-g", "AppleInterfaceStyle"])
-        .output()
-        .await
-    {
-        Ok(output) => super::theme::parse_appearance(&String::from_utf8_lossy(&output.stdout)),
-        Err(_) => Appearance::Dark,
     }
 }
 

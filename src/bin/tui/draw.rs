@@ -27,6 +27,8 @@ use yfinance::models::{QuoteRecord, QuoteRecordAnalysis};
 use super::app::App;
 use super::theme::Theme;
 
+// ===== Entry point =====
+
 /// Renders the full TUI frame: input box, log panel, quotes table, status
 /// bar, and optionally the stock-detail modal.
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -68,6 +70,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     app.notifications.render(f, area);
 }
+
+// ===== Left column: input & log panel =====
 
 /// Builds a ` app · section ` block title in the bold accent colour.
 fn block_title(text: String, t: &Theme) -> Line<'static> {
@@ -119,9 +123,29 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+// ===== Quotes table =====
+
 /// Builds a table cell from an optional value, showing `-` when absent.
 fn opt_cell<T>(value: Option<T>, fmt: impl Fn(T) -> String) -> Cell<'static> {
     Cell::from(value.map(fmt).unwrap_or_else(|| "-".to_string()))
+}
+
+/// Up-colour when the price is above the previous close, down-colour when
+/// below, neutral when effectively unchanged. Shared by the table rows and the
+/// stock-detail modal.
+fn price_change_color(stock: &QuoteRecord, t: &Theme) -> Color {
+    let price = stock.price.unwrap_or_default();
+    let prev = stock.previous_close.unwrap_or_default();
+    let diff = price - prev;
+    // Use an epsilon band so rounding to display precision doesn't trigger a
+    // false green/red when price and prev are effectively equal.
+    if diff > 0.001 {
+        t.up
+    } else if diff < -0.001 {
+        t.down
+    } else {
+        t.neutral
+    }
 }
 
 /// Renders the sortable quotes table into `area`.
@@ -208,6 +232,8 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     f.render_stateful_widget(table, area, &mut app.db_display.table_state);
 }
 
+// ===== Status bar =====
+
 /// Renders the one-line status bar: a bold mode chip on the left,
 /// context-sensitive key hints in the middle, and table stats on the right.
 fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
@@ -266,6 +292,8 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+// ===== Modal helpers =====
+
 /// Computes a centred [`Rect`] that occupies `percent_x`% of the width and
 /// `percent_y`% of the height of `r`.
 ///
@@ -321,6 +349,8 @@ fn money_opt(value: Option<f64>) -> String {
         .map(|p| format!("${p:.2}"))
         .unwrap_or_else(|| "-".into())
 }
+
+// ===== Stock detail modal =====
 
 /// Renders the stock-detail overlay modal at 65 × 55% of the terminal area.
 ///
@@ -533,6 +563,8 @@ fn rating_color(rating: &str, t: &Theme) -> Color {
     }
 }
 
+// ===== Chart modal =====
+
 fn draw_chart_modal(f: &mut Frame, app: &mut App) {
     let t = app.theme;
     let area = centered_rect(65, 55, f.area());
@@ -664,21 +696,4 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
         .y_axis(y_axis)
         .legend_position(Some(LegendPosition::TopLeft));
     f.render_widget(chart, area);
-}
-
-/// Up-colour when the price is above the previous close, down-colour when
-/// below, neutral when effectively unchanged.
-fn price_change_color(stock: &QuoteRecord, t: &Theme) -> Color {
-    let price = stock.price.unwrap_or_default();
-    let prev = stock.previous_close.unwrap_or_default();
-    let diff = price - prev;
-    // Use an epsilon band so rounding to display precision doesn't trigger a
-    // false green/red when price and prev are effectively equal.
-    if diff > 0.001 {
-        t.up
-    } else if diff < -0.001 {
-        t.down
-    } else {
-        t.neutral
-    }
 }
