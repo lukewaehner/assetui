@@ -81,6 +81,9 @@ where
         }
 
         if app.should_quit {
+            if let Some(handle) = app.stream_handle.take() {
+                handle.stop().await;
+            }
             return Ok(());
         }
     }

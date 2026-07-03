@@ -16,6 +16,7 @@ use ratatui_notifications::{
 };
 use tokio::sync::mpsc;
 use yfinance::models::QuoteTick;
+use yfinance::stream::start_quote_stream;
 
 use super::theme::Theme;
 use yfinance::fetch::fetch_chart_data;
@@ -24,7 +25,7 @@ use yfinance::{
     models::{QuoteRecord, QuoteRecordAnalysis},
     sort::{SortMode, SortOrder},
 };
-use yfinance_rs::Candle;
+use yfinance_rs::{Candle, StreamHandle};
 
 /// Maximum number of rows fetched from the database per reload.
 const PAGE_FETCH_LIMIT: i64 = 200;
@@ -48,6 +49,8 @@ pub enum AppEvent {
     LogLine(String),
     /// A quote update is returned from the stream.
     QuoteTick(QuoteTick),
+    /// A stream was started for the current window of tickers
+    StreamStarted(StreamHandle),
     /// Error message; also shown in the status bar.
     Error(String),
 }
@@ -77,6 +80,10 @@ pub struct App {
     pub notifications: Notifications,
     /// Colour palette used by every draw call.
     pub theme: Theme,
+    /// Handler for the live quotes stream
+    pub stream_handle: Option<StreamHandle>,
+    /// Subscribed symbols - starts as an empty vec, fills when subscribed
+    pub subscribed_symbols: Vec<String>,
 }
 
 /// State for the ticker input box.
@@ -131,6 +138,20 @@ impl DbDisplay {
     /// Returns the number of rows visible on the current page.
     pub fn window_len(&self) -> usize {
         self.window_range().len()
+    }
+
+    /// Returns a vector of ticker symbols for the visible rows in a window
+    pub fn window_tickers(&self) -> Vec<String> {
+        let mut syms: Vec<String> = self
+            .window()
+            .iter()
+            .filter_map(|r| r.ticker.as_deref())
+            .map(str::to_ascii_uppercase)
+            .collect();
+        // Normalize
+        syms.sort();
+        syms.dedup();
+        syms
     }
 }
 
@@ -195,6 +216,8 @@ impl App {
             },
             notifications: Notifications::new(),
             theme: super::theme::MUTED,
+            stream_handle: None,
+            subscribed_symbols: Vec::new(),
         }
     }
 
@@ -217,6 +240,7 @@ impl App {
                 self.db_display.rows = rows;
                 self.db_display.page = 0;
                 self.reset_selection();
+                self.resubscribe_stream();
             }
             AppEvent::FetchSpawned(symbol) => {
                 self.db_display.status = format!("fetching {symbol}…");
@@ -242,7 +266,10 @@ impl App {
             AppEvent::QuoteTick(tick) => {
                 let range = self.db_display.window_range();
                 tick.apply(&mut self.db_display.rows[range]);
-                self.logs.push(format!("[TICK]"));
+                self.logs.push("[TICK]".into());
+            }
+            AppEvent::StreamStarted(handle) => {
+                self.stream_handle = Some(handle);
             }
         }
     }
@@ -356,6 +383,38 @@ impl App {
         });
     }
 
+    /// Spawns a task to start a live quote stream for symbols
+    /// sends incoming ticks back as [`AppEvent::QuoteTick`]s, and logs the stream lifecycle.
+    fn spawn_stream(&self, symbols: Vec<String>) {
+        let tx = self.event_tx.clone();
+        let count = symbols.len();
+        tokio::spawn(async move {
+            match start_quote_stream(symbols).await {
+                Ok(Some((handle, mut receiver))) => {
+                    let _ = tx.send(AppEvent::StreamStarted(handle));
+                    let _ = tx.send(AppEvent::LogLine(format!(
+                        "[STREAM] connected: {count} tickers"
+                    )));
+                    while let Some(update) = receiver.recv().await {
+                        if tx
+                            .send(AppEvent::QuoteTick(QuoteTick::from(update)))
+                            .is_err()
+                        {
+                            break; // Event loop is gone
+                        };
+                    }
+                    let _ = tx.send(AppEvent::LogLine("quote stream ended".to_string()));
+                }
+                Ok(None) => {
+                    let _ = tx.send(AppEvent::LogLine("no symbols to stream".to_string()));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("stream error: {e}")));
+                }
+            }
+        });
+    }
+
     /// Sets the sort column and re-fetches the table.
     fn set_sort_mode(&mut self, mode: SortMode) {
         self.logs.push(format!("[SORT] mode → {mode:?}"));
@@ -387,6 +446,7 @@ impl App {
             self.db_display.page = new_page;
             self.reset_selection();
         }
+        self.resubscribe_stream();
     }
 
     /// Moves the table selection by `delta`, wrapping at the ends of the
@@ -493,6 +553,7 @@ impl App {
             let local = global_idx.map(|gi| gi % size).unwrap_or(0).min(win_len - 1);
             self.db_display.table_state.select(Some(local));
         }
+        self.resubscribe_stream();
     }
 
     /// Selects row 0 in the current window, or clears selection if empty.
@@ -553,6 +614,24 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Restarts the quote stream when the visible tickers differ from the
+    /// currently-subscribed set, aborting the previous stream first. The
+    /// symbol-set equality check makes this a no-op when nothing changed, so it
+    /// is safe to call from every window-change site.
+    ///
+    // TODO(STREAM): debounce if pagination thrash causes reconnect spam.
+    fn resubscribe_stream(&mut self) {
+        let tickers = self.db_display.window_tickers();
+        if self.subscribed_symbols == tickers {
+            return;
+        }
+        if let Some(handle) = self.stream_handle.take() {
+            handle.abort();
+        }
+        self.subscribed_symbols = tickers.clone();
+        self.spawn_stream(tickers);
     }
 }
 
