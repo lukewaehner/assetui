@@ -16,23 +16,33 @@ use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 use yfinance::models::{QuoteRecord, QuoteRecordAnalysis};
 
 use super::app::App;
+use super::theme::Theme;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let t = app.theme;
+
+    f.render_widget(
+        Block::default().style(Style::default().bg(t.bg).fg(t.fg)),
+        f.area(),
+    );
+
+    let [body, status_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
     let [left, right] =
-        Layout::horizontal([Constraint::Percentage(20), Constraint::Percentage(80)])
-            .areas(f.area());
+        Layout::horizontal([Constraint::Percentage(20), Constraint::Percentage(80)]).areas(body);
     let [input_area, log_area] =
         Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(left);
 
     let (input_border, db_border) = if app.input_mode.toggled {
-        (Color::Cyan, Color::DarkGray)
+        (t.accent, t.border)
     } else {
-        (Color::DarkGray, Color::Cyan)
+        (t.border, t.accent)
     };
 
     draw_input(f, input_area, app, input_border);
     draw_logs(f, log_area, app);
     draw_quotes_table(f, right, app, db_border);
+    draw_status_bar(f, status_area, app);
 
     if app.stock_modal.info_visible {
         draw_stock_modal(f, app);
@@ -46,35 +56,47 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.notifications.render(f, area);
 }
 
+/// Builds a ` app · section ` block title in the bold accent colour.
+fn block_title(text: String, t: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(" {text} "),
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    ))
+}
+
 /// Renders the ticker input box with a blinking cursor while focused.
 fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
+    let t = app.theme;
     let cursor = if app.input_mode.toggled && app.blink_state {
         "▌"
     } else {
         " "
     };
-    let input_display = format!("{}{}", app.input_mode.input, cursor);
     let input_block = Block::default()
-        .title("Query")
+        .title(block_title("yfinance · query".into(), &t))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-    f.render_widget(
-        Paragraph::new(input_display.as_str()).block(input_block),
-        area,
-    );
+        .border_style(Style::default().fg(border_color).bg(t.panel))
+        .style(Style::default().bg(t.panel));
+    let input_line = Line::from(vec![
+        Span::styled(app.input_mode.input.clone(), Style::default().fg(t.fg)),
+        Span::styled(cursor, Style::default().fg(t.accent)),
+    ]);
+    f.render_widget(Paragraph::new(input_line).block(input_block), area);
 }
 
 /// Renders the log panel, keeping the most recent lines visible.
 fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
     let log_block = Block::default()
-        .title("Logs")
+        .title(block_title("yfinance · logs".into(), &t))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(t.border).bg(t.panel))
+        .style(Style::default().bg(t.panel));
     let visible = area.height.saturating_sub(2) as usize;
     let start = app.logs.len().saturating_sub(visible);
     let log_lines: Vec<Line> = app.logs[start..]
         .iter()
-        .map(|s| Line::raw(s.as_str()))
+        .map(|s| Line::styled(s.as_str(), Style::default().fg(t.dim)))
         .collect();
     f.render_widget(Paragraph::new(log_lines).block(log_block), area);
 }
@@ -85,24 +107,18 @@ fn opt_cell<T>(value: Option<T>, fmt: impl Fn(T) -> String) -> Cell<'static> {
 }
 
 fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Color) {
+    let t = app.theme;
     let page_size = area.height.saturating_sub(4).max(1) as usize;
     app.set_page_size(page_size);
 
-    let box_bg = Color::DarkGray;
-    let label_sty = Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD);
-    let key_sty = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let cell_sty = Style::default().bg(box_bg);
+    let label_sty = Style::default().fg(t.fg).add_modifier(Modifier::BOLD);
+    let key_sty = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
 
     let hcell = |label: &'static str, key: &'static str| -> Cell<'static> {
         Cell::from(Line::from(vec![
             Span::styled(label, label_sty),
             Span::styled(key, key_sty),
         ]))
-        .style(cell_sty)
     };
 
     let header = Row::new(vec![
@@ -122,7 +138,8 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             opt_cell(q.id, |id| id.to_string()),
             Cell::from(q.ticker.as_deref().unwrap_or("-")),
             Cell::from(q.name.as_deref().unwrap_or("-")),
-            opt_cell(q.price, |p| format!("{p:.2}")),
+            opt_cell(q.price, |p| format!("{p:.2}"))
+                .style(Style::default().fg(price_change_color(q, &t))),
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
             opt_cell(q.day_volume, |v| format!("{v:.0}")),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
@@ -139,29 +156,88 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         Constraint::Length(12),
     ];
 
-    let total_pages = app.db_display.total_pages();
-    let page = app.db_display.page + 1;
-    let title = if app.db_display.status.is_empty() {
-        format!("Quotes [{page}/{total_pages}]  h/l to paginate")
-    } else {
-        format!("Quotes [{page}/{total_pages}] — {}", app.db_display.status)
-    };
+    let mut title = vec![Span::styled(
+        " yfinance · quotes ",
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    )];
+    if !app.db_display.status.is_empty() {
+        title.push(Span::styled(
+            format!("{} ", app.db_display.status),
+            Style::default().fg(t.dim),
+        ));
+    }
+
     let table = Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
-                .title(title)
+                .title(Line::from(title))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color)),
         )
-        .row_highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(">> ");
+        .row_highlight_style(Style::default().bg(t.cursor).add_modifier(Modifier::BOLD))
+        .highlight_symbol(Span::styled(
+            "▸ ",
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ));
 
     f.render_stateful_widget(table, area, &mut app.db_display.table_state);
+}
+
+fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    f.render_widget(
+        Block::default().style(Style::default().bg(t.statusbar)),
+        area,
+    );
+
+    let (mode, hint) = if app.stock_modal.info_visible || app.stock_modal.chart_visible {
+        ("VIEW", "esc close")
+    } else if app.input_mode.toggled {
+        ("INPUT", "type ticker · enter fetch · esc done")
+    } else {
+        (
+            "NORMAL",
+            "j/k move · h/l page · i query · ? info · enter chart · o order · q quit",
+        )
+    };
+
+    let chip = format!(" {mode} ");
+    let page = app.db_display.page + 1;
+    let total_pages = app.db_display.total_pages();
+    let right = format!(
+        "{} quotes · page {page}/{total_pages} ",
+        app.db_display.rows.len()
+    );
+
+    let [chip_area, hint_area, right_area] = Layout::horizontal([
+        Constraint::Length(chip.len() as u16),
+        Constraint::Min(0),
+        Constraint::Length(right.len() as u16),
+    ])
+    .areas(area);
+
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            chip,
+            Style::default()
+                .fg(t.mode_fg)
+                .bg(t.mode_bg)
+                .add_modifier(Modifier::BOLD),
+        )),
+        chip_area,
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {hint}"),
+            Style::default().fg(t.status_fg),
+        )),
+        hint_area,
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled(right, Style::default().fg(t.dim))),
+        right_area,
+    );
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -180,17 +256,31 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     mid
 }
 
-/// A dark-gray label span for `Label: value` pairs.
-fn label(text: &'static str) -> Span<'static> {
-    Span::styled(text, Style::default().fg(Color::DarkGray))
+/// Builds a modal block: panel background, themed border, and a bold accent ` title `.
+fn modal_block(title: String, t: &Theme) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.border).bg(t.panel))
+        .title(block_title(title, t))
+        .style(Style::default().bg(t.panel))
 }
 
-/// A bold underlined section heading.
-fn heading(text: &'static str) -> Paragraph<'static> {
+/// A dimmed label span for `Label: value` pairs.
+fn label(text: &'static str, t: &Theme) -> Span<'static> {
+    Span::styled(text, Style::default().fg(t.dim))
+}
+
+/// A bold accent section heading.
+fn heading(text: &'static str, t: &Theme) -> Paragraph<'static> {
     Paragraph::new(Span::styled(
         text,
-        Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
     ))
+}
+
+/// A dimmed "Loading…"-style placeholder paragraph.
+fn placeholder(text: &'static str, t: &Theme) -> Paragraph<'static> {
+    Paragraph::new(Span::styled(text, Style::default().fg(t.dim)))
 }
 
 /// Formats an optional dollar amount, showing `-` when absent.
@@ -202,11 +292,14 @@ fn money_opt(value: Option<f64>) -> String {
 
 /// Renders the stock-detail overlay modal at 65 × 55% of the terminal area.
 fn draw_stock_modal(f: &mut Frame, app: &mut App) {
+    let t = app.theme;
     let area = centered_rect(65, 55, f.area());
     f.render_widget(Clear, area);
-    let modal = Block::bordered()
-        .title("Stock Info")
-        .style(Style::default());
+    let stock = &app.stock_modal.stock;
+    let modal = modal_block(
+        format!("{} · info", stock.ticker.as_deref().unwrap_or("-")),
+        &t,
+    );
 
     let inner = modal.inner(area);
     f.render_widget(modal, area);
@@ -219,34 +312,33 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
     ])
     .areas(inner);
 
-    let stock = &app.stock_modal.stock;
-
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                stock.ticker.as_deref().unwrap_or("-"),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                stock.ticker.as_deref().unwrap_or("-").to_string(),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
             ),
-            Span::raw("  -  "),
-            Span::raw(stock.name.as_deref().unwrap_or("-")),
+            Span::styled("  ·  ", Style::default().fg(t.dim)),
+            Span::styled(
+                stock.name.as_deref().unwrap_or("-").to_string(),
+                Style::default().fg(t.fg),
+            ),
         ])),
         title_area,
     );
 
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            label("Price: "),
+            label("Price: ", &t),
             Span::styled(
                 money_opt(stock.price),
-                Style::default().fg(price_change_color(stock)),
+                Style::default().fg(price_change_color(stock, &t)),
             ),
             Span::raw("    "),
-            label("Prev Close: "),
+            label("Prev Close: ", &t),
             Span::styled(
                 money_opt(stock.previous_close),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(t.neutral),
             ),
         ])),
         price_area,
@@ -254,14 +346,14 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
 
     match &app.stock_modal.analysis {
         None => {
-            f.render_widget(Paragraph::new("  Loading analysis..."), analysis_area);
+            f.render_widget(placeholder("Loading analysis...", &t), analysis_area);
         }
-        Some(analysis) => draw_analysis(f, analysis_area, analysis),
+        Some(analysis) => draw_analysis(f, analysis_area, analysis, &t),
     }
 }
 
 /// Renders the analyst consensus and price-target sections of the modal.
-fn draw_analysis(f: &mut Frame, area: Rect, analysis: &QuoteRecordAnalysis) {
+fn draw_analysis(f: &mut Frame, area: Rect, analysis: &QuoteRecordAnalysis, t: &Theme) {
     let [
         consensus_heading,
         consensus_line,
@@ -283,19 +375,25 @@ fn draw_analysis(f: &mut Frame, area: Rect, analysis: &QuoteRecordAnalysis) {
     ])
     .areas(area);
 
-    f.render_widget(heading("Analyst Consensus"), consensus_heading);
+    f.render_widget(heading("Analyst Consensus", t), consensus_heading);
     if let Some(rec) = &analysis.recommendation_summary {
-        draw_consensus(f, consensus_line, breakdown, rec);
+        draw_consensus(f, consensus_line, breakdown, rec, t);
     }
 
-    f.render_widget(heading("Price Target"), target_heading);
+    f.render_widget(heading("Price Target", t), target_heading);
     if let Some(pt) = &analysis.price_target {
-        draw_price_target(f, target_line, pt);
+        draw_price_target(f, target_line, pt, t);
     }
 }
 
 /// Renders the consensus rating line and the buy/sell breakdown table.
-fn draw_consensus(f: &mut Frame, line_area: Rect, table_area: Rect, rec: &RecommendationSummary) {
+fn draw_consensus(
+    f: &mut Frame,
+    line_area: Rect,
+    table_area: Rect,
+    rec: &RecommendationSummary,
+    t: &Theme,
+) {
     let period_str = rec
         .latest_period
         .as_ref()
@@ -309,20 +407,17 @@ fn draw_consensus(f: &mut Frame, line_area: Rect, table_area: Rect, rec: &Recomm
 
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            label("Period: "),
+            label("Period: ", t),
             Span::raw(period_str),
             Span::raw("    "),
-            label("Consensus: "),
+            label("Consensus: ", t),
             Span::styled(
                 rating,
                 Style::default()
-                    .fg(rating_color(rating))
+                    .fg(rating_color(rating, t))
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("  ({mean_str})"),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(format!("  ({mean_str})"), Style::default().fg(t.dim)),
         ])),
         line_area,
     );
@@ -334,15 +429,15 @@ fn draw_consensus(f: &mut Frame, line_area: Rect, table_area: Rect, rec: &Recomm
                 Row::new([
                     Cell::from("Str Buy").style(
                         Style::default()
-                            .fg(Color::LightGreen)
+                            .fg(t.up_strong)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Cell::from("Buy").style(Style::default().fg(Color::Green)),
-                    Cell::from("Hold").style(Style::default().fg(Color::Yellow)),
-                    Cell::from("Sell").style(Style::default().fg(Color::Red)),
+                    Cell::from("Buy").style(Style::default().fg(t.up)),
+                    Cell::from("Hold").style(Style::default().fg(t.neutral)),
+                    Cell::from("Sell").style(Style::default().fg(t.down)),
                     Cell::from("Str Sell").style(
                         Style::default()
-                            .fg(Color::LightRed)
+                            .fg(t.down_strong)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
@@ -361,7 +456,7 @@ fn draw_consensus(f: &mut Frame, line_area: Rect, table_area: Rect, rec: &Recomm
 }
 
 /// Renders the mean/low/high price targets and the analyst count.
-fn draw_price_target(f: &mut Frame, area: Rect, pt: &PriceTarget) {
+fn draw_price_target(f: &mut Frame, area: Rect, pt: &PriceTarget, t: &Theme) {
     let money = |m: &Option<Price>| {
         m.as_ref()
             .map(|p| format!("${:.2}", p.amount()))
@@ -370,16 +465,16 @@ fn draw_price_target(f: &mut Frame, area: Rect, pt: &PriceTarget) {
 
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            label("Mean: "),
-            Span::styled(money(&pt.mean), Style::default().fg(Color::Yellow)),
+            label("Mean: ", t),
+            Span::styled(money(&pt.mean), Style::default().fg(t.neutral)),
             Span::raw("    "),
-            label("Low: "),
-            Span::styled(money(&pt.low), Style::default().fg(Color::Red)),
+            label("Low: ", t),
+            Span::styled(money(&pt.low), Style::default().fg(t.down)),
             Span::raw("    "),
-            label("High: "),
-            Span::styled(money(&pt.high), Style::default().fg(Color::Green)),
+            label("High: ", t),
+            Span::styled(money(&pt.high), Style::default().fg(t.up)),
             Span::raw("    "),
-            label("Analysts: "),
+            label("Analysts: ", t),
             Span::raw(
                 pt.number_of_analysts
                     .map(|n| n.to_string())
@@ -391,41 +486,47 @@ fn draw_price_target(f: &mut Frame, area: Rect, pt: &PriceTarget) {
 }
 
 /// Maps an analyst rating string to its display colour.
-fn rating_color(rating: &str) -> Color {
+fn rating_color(rating: &str, t: &Theme) -> Color {
     match rating.to_lowercase().as_str() {
-        "strong buy" => Color::LightGreen,
-        "buy" => Color::Green,
-        "hold" => Color::Yellow,
-        "sell" => Color::Red,
-        "strong sell" => Color::LightRed,
-        _ => Color::White,
+        "strong buy" => t.up_strong,
+        "buy" => t.up,
+        "hold" => t.neutral,
+        "sell" => t.down,
+        "strong sell" => t.down_strong,
+        _ => t.fg,
     }
 }
 
 fn draw_chart_modal(f: &mut Frame, app: &mut App) {
+    let t = app.theme;
     let area = centered_rect(65, 55, f.area());
     f.render_widget(Clear, area);
     let stock = &app.stock_modal.stock;
-    let modal = Block::bordered()
-        .title(format!("YTD - {}", stock.ticker.as_deref().unwrap_or("")))
-        .style(Style::default());
+    let modal = modal_block(
+        format!("{} · ytd", stock.ticker.as_deref().unwrap_or("-")),
+        &t,
+    );
 
     let inner = modal.inner(area);
     f.render_widget(modal, area);
 
     match &app.stock_modal.chart_data {
         None => {
-            f.render_widget(Paragraph::new("  Loading data..."), inner);
+            f.render_widget(placeholder("Loading data...", &t), inner);
         }
-        Some(candles) => {
-            draw_stock_chart(f, inner, candles, stock.ticker.as_deref().unwrap_or("-"))
-        }
+        Some(candles) => draw_stock_chart(
+            f,
+            inner,
+            candles,
+            stock.ticker.as_deref().unwrap_or("-"),
+            &t,
+        ),
     }
 }
 
-fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str) {
+fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str, t: &Theme) {
     if candles.is_empty() {
-        f.render_widget(Paragraph::new("  No chart data."), area);
+        f.render_widget(placeholder("No chart data.", t), area);
         return;
     }
 
@@ -444,7 +545,7 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str)
         0.0
     };
     let trend_up = change >= 0.0;
-    let trend_color = if trend_up { Color::Green } else { Color::Red };
+    let trend_color = if trend_up { t.up } else { t.down };
     let sign = if trend_up { "+" } else { "" };
 
     let mut up_pts: Vec<(f64, f64)> = Vec::new();
@@ -468,19 +569,17 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str)
     let up_dots = Dataset::default()
         .marker(Marker::Braille)
         .graph_type(GraphType::Scatter)
-        .style(Style::default().fg(Color::LightGreen))
+        .style(Style::default().fg(t.up_strong))
         .data(&up_pts);
     let down_dots = Dataset::default()
         .marker(Marker::Braille)
         .graph_type(GraphType::Scatter)
-        .style(Style::default().fg(Color::LightRed))
+        .style(Style::default().fg(t.down_strong))
         .data(&down_pts);
 
-    let axis_style = Style::default().fg(Color::DarkGray);
-    let title_style = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-    let label_style = Style::default().fg(Color::Gray);
+    let axis_style = Style::default().fg(t.dim);
+    let title_style = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(t.dim);
 
     let xmax = (candles.len().saturating_sub(1)) as f64;
     let mid_idx = candles.len() / 2;
@@ -525,16 +624,15 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str)
     f.render_widget(chart, area);
 }
 
-/// Green when the price is above the previous close, red when below, yellow when effectively unchanged.
-fn price_change_color(stock: &QuoteRecord) -> Color {
+fn price_change_color(stock: &QuoteRecord, t: &Theme) -> Color {
     let price = stock.price.unwrap_or_default();
     let prev = stock.previous_close.unwrap_or_default();
     let diff = price - prev;
     if diff > 0.001 {
-        Color::Green
+        t.up
     } else if diff < -0.001 {
-        Color::Red
+        t.down
     } else {
-        Color::Yellow
+        t.neutral
     }
 }
