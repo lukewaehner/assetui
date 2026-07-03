@@ -17,7 +17,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, LegendPosition, Paragraph,
-        Row, Table,
+        Row, Table, Wrap,
     },
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
@@ -111,7 +111,12 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|s| Line::styled(s.as_str(), Style::default().fg(t.dim)))
         .collect();
-    f.render_widget(Paragraph::new(log_lines).block(log_block), area);
+    f.render_widget(
+        Paragraph::new(log_lines)
+            .block(log_block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// Builds a table cell from an optional value, showing `-` when absent.
