@@ -1,6 +1,8 @@
 //! Interactive stdin prompts for the CLI binary.
 
-use std::io;
+use std::io::{self, BufRead};
+
+use crate::AppError;
 
 /// The three operations the CLI binary supports.
 pub enum Mode {
@@ -12,22 +14,43 @@ pub enum Mode {
     PullFromDb,
 }
 
+/// Reads one line from stdin, treating end-of-input (closed stdin, Ctrl-D) as
+/// an `UnexpectedEof` error rather than an empty line, so prompt loops
+/// terminate instead of spinning forever.
+fn read_line() -> io::Result<String> {
+    let mut line = String::new();
+    if io::stdin().lock().read_line(&mut line)? == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "stdin closed before input was complete",
+        ));
+    }
+    Ok(line)
+}
+
+/// Splits comma-separated input into normalised ticker symbols: trimmed,
+/// uppercased, with empty entries discarded.
+pub fn parse_tickers(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// Prompts the user to pick one of the three [`Mode`] options and returns
-/// the selection.  Loops until a valid option is entered.
-pub fn select_mode() -> Mode {
+/// the selection.  Loops until a valid option is entered; returns an error
+/// if stdin closes first.
+pub fn select_mode() -> Result<Mode, AppError> {
     println!("Select mode:");
     println!("1. Fetch and store quotes");
     println!("2. Dump quotes table to CSV");
     println!("3. Pull quotes from DB and display");
     loop {
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read input");
-        match input.trim() {
-            "1" => return Mode::FetchAndStore,
-            "2" => return Mode::DumpToCsv,
-            "3" => return Mode::PullFromDb,
+        match read_line()?.trim() {
+            "1" => return Ok(Mode::FetchAndStore),
+            "2" => return Ok(Mode::DumpToCsv),
+            "3" => return Ok(Mode::PullFromDb),
             _ => println!("Invalid selection, please enter 1, 2, or 3:"),
         }
     }
@@ -36,42 +59,29 @@ pub fn select_mode() -> Mode {
 /// Prompts the user to enter comma-separated ticker symbols and confirms
 /// when they are finished.
 ///
-/// Tickers are normalised to uppercase and empty entries are discarded.
-/// The loop continues asking "are you done?" until the user answers `y` or
-/// `yes`, so multiple rounds of entry are possible in one session.
-pub fn pick_tickers() -> Vec<String> {
+/// Tickers are normalised via [`parse_tickers`].  The loop continues asking
+/// "are you done?" until the user answers `y` or `yes`, so multiple rounds of
+/// entry are possible in one session.  Returns an error if stdin closes.
+pub fn pick_tickers() -> Result<Vec<String>, AppError> {
     let mut stocks: Vec<String> = Vec::new();
-    let mut done: bool = false;
-    while !done {
+    loop {
         println!("Enter stock tickers separated by commas (e.g. AAPL,MSFT,GOOG):");
-        let mut tickers_input = String::new();
-        io::stdin()
-            .read_line(&mut tickers_input)
-            .expect("Failed to read input");
-        let before = stocks.len();
-        stocks.extend(
-            tickers_input
-                .split(',')
-                .map(|s| s.trim().to_uppercase())
-                .filter(|s| !s.is_empty()),
-        );
-        if stocks.len() == before {
+        let entered = parse_tickers(&read_line()?);
+        if entered.is_empty() {
             println!("No valid tickers entered, please try again.");
             continue;
         }
+        stocks.extend(entered);
         println!("Are you done entering tickers? (y/n):");
-        let mut done_input = String::new();
-        io::stdin()
-            .read_line(&mut done_input)
-            .expect("Failed to read input");
-        done = matches!(done_input.trim().to_lowercase().as_str(), "y" | "yes");
+        if matches!(read_line()?.trim().to_lowercase().as_str(), "y" | "yes") {
+            return Ok(stocks);
+        }
     }
-    stocks
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Mode;
+    use super::{Mode, parse_tickers};
 
     #[test]
     fn test_mode_variants_exist() {
@@ -81,24 +91,21 @@ mod tests {
     }
 
     #[test]
-    fn test_pick_tickers_normalises_case() {
-        let input = "aapl,msft, ,goog";
-        let result: Vec<String> = input
-            .split(',')
-            .map(|s| s.trim().to_uppercase())
-            .filter(|s| !s.is_empty())
-            .collect();
-        assert_eq!(result, vec!["AAPL", "MSFT", "GOOG"]);
+    fn test_parse_tickers_normalises_case_and_skips_blanks() {
+        assert_eq!(
+            parse_tickers("aapl,msft, ,goog"),
+            vec!["AAPL", "MSFT", "GOOG"]
+        );
     }
 
     #[test]
-    fn test_empty_input_filtered() {
-        let input = "";
-        let result: Vec<String> = input
-            .split(',')
-            .map(|s| s.trim().to_uppercase())
-            .filter(|s| !s.is_empty())
-            .collect();
-        assert!(result.is_empty());
+    fn test_parse_tickers_empty_input() {
+        assert!(parse_tickers("").is_empty());
+        assert!(parse_tickers(" , ,").is_empty());
+    }
+
+    #[test]
+    fn test_parse_tickers_single_symbol_trimmed() {
+        assert_eq!(parse_tickers("  nvda \n"), vec!["NVDA"]);
     }
 }

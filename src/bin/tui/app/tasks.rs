@@ -40,9 +40,10 @@ impl App {
     pub(crate) fn spawn_fetch(&self, symbol: String) {
         let tx = self.event_tx.clone();
         let pool = self.pool.clone();
+        let client = self.client.clone();
         tokio::spawn(async move {
             let _ = tx.send(AppEvent::FetchSpawned(symbol.clone()));
-            match fetch_quote_and_store(&pool, &symbol).await {
+            match fetch_quote_and_store(&pool, &client, &symbol).await {
                 Ok(Some(record)) => {
                     let _ = tx.send(AppEvent::FetchCompleted(record));
                 }
@@ -60,9 +61,10 @@ impl App {
     /// the result back as [`AppEvent::StockAnalysisReady`].
     pub(crate) fn spawn_analysis(&self, symbol: &str) {
         let tx = self.event_tx.clone();
+        let client = self.client.clone();
         let symbol = symbol.to_owned();
         tokio::spawn(async move {
-            match fetch_analysis(&symbol).await {
+            match fetch_analysis(&client, &symbol).await {
                 Ok(a) => {
                     let _ = tx.send(AppEvent::StockAnalysisReady(a));
                 }
@@ -77,14 +79,15 @@ impl App {
     /// the candles back as [`AppEvent::ChartDataReady`].
     pub(crate) fn spawn_chart_data(&self, symbol: &str) {
         let tx = self.event_tx.clone();
+        let client = self.client.clone();
         let symbol = symbol.to_owned();
         tokio::spawn(async move {
-            match fetch_chart_data(&symbol).await {
+            match fetch_chart_data(&client, &symbol).await {
                 Ok(a) => {
                     let _ = tx.send(AppEvent::ChartDataReady(a));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
+                    let _ = tx.send(AppEvent::Error(format!("chart {symbol}: {e}")));
                 }
             }
         });
@@ -94,9 +97,10 @@ impl App {
     /// ticks back as [`AppEvent::QuoteTick`]s, and logs the stream lifecycle.
     pub(crate) fn spawn_stream(&self, symbols: Vec<String>) {
         let tx = self.event_tx.clone();
+        let client = self.client.clone();
         let count = symbols.len();
         tokio::spawn(async move {
-            match start_quote_stream(symbols).await {
+            match start_quote_stream(&client, symbols).await {
                 Ok(Some((handle, mut receiver))) => {
                     let _ = tx.send(AppEvent::StreamStarted(handle));
                     let _ = tx.send(AppEvent::LogLine(format!(
@@ -143,7 +147,13 @@ impl App {
     /// Spawns a background task that polls the macOS system appearance every two
     /// seconds and sends [`AppEvent::ThemeChanged`] whenever it flips. The
     /// blocking `defaults` call runs off the render loop.
+    ///
+    /// A no-op on other platforms, where there is no `defaults` binary to
+    /// poll - the theme stays at whatever `detect_appearance` chose at startup.
     pub(crate) fn spawn_theme_watcher(&self) {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
         let tx = self.event_tx.clone();
         // Seed from the appearance already detected in `App::new` so startup
         // performs a single `defaults` read and there is no window where the

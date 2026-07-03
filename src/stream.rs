@@ -27,14 +27,16 @@ pub type QuoteStream = (StreamHandle, Receiver<QuoteUpdate>);
 /// Uses the `WebsocketWithFallback` transport with `diff_only` enabled, so the
 /// channel only carries the fields that actually changed on each tick.
 #[instrument(skip_all, fields(symbols = symbols.len()))]
-pub async fn start_quote_stream(symbols: Vec<String>) -> Result<Option<QuoteStream>, AppError> {
+pub async fn start_quote_stream(
+    client: &YfClient,
+    symbols: Vec<String>,
+) -> Result<Option<QuoteStream>, AppError> {
     if symbols.is_empty() {
         return Ok(None);
     }
 
     debug!("starting quote stream");
-    let client = YfClient::default();
-    let (handle, receiver) = StreamBuilder::new(&client)
+    let (handle, receiver) = StreamBuilder::new(client)
         .method(StreamMethod::WebsocketWithFallback)
         .diff_only(true)
         .symbols(symbols)

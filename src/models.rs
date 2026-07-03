@@ -76,13 +76,25 @@ impl From<QuoteUpdate> for QuoteTick {
 }
 
 impl QuoteTick {
-    pub fn apply(&self, rows: &mut [QuoteRecord]) -> Option<usize> {
+    /// Applies this tick to the matching row in `rows` (matched by ticker,
+    /// case-insensitively), recording a price-flash from the row's pre-update
+    /// price into `flash_map` before the fields are overwritten.  Fields the
+    /// tick doesn't carry (diff-only streams) keep their existing values.
+    ///
+    /// Returns the index of the updated row, or `None` when no row matches -
+    /// a display-only no-op, never a panic.
+    pub fn apply(
+        &self,
+        rows: &mut [QuoteRecord],
+        flash_map: &mut HashMap<String, (f64, Instant)>,
+    ) -> Option<usize> {
         let ticker = self.ticker.as_deref()?;
         let i = rows.iter().position(|r| {
             r.ticker
                 .as_deref()
                 .is_some_and(|t| t.eq_ignore_ascii_case(ticker))
         })?;
+        self.record_flash(flash_map, &rows[i]);
         let row = &mut rows[i];
         row.price = self.price.or(row.price);
         row.previous_close = self.previous_close.or(row.previous_close);
@@ -167,7 +179,8 @@ mod tests {
     }
 
     /// A tick updates the matching row in place, matches the ticker
-    /// case-insensitively, and leaves every other row untouched.
+    /// case-insensitively, records a flash from the pre-update price, and
+    /// leaves every other row untouched.
     #[test]
     fn test_apply_updates_matching_row() {
         let mut rows = vec![
@@ -192,13 +205,17 @@ mod tests {
             as_of: Some(now),
         };
 
-        assert_eq!(tick.apply(&mut rows), Some(0));
+        let mut flash_map = HashMap::new();
+        assert_eq!(tick.apply(&mut rows, &mut flash_map), Some(0));
         assert_eq!(rows[0].price, Some(150.0));
         assert_eq!(rows[0].previous_close, Some(140.0));
         assert_eq!(rows[0].day_volume, Some(1_000.0));
         assert_eq!(rows[0].as_of, Some(now));
         // The non-matching row is left alone.
         assert_eq!(rows[1].price, Some(200.0));
+        // The flash was recorded against the pre-update price (150 - 100).
+        let (diff, _) = flash_map.get("AAPL").expect("flash recorded by apply");
+        assert!((diff - 50.0).abs() < 1e-9);
     }
 
     /// A tick for a ticker not present in `rows` returns `None` and mutates
@@ -218,8 +235,10 @@ mod tests {
             as_of: Some(Utc::now()),
         };
 
-        assert_eq!(tick.apply(&mut rows), None);
+        let mut flash_map = HashMap::new();
+        assert_eq!(tick.apply(&mut rows, &mut flash_map), None);
         assert_eq!(rows[0].price, Some(100.0));
+        assert!(flash_map.is_empty(), "no flash for an unmatched ticker");
     }
 
     /// A diff-only tick carries only the fields that changed; the rest arrive
@@ -243,7 +262,7 @@ mod tests {
             as_of: Some(Utc::now()),
         };
 
-        assert_eq!(tick.apply(&mut rows), Some(0));
+        assert_eq!(tick.apply(&mut rows, &mut HashMap::new()), Some(0));
         assert_eq!(rows[0].price, Some(101.0)); // updated
         assert_eq!(rows[0].previous_close, Some(99.0)); // preserved
         assert_eq!(rows[0].day_volume, Some(5_000.0)); // preserved

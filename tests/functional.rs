@@ -37,8 +37,8 @@ async fn test_store_and_retrieve_field_integrity(pool: sqlx::PgPool) {
         result
     );
     assert!(
-        result.unwrap().is_some(),
-        "expected Some(id) for fresh insert"
+        result.unwrap() > 0,
+        "expected a positive id for fresh insert"
     );
 
     let rows = fetch_all_quotes(&pool)
@@ -61,7 +61,7 @@ async fn test_store_and_retrieve_field_integrity(pool: sqlx::PgPool) {
 
 /// Stores two rows for the same ticker at different timestamps (simulating
 /// historical snapshots), verifies both are returned by fetch_all_quotes, and
-/// checks that fetch_recent returns the newer row first.
+/// checks that fetch_sorted returns the newer row first.
 #[sqlx::test]
 async fn test_historical_tracking_same_ticker_two_timestamps(pool: sqlx::PgPool) {
     let t1 = Utc.with_ymd_and_hms(2024, 6, 1, 9, 0, 0).unwrap();
@@ -73,20 +73,11 @@ async fn test_historical_tracking_same_ticker_two_timestamps(pool: sqlx::PgPool)
     let id1 = store_quote_to_db(&q1, &pool)
         .await
         .expect("first store failed");
-    assert!(id1.is_some(), "first insert should return Some(id)");
 
     let id2 = store_quote_to_db(&q2, &pool)
         .await
         .expect("second store failed");
-    assert!(
-        id2.is_some(),
-        "second insert (different as_of) should return Some(id)"
-    );
-    assert_ne!(
-        id1.unwrap(),
-        id2.unwrap(),
-        "two distinct inserts must have different ids"
-    );
+    assert_ne!(id1, id2, "two distinct inserts must have different ids");
 
     let all = fetch_all_quotes(&pool)
         .await
@@ -123,21 +114,9 @@ async fn test_csv_export_content_matches_stored_data(pool: sqlx::PgPool) {
         .await
         .expect("store CSVTEST2 failed");
 
-    dump_table_to_csv(&pool)
+    let csv_path = dump_table_to_csv(&pool, &std::env::temp_dir())
         .await
         .expect("dump_table_to_csv failed");
-
-    // Locate the generated file.
-    let csv_path = std::fs::read_dir(".")
-        .expect("could not read current directory")
-        .filter_map(|e| e.ok())
-        .find(|e| {
-            let name = e.file_name();
-            let s = name.to_string_lossy();
-            s.starts_with("quotes_dump_") && s.ends_with(".csv")
-        })
-        .map(|e| e.path())
-        .expect("no quotes_dump_*.csv file found after dump");
 
     // Parse the CSV. QuoteRecord serialises as: id,ticker,name,price,...
     // price is at index 3.
@@ -342,7 +321,7 @@ async fn test_fetch_sorted_descending_by_name(pool: sqlx::PgPool) {
 }
 
 /// Stores 15 quotes, then checks that fetch_all_quotes returns all 15 and that
-/// fetch_recent correctly respects its limit parameter, including when the
+/// fetch_sorted correctly respects its limit parameter, including when the
 /// limit exceeds the total row count.
 #[sqlx::test]
 async fn test_store_many_then_paginate(pool: sqlx::PgPool) {

@@ -65,13 +65,13 @@ The left panel shows what you're typing and a running log of fetch activity. The
 
 ### Live quotes
 
-While the TUI is open it subscribes to a live quote stream for the tickers on the current page and updates their rows in place — price, previous close, volume, and timestamp — as ticks arrive. Paginating or changing the sort re-subscribes to the newly visible symbols, and the stream is stopped cleanly when you quit.
+While the TUI is open it subscribes to a live quote stream for the tickers on the current page and updates their rows in place - price, previous close, volume, and timestamp - as ticks arrive. Paginating or changing the sort re-subscribes to the newly visible symbols, and the stream is stopped cleanly when you quit.
 
 Updates are display-only; streamed ticks are not written to Postgres. Ticks only flow while the market is open, so nights, weekends, and holidays show no live movement. The log panel prints `[STREAM] connected: N tickers` when the stream attaches, so you can tell "connected but idle" apart from "not started".
 
 ### Appearance
 
-On macOS the TUI follows your system appearance: it picks a light or dark palette at launch and switches automatically within a couple of seconds when you toggle the OS between Light and Dark — no key or restart needed. On other platforms it defaults to the dark palette.
+On macOS the TUI follows your system appearance: it picks a light or dark palette at launch and switches automatically within a couple of seconds when you toggle the OS between Light and Dark - no key or restart needed. On other platforms it defaults to the dark palette.
 
 ## Project layout
 

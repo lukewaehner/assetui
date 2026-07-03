@@ -67,7 +67,7 @@ async fn test_tui_initial_load_returns_recent_200(pool: sqlx::PgPool) {
 // ---------------------------------------------------------------------------
 
 /// When a user types a ticker in the TUI's input box the app calls
-/// `fetch_quote_and_store`, then refreshes with `fetch_recent`.  The new
+/// `fetch_quote_and_store`, then refreshes with `fetch_sorted`.  The new
 /// quote must appear at position 0.
 #[sqlx::test]
 async fn test_tui_new_fetch_appears_at_top_of_recent(pool: sqlx::PgPool) {
@@ -207,7 +207,7 @@ async fn test_tui_sort_toggle_reverses_order(pool: sqlx::PgPool) {
 // ---------------------------------------------------------------------------
 
 /// The TUI hard-codes a 200-row startup page.  When more than 200 rows exist
-/// `fetch_recent` must return exactly 200, and those 200 must be the most
+/// `fetch_sorted` must return exactly 200, and those 200 must be the most
 /// recently inserted ones.
 #[sqlx::test]
 async fn test_tui_page_limit_matches_startup(pool: sqlx::PgPool) {
@@ -241,7 +241,7 @@ async fn test_tui_page_limit_matches_startup(pool: sqlx::PgPool) {
     assert_eq!(
         rows.len(),
         200,
-        "fetch_recent must respect the 200-row limit"
+        "fetch_sorted must respect the 200-row limit"
     );
 
     // The most recent quote has seq=249 → ticker "T249".
