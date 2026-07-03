@@ -96,8 +96,10 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().bg(t.panel));
     let visible = area.height.saturating_sub(2) as usize;
     let start = app.logs.len().saturating_sub(visible);
-    let log_lines: Vec<Line> = app.logs[start..]
+    let log_lines: Vec<Line> = app
+        .logs
         .iter()
+        .skip(start)
         .map(|s| Line::styled(s.as_str(), Style::default().fg(t.dim)))
         .collect();
     f.render_widget(
@@ -118,29 +120,25 @@ fn price_change_color(
     flash_map: &HashMap<String, (f64, Instant)>,
     t: &Theme,
 ) -> Color {
-    let price = stock.price.unwrap_or_default();
-    let prev = stock.previous_close.unwrap_or_default();
-
     let diff = stock
         .ticker
         .as_deref()
         .and_then(|t| flash_map.get(&t.to_ascii_uppercase()))
         .filter(|(_, ts)| ts.elapsed() < FLASH_TTL)
         .map(|(diff, _)| *diff)
-        .unwrap_or_else(|| price - prev);
-    if diff > 0.001 {
-        t.up
-    } else if diff < -0.001 {
-        t.down
-    } else {
-        t.neutral
+        .or(match (stock.price, stock.previous_close) {
+            (Some(price), Some(prev)) => Some(price - prev),
+            _ => None,
+        });
+    match diff {
+        Some(d) if d > 0.001 => t.up,
+        Some(d) if d < -0.001 => t.down,
+        _ => t.neutral,
     }
 }
 
 fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Color) {
     let t = app.theme;
-    let page_size = area.height.saturating_sub(4).max(1) as usize;
-    app.set_page_size(page_size);
 
     let label_sty = Style::default().fg(t.fg).add_modifier(Modifier::BOLD);
     let key_sty = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
@@ -287,7 +285,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     mid
 }
 
-/// Builds a modal block: panel background, themed border, and a bold accent ` title `.
 fn modal_block(title: String, t: &Theme) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)

@@ -17,7 +17,7 @@ fn make_quote(ticker: &str, price: f64, as_of: DateTime<Utc>) -> QuoteRecord {
 }
 
 #[sqlx::test]
-async fn test_fetch_recent_empty(pool: sqlx::PgPool) {
+async fn test_fetch_sorted_recent_empty(pool: sqlx::PgPool) {
     let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 10)
         .await
         .unwrap();
@@ -25,7 +25,7 @@ async fn test_fetch_recent_empty(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn test_fetch_recent_respects_limit(pool: sqlx::PgPool) {
+async fn test_fetch_sorted_recent_respects_limit(pool: sqlx::PgPool) {
     for i in 0..5_u32 {
         let ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, i).unwrap();
         let q = make_quote(&format!("TICK{i}"), 100.0 + f64::from(i), ts);
@@ -39,7 +39,7 @@ async fn test_fetch_recent_respects_limit(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn test_fetch_recent_ordering(pool: sqlx::PgPool) {
+async fn test_fetch_sorted_recent_ordering(pool: sqlx::PgPool) {
     let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
     let t2 = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 1).unwrap();
     let t3 = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 2).unwrap();

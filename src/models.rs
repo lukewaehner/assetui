@@ -62,13 +62,18 @@ impl From<QuoteUpdate> for QuoteTick {
 }
 
 impl QuoteTick {
-    pub fn apply(&self, rows: &mut [QuoteRecord]) -> Option<usize> {
+    pub fn apply(
+        &self,
+        rows: &mut [QuoteRecord],
+        flash_map: &mut HashMap<String, (f64, Instant)>,
+    ) -> Option<usize> {
         let ticker = self.ticker.as_deref()?;
         let i = rows.iter().position(|r| {
             r.ticker
                 .as_deref()
                 .is_some_and(|t| t.eq_ignore_ascii_case(ticker))
         })?;
+        self.record_flash(flash_map, &rows[i]);
         let row = &mut rows[i];
         row.price = self.price.or(row.price);
         row.previous_close = self.previous_close.or(row.previous_close);
@@ -169,12 +174,15 @@ mod tests {
             as_of: Some(now),
         };
 
-        assert_eq!(tick.apply(&mut rows), Some(0));
+        let mut flash_map = HashMap::new();
+        assert_eq!(tick.apply(&mut rows, &mut flash_map), Some(0));
         assert_eq!(rows[0].price, Some(150.0));
         assert_eq!(rows[0].previous_close, Some(140.0));
         assert_eq!(rows[0].day_volume, Some(1_000.0));
         assert_eq!(rows[0].as_of, Some(now));
         assert_eq!(rows[1].price, Some(200.0));
+        let (diff, _) = flash_map.get("AAPL").expect("flash recorded by apply");
+        assert!((diff - 50.0).abs() < 1e-9);
     }
 
     #[test]
@@ -192,8 +200,10 @@ mod tests {
             as_of: Some(Utc::now()),
         };
 
-        assert_eq!(tick.apply(&mut rows), None);
+        let mut flash_map = HashMap::new();
+        assert_eq!(tick.apply(&mut rows, &mut flash_map), None);
         assert_eq!(rows[0].price, Some(100.0));
+        assert!(flash_map.is_empty(), "no flash for an unmatched ticker");
     }
 
     #[test]
@@ -213,7 +223,7 @@ mod tests {
             as_of: Some(Utc::now()),
         };
 
-        assert_eq!(tick.apply(&mut rows), Some(0));
+        assert_eq!(tick.apply(&mut rows, &mut HashMap::new()), Some(0));
         assert_eq!(rows[0].price, Some(101.0));
         assert_eq!(rows[0].previous_close, Some(99.0));
         assert_eq!(rows[0].day_volume, Some(5_000.0));

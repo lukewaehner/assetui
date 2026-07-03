@@ -182,7 +182,7 @@ async fn test_tui_page_limit_matches_startup(pool: sqlx::PgPool) {
     assert_eq!(
         rows.len(),
         200,
-        "fetch_recent must respect the 200-row limit"
+        "fetch_sorted must respect the 200-row limit"
     );
 
     assert_eq!(

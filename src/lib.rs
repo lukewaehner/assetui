@@ -9,4 +9,16 @@ pub mod sort;
 pub mod stream;
 
 /// Shared error type used throughout the crate.
-pub type AppError = Box<dyn std::error::Error + Send + Sync>;
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error("database error: {0}")]
+    Db(#[from] sqlx::Error),
+    #[error("Yahoo Finance error: {0}")]
+    Yahoo(#[from] yfinance_rs::YfError),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("CSV error: {0}")]
+    Csv(#[from] csv::Error),
+    #[error("environment error: {0}")]
+    Env(#[from] dotenvy::Error),
+}

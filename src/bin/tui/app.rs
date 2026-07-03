@@ -1,6 +1,6 @@
 //! Application state and event handling for the TUI binary.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -13,10 +13,11 @@ use tokio::sync::mpsc;
 
 use super::theme::{Appearance, Theme};
 use yfinance::{
-    models::{QuoteRecord, QuoteRecordAnalysis, QuoteTick},
+    cli::parse_tickers,
+    models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis, QuoteTick},
     sort::{SortMode, SortOrder},
 };
-use yfinance_rs::{Candle, StreamHandle};
+use yfinance_rs::{Candle, StreamHandle, YfClient};
 
 mod tasks;
 
@@ -25,6 +26,13 @@ const PAGE_FETCH_LIMIT: i64 = 200;
 
 /// Interval at which the input-box cursor toggles visibility.
 const BLINK_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Maximum number of lines retained in the log panel.
+const MAX_LOG_LINES: usize = 500;
+
+pub fn table_page_size(terminal_height: u16) -> usize {
+    terminal_height.saturating_sub(5).max(1) as usize
+}
 
 /// Messages sent from async tasks back to the main event loop.
 pub enum AppEvent {
@@ -56,10 +64,11 @@ pub struct App {
     pub should_quit: bool,
     /// The quotes table and its associated sort/selection state.
     pub db_display: DbDisplay,
-    /// Lines shown in the log panel (most recent at the bottom).
-    pub logs: Vec<String>,
+    /// Lines shown in the log panel (most recent at the bottom), capped at [`MAX_LOG_LINES`].
+    pub logs: VecDeque<String>,
     /// Shared database connection pool passed to async tasks.
     pub pool: sqlx::PgPool,
+    pub client: YfClient,
     /// Channel used by async tasks to push [`AppEvent`]s back to the loop.
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Current state of the blinking cursor in the input box.
@@ -176,7 +185,11 @@ fn sort_mode_for_key(key: char) -> Option<SortMode> {
 
 impl App {
     /// Creates a new `App` with sensible defaults.
-    pub fn new(pool: sqlx::PgPool, event_tx: mpsc::UnboundedSender<AppEvent>) -> Self {
+    pub fn new(
+        pool: sqlx::PgPool,
+        client: YfClient,
+        event_tx: mpsc::UnboundedSender<AppEvent>,
+    ) -> Self {
         let appearance = super::theme::detect_appearance();
         Self {
             input_mode: InputMode {
@@ -193,8 +206,9 @@ impl App {
                 page: 0,
                 page_size: 25,
             },
-            logs: Vec::new(),
+            logs: VecDeque::new(),
             pool,
+            client,
             event_tx,
             blink_state: true,
             last_blink: Instant::now(),
@@ -214,13 +228,29 @@ impl App {
         }
     }
 
-    pub fn tick(&mut self, elapsed: Duration) {
+    pub fn tick(&mut self, elapsed: Duration) -> bool {
         let now = Instant::now();
+        let mut blinked = false;
         if now.duration_since(self.last_blink) >= BLINK_INTERVAL {
             self.blink_state = !self.blink_state;
             self.last_blink = now;
+            blinked = true;
         }
         self.notifications.tick(elapsed);
+
+        let had_flashes = !self.row_flash_map.is_empty();
+        self.row_flash_map
+            .retain(|_, (_, ts)| ts.elapsed() < FLASH_TTL);
+
+        (blinked && self.input_mode.toggled) || self.notifications.has_notification() || had_flashes
+    }
+
+    /// Appends a line to the log panel, dropping the oldest line once the [`MAX_LOG_LINES`] cap is reached.
+    fn push_log(&mut self, line: String) {
+        if self.logs.len() >= MAX_LOG_LINES {
+            self.logs.pop_front();
+        }
+        self.logs.push_back(line);
     }
 
     /// Applies an [`AppEvent`] to the application state.
@@ -235,17 +265,17 @@ impl App {
             }
             AppEvent::FetchSpawned(symbol) => {
                 self.db_display.status = format!("fetching {symbol}…");
-                self.logs.push(format!("[INFO] fetching {symbol}"));
+                self.push_log(format!("[INFO] fetching {symbol}"));
             }
             AppEvent::FetchCompleted(record) => {
                 let name = record.ticker.as_deref().unwrap_or("?");
                 self.db_display.status = format!("stored {name}");
-                self.logs.push(format!("[SUCCESS] stored {name}"));
+                self.push_log(format!("[SUCCESS] stored {name}"));
                 self.db_display.rows.insert(0, record);
                 self.reset_selection();
             }
             AppEvent::LogLine(line) => {
-                self.logs.push(line);
+                self.push_log(line);
             }
             AppEvent::Error(e) => self.push_error(e),
             AppEvent::StockAnalysisReady(analysis) => {
@@ -255,16 +285,8 @@ impl App {
                 self.stock_modal.chart_data = Some(data);
             }
             AppEvent::QuoteTick(tick) => {
-                if let Some(row) = self.db_display.rows.iter().find(|r| {
-                    matches!(
-                        (r.ticker.as_deref(), tick.ticker.as_deref()),
-                        (Some(a), Some(b)) if a.eq_ignore_ascii_case(b)
-                    )
-                }) {
-                    tick.record_flash(&mut self.row_flash_map, row);
-                }
                 let range = self.db_display.window_range();
-                tick.apply(&mut self.db_display.rows[range]);
+                tick.apply(&mut self.db_display.rows[range], &mut self.row_flash_map);
             }
             AppEvent::StreamStarted(handle) => {
                 self.stream_handle = Some(handle);
@@ -279,7 +301,7 @@ impl App {
     /// Records an error in the status bar and log panel, and raises a slide-in notification.
     fn push_error(&mut self, e: String) {
         self.db_display.status = format!("Error: {e}");
-        self.logs.push(format!("[ERROR] {e}"));
+        self.push_log(format!("[ERROR] {e}"));
         if let Ok(notif) = Notification::new(e)
             .title("Error")
             .level(Level::Error)
@@ -341,18 +363,17 @@ impl App {
         }
     }
 
-    /// Takes the current input-box text as a ticker symbol and spawns a fetch for it.
     fn submit_input(&mut self) {
-        let symbol = self.input_mode.input.trim().to_uppercase();
+        let symbols = parse_tickers(&self.input_mode.input);
         self.input_mode.input.clear();
-        if !symbol.is_empty() {
+        for symbol in symbols {
             self.spawn_fetch(symbol);
         }
     }
 
     /// Sets the sort column and re-fetches the table.
     fn set_sort_mode(&mut self, mode: SortMode) {
-        self.logs.push(format!("[SORT] mode → {mode:?}"));
+        self.push_log(format!("[SORT] mode → {mode:?}"));
         self.db_display.sort_mode = mode;
         self.spawn_reload();
     }
@@ -363,7 +384,7 @@ impl App {
             SortOrder::Ascending => SortOrder::Descending,
             SortOrder::Descending => SortOrder::Ascending,
         };
-        self.logs.push(format!("[SORT] order → {order:?}"));
+        self.push_log(format!("[SORT] order → {order:?}"));
         self.db_display.sort_order = order;
         self.spawn_reload();
     }
@@ -379,8 +400,8 @@ impl App {
         if new_page != self.db_display.page {
             self.db_display.page = new_page;
             self.reset_selection();
+            self.resubscribe_stream();
         }
-        self.resubscribe_stream();
     }
 
     /// Moves the table selection by `delta`, wrapping at the ends of the current page.
@@ -456,8 +477,11 @@ impl App {
         self.stock_modal.chart_visible = false;
         self.stock_modal.info_visible = true;
 
-        let has_analysis: bool = self.stock_modal.analysis.is_some()
-            && self.stock_modal.analysis.as_ref().unwrap().ticker == ticker;
+        let has_analysis = self
+            .stock_modal
+            .analysis
+            .as_ref()
+            .is_some_and(|a| a.ticker == ticker);
 
         if !has_analysis && let Some(t) = ticker.as_deref() {
             self.stock_modal.analysis = None;
@@ -495,7 +519,7 @@ mod tests {
     fn make_test_app() -> (App, mpsc::UnboundedReceiver<AppEvent>) {
         let pool = sqlx::PgPool::connect_lazy("postgres://localhost/nonexistent_test_db").unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
-        (App::new(pool, tx), rx)
+        (App::new(pool, YfClient::default(), tx), rx)
     }
 
     fn n_records(n: usize) -> Vec<QuoteRecord> {
@@ -549,7 +573,7 @@ mod tests {
     async fn test_handle_event_log_line() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::LogLine("hello".to_string()));
-        assert_eq!(app.logs.last(), Some(&"hello".to_string()));
+        assert_eq!(app.logs.back(), Some(&"hello".to_string()));
     }
 
     #[tokio::test]

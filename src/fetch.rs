@@ -32,46 +32,25 @@ pub async fn fetch_quote(symbol: &str, ticker: &Ticker) -> Result<Option<QuoteRe
 }
 
 /// Fetches a quote for `symbol` and immediately persists it to the database.
-#[instrument(skip(pool), fields(symbol = %symbol))]
+#[instrument(skip(pool, client), fields(symbol = %symbol))]
 pub async fn fetch_quote_and_store(
     pool: &sqlx::PgPool,
+    client: &YfClient,
     symbol: &str,
 ) -> Result<Option<QuoteRecord>, AppError> {
-    let client = YfClient::default();
-    let ticker = Ticker::new(&client, symbol);
+    let ticker = Ticker::new(client, symbol);
 
     let Some(mut quote_record) = fetch_quote(symbol, &ticker).await? else {
         return Ok(None);
     };
 
-    quote_record.id = match db::quotes::store_quote_to_db(&quote_record, pool).await? {
-        id @ Some(_) => id,
-        None => {
-            sqlx::query_scalar(
-                "SELECT id FROM quotes \
-                 WHERE ticker IS NOT DISTINCT FROM $1 \
-                 AND as_of IS NOT DISTINCT FROM $2",
-            )
-            .bind(quote_record.ticker.as_deref())
-            .bind(quote_record.as_of)
-            .fetch_optional(pool)
-            .await?
-        }
-    };
+    quote_record.id = Some(db::quotes::store_quote_to_db(&quote_record, pool).await?);
     Ok(Some(quote_record))
 }
 
 /// Pairs each ticker symbol with an initialised [`Ticker`] client ready for async fetching.
 pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
     s.iter().map(|t| (t.clone(), Ticker::new(c, t))).collect()
-}
-
-/// Returns up to `limit` quotes ordered by `as_of DESC, id DESC`.
-#[deprecated(
-    note = "use fetch_sorted(pool, SortMode::ByAsOf, SortOrder::Descending, limit) instead"
-)]
-pub async fn fetch_recent(pool: &sqlx::PgPool, limit: i64) -> sqlx::Result<Vec<QuoteRecord>> {
-    fetch_sorted(pool, SortMode::ByAsOf, SortOrder::Descending, limit).await
 }
 
 /// Returns up to `limit` quotes sorted by `mode` in the given `order`.
@@ -110,10 +89,12 @@ pub async fn fetch_sorted(
 }
 
 /// Fetches analyst consensus and price targets for `symbol` concurrently.
-#[instrument(fields(symbol = %symbol))]
-pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, AppError> {
-    let client = YfClient::default();
-    let analysis_builder = AnalysisBuilder::new(&client, symbol);
+#[instrument(skip(client), fields(symbol = %symbol))]
+pub async fn fetch_analysis(
+    client: &YfClient,
+    symbol: &str,
+) -> Result<QuoteRecordAnalysis, AppError> {
+    let analysis_builder = AnalysisBuilder::new(client, symbol);
 
     let (rec, pt) = try_join!(
         analysis_builder.recommendations_summary(),
@@ -127,11 +108,10 @@ pub async fn fetch_analysis(symbol: &str) -> Result<QuoteRecordAnalysis, AppErro
     })
 }
 
-/// Fetches YTD ticker history.
-#[instrument(fields(symbol = %symbol))]
-pub async fn fetch_chart_data(symbol: &str) -> Result<Vec<Candle>, AppError> {
-    let client = YfClient::default();
-    let history = HistoryBuilder::new(&client, symbol)
+/// Fetches YTD ticker history at a one-day interval.
+#[instrument(skip(client), fields(symbol = %symbol))]
+pub async fn fetch_chart_data(client: &YfClient, symbol: &str) -> Result<Vec<Candle>, AppError> {
+    let history = HistoryBuilder::new(client, symbol)
         .range(Range::Ytd)
         .interval(Interval::D1)
         .fetch()

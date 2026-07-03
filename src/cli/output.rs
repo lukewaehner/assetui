@@ -10,6 +10,7 @@ fn opt_fmt<T, F: Fn(T) -> String>(v: Option<T>, f: F) -> String {
 
 /// Formats a single [`QuoteRecord`] as a row of [`Cell`]s for comfy-table.
 fn ticker_row(qr: &QuoteRecord) -> Vec<Cell> {
+    let ticker = qr.ticker.as_deref().unwrap_or("-");
     let name = qr.name.as_deref().unwrap_or("Unknown");
     let price_str = opt_fmt(qr.price, |p| format!("${p:.2}"));
     let prev_close_str = opt_fmt(qr.previous_close, |p| format!("${p:.2}"));
@@ -25,7 +26,8 @@ fn ticker_row(qr: &QuoteRecord) -> Vec<Cell> {
     };
 
     vec![
-        Cell::new(name).fg(Color::Cyan),
+        Cell::new(ticker).fg(Color::Cyan),
+        Cell::new(name),
         price_cell,
         Cell::new(prev_close_str),
         Cell::new(volume_str),
@@ -40,6 +42,7 @@ pub async fn print_tickers(p: &Pool<Postgres>) -> Result<(), AppError> {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL).set_header(vec![
         "Ticker",
+        "Name",
         "Price",
         "Prev Close",
         "Day Volume",
@@ -71,14 +74,14 @@ mod tests {
             as_of: Some(chrono::Utc::now()),
         };
         let cells = ticker_row(&qr);
-        assert_eq!(cells.len(), 5);
+        assert_eq!(cells.len(), 6);
     }
 
     #[test]
     fn test_ticker_row_handles_all_none() {
         let qr = QuoteRecord::default();
         let cells = ticker_row(&qr);
-        assert_eq!(cells.len(), 5);
+        assert_eq!(cells.len(), 6);
     }
 
     #[test]
@@ -93,7 +96,7 @@ mod tests {
             as_of: None,
         };
         let cells = ticker_row(&qr);
-        assert_eq!(cells.len(), 5);
+        assert_eq!(cells.len(), 6);
     }
 
     #[test]
@@ -108,6 +111,6 @@ mod tests {
             as_of: None,
         };
         let cells = ticker_row(&qr);
-        assert_eq!(cells.len(), 5);
+        assert_eq!(cells.len(), 6);
     }
 }

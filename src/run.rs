@@ -1,6 +1,9 @@
 //! Async batch-fetch pipeline.
 
+use std::sync::Arc;
+
 use sqlx::{Pool, Postgres};
+use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 use yfinance_rs::{Ticker, YfClient};
 
@@ -11,21 +14,31 @@ use crate::models::QuoteRecord;
 
 const CHANNEL_BUFFER: usize = 100;
 
+/// Maximum number of Yahoo Finance requests in flight at once.
+const MAX_CONCURRENT_FETCHES: usize = 12;
+
 /// Fetches real-time quotes for all `tickers` concurrently and stores each one to the database.
-pub async fn fetch_and_store(pool: &Pool<Postgres>, tickers: &[String]) -> Result<(), AppError> {
+pub async fn fetch_and_store(
+    pool: &Pool<Postgres>,
+    client: &YfClient,
+    tickers: &[String],
+) -> Result<(), AppError> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<QuoteRecord>(CHANNEL_BUFFER);
 
-    let client: YfClient = YfClient::default();
-
-    let tickers: Vec<(String, Ticker)> = prepare_tickers(tickers, &client);
+    let tickers: Vec<(String, Ticker)> = prepare_tickers(tickers, client);
     info!(count = tickers.len(), "spawning fetch tasks");
 
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES));
     let mut handles = Vec::with_capacity(tickers.len());
     for (symbol, t) in tickers {
         let tx_clone = tx.clone();
+        let semaphore = Arc::clone(&semaphore);
         let handle = tokio::spawn({
             let symbol = symbol.clone();
             async move {
+                let Ok(_permit) = semaphore.acquire_owned().await else {
+                    return;
+                };
                 debug!(%symbol, "fetch task started");
                 match fetch_quote(&symbol, &t).await {
                     Ok(Some(quote)) => {
@@ -51,7 +64,7 @@ pub async fn fetch_and_store(pool: &Pool<Postgres>, tickers: &[String]) -> Resul
         match store_quote_to_db(&quote, pool).await {
             Ok(id) => {
                 stored += 1;
-                info!(ticker = %quote.ticker.as_deref().unwrap_or("<none>"), ?id, "stored quote");
+                info!(ticker = %quote.ticker.as_deref().unwrap_or("<none>"), id, "stored quote");
             }
             Err(e) => {
                 failed += 1;

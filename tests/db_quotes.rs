@@ -23,16 +23,11 @@ async fn test_store_returns_id(pool: sqlx::PgPool) {
         "store_quote_to_db returned an error: {:?}",
         result
     );
-    let id = result.unwrap();
-    assert!(
-        id.is_some(),
-        "expected Some(id) for a fresh insert, got None"
-    );
-    assert!(id.unwrap() > 0, "returned id should be positive");
+    assert!(result.unwrap() > 0, "returned id should be positive");
 }
 
 #[sqlx::test]
-async fn test_store_duplicate_returns_none(pool: sqlx::PgPool) {
+async fn test_store_duplicate_returns_existing_id(pool: sqlx::PgPool) {
     let fixed_ts: DateTime<Utc> = DateTime::from_timestamp(1_000_000, 0).unwrap();
     let quote = QuoteRecord {
         id: None,
@@ -47,12 +42,14 @@ async fn test_store_duplicate_returns_none(pool: sqlx::PgPool) {
     let first = store_quote_to_db(&quote, &pool)
         .await
         .expect("first insert should succeed");
-    assert!(first.is_some(), "first insert should return Some(id)");
 
     let second = store_quote_to_db(&quote, &pool)
         .await
         .expect("duplicate insert should not error");
-    assert!(second.is_none(), "duplicate insert should return None");
+    assert_eq!(
+        first, second,
+        "duplicate insert should return the existing row's id"
+    );
 }
 
 #[sqlx::test]
@@ -100,28 +97,18 @@ async fn test_dump_to_csv_creates_file(pool: sqlx::PgPool) {
         .await
         .expect("store failed");
 
-    let result = dump_table_to_csv(&pool).await;
+    let dir = std::env::temp_dir();
+    let path = dump_table_to_csv(&pool, &dir)
+        .await
+        .expect("dump_table_to_csv returned an error");
+
+    assert!(path.starts_with(&dir), "CSV should be written inside `dir`");
+    let name = path.file_name().unwrap().to_string_lossy();
     assert!(
-        result.is_ok(),
-        "dump_table_to_csv returned an error: {:?}",
-        result
+        name.starts_with("quotes_dump_") && name.ends_with(".csv"),
+        "unexpected CSV filename: {name}"
     );
+    assert!(path.exists(), "returned path should exist on disk");
 
-    let csv_file = std::fs::read_dir(".")
-        .expect("could not read current directory")
-        .filter_map(|entry| entry.ok())
-        .find(|entry| {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            name_str.starts_with("quotes_dump_") && name_str.ends_with(".csv")
-        });
-
-    assert!(
-        csv_file.is_some(),
-        "no quotes_dump_*.csv file found after dump"
-    );
-
-    if let Some(file) = csv_file {
-        let _ = std::fs::remove_file(file.path());
-    }
+    let _ = std::fs::remove_file(&path);
 }
