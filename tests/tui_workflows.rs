@@ -15,10 +15,7 @@ fn tui_quote(ticker: &str, price: f64, seq: u32) -> QuoteRecord {
         price: Some(price),
         previous_close: Some(price - 2.0),
         day_volume: Some(1_000_000.0),
-        as_of: Some(
-            Utc.with_ymd_and_hms(2024, 1, 1, 0, minute, second)
-                .unwrap(),
-        ),
+        as_of: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, minute, second).unwrap()),
     }
 }
 
@@ -29,7 +26,9 @@ async fn test_tui_initial_load_returns_recent_200(pool: sqlx::PgPool) {
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
+        .await
+        .unwrap();
 
     assert_eq!(rows.len(), 10, "all 10 quotes should be returned");
 
@@ -55,7 +54,9 @@ async fn test_tui_new_fetch_appears_at_top_of_recent(pool: sqlx::PgPool) {
     let new_quote = tui_quote("NEWT", 999.0, 100);
     store_quote_to_db(&new_quote, &pool).await.unwrap();
 
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
+        .await
+        .unwrap();
 
     assert_eq!(rows.len(), 6, "should have 6 rows total");
     assert_eq!(
@@ -174,9 +175,15 @@ async fn test_tui_page_limit_matches_startup(pool: sqlx::PgPool) {
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200).await.unwrap();
+    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
+        .await
+        .unwrap();
 
-    assert_eq!(rows.len(), 200, "fetch_recent must respect the 200-row limit");
+    assert_eq!(
+        rows.len(),
+        200,
+        "fetch_recent must respect the 200-row limit"
+    );
 
     assert_eq!(
         rows[0].ticker.as_deref(),
