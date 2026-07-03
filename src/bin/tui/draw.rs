@@ -9,6 +9,8 @@
 //! All colours come from the [`Theme`] on [`App`]; nothing in this module
 //! hardcodes a palette.
 
+use std::{collections::HashMap, time::Instant};
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -22,7 +24,7 @@ use ratatui::{
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
-use yfinance::models::{QuoteRecord, QuoteRecordAnalysis};
+use yfinance::models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis};
 
 use super::app::App;
 use super::theme::Theme;
@@ -133,10 +135,23 @@ fn opt_cell<T>(value: Option<T>, fmt: impl Fn(T) -> String) -> Cell<'static> {
 /// Up-colour when the price is above the previous close, down-colour when
 /// below, neutral when effectively unchanged. Shared by the table rows and the
 /// stock-detail modal.
-fn price_change_color(stock: &QuoteRecord, t: &Theme) -> Color {
+fn price_change_color(
+    stock: &QuoteRecord,
+    flash_map: &HashMap<String, (f64, Instant)>,
+    t: &Theme,
+) -> Color {
     let price = stock.price.unwrap_or_default();
     let prev = stock.previous_close.unwrap_or_default();
-    let diff = price - prev;
+
+    // Attempt for a map hit, fall back to curr - prev if no flash record exists, or if the flash
+    // record is stale.
+    let diff = stock
+        .ticker
+        .as_deref()
+        .and_then(|t| flash_map.get(&t.to_ascii_uppercase()))
+        .filter(|(_, ts)| ts.elapsed() < FLASH_TTL)
+        .map(|(diff, _)| *diff)
+        .unwrap_or_else(|| price - prev);
     // Use an epsilon band so rounding to display precision doesn't trigger a
     // false green/red when price and prev are effectively equal.
     if diff > 0.001 {
@@ -187,7 +202,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             Cell::from(q.ticker.as_deref().unwrap_or("-")),
             Cell::from(q.name.as_deref().unwrap_or("-")),
             opt_cell(q.price, |p| format!("{p:.2}"))
-                .style(Style::default().fg(price_change_color(q, &t))),
+                .style(Style::default().fg(price_change_color(q, &app.row_flash_map, &t))),
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
             opt_cell(q.day_volume, |v| format!("{v:.0}")),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
@@ -398,7 +413,7 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
             label("Price: ", &t),
             Span::styled(
                 money_opt(stock.price),
-                Style::default().fg(price_change_color(stock, &t)),
+                Style::default().fg(price_change_color(stock, &app.row_flash_map, &t)),
             ),
             Span::raw("    "),
             label("Prev Close: ", &t),

@@ -6,6 +6,7 @@
 //! [`draw`](super::draw::draw) then renders the current state on the next
 //! frame.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -89,6 +90,10 @@ pub struct App {
     pub stream_handle: Option<StreamHandle>,
     /// Subscribed symbols - starts as an empty vec, fills when subscribed
     pub subscribed_symbols: Vec<String>,
+    /// Per-ticker price-flash state (signed price delta + timestamp), keyed by
+    /// uppercase ticker. Written on each `QuoteTick`; read by the draw layer.
+    /// Expired entries are evicted opportunistically in [`QuoteTick::record_flash`].
+    pub row_flash_map: HashMap<String, (f64, Instant)>,
 }
 
 /// State for the ticker input box.
@@ -227,6 +232,7 @@ impl App {
             theme: Theme::for_appearance(appearance),
             stream_handle: None,
             subscribed_symbols: Vec::new(),
+            row_flash_map: HashMap::new(),
         }
     }
 
@@ -275,9 +281,19 @@ impl App {
                 self.stock_modal.chart_data = Some(data);
             }
             AppEvent::QuoteTick(tick) => {
+                // Record the flash from the row's pre-update price, using the
+                // same case-insensitive match as `apply` so a tick for a ticker
+                // not currently in `rows` is a silent no-op, never a panic.
+                if let Some(row) = self.db_display.rows.iter().find(|r| {
+                    matches!(
+                        (r.ticker.as_deref(), tick.ticker.as_deref()),
+                        (Some(a), Some(b)) if a.eq_ignore_ascii_case(b)
+                    )
+                }) {
+                    tick.record_flash(&mut self.row_flash_map, row);
+                }
                 let range = self.db_display.window_range();
                 tick.apply(&mut self.db_display.rows[range]);
-                self.logs.push("[TICK]".into());
             }
             AppEvent::StreamStarted(handle) => {
                 self.stream_handle = Some(handle);

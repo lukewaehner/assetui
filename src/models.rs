@@ -1,3 +1,8 @@
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+
 use chrono::{DateTime, Utc};
 use yfinance_rs::{PriceTarget, QuoteUpdate, RecommendationSummary};
 
@@ -43,6 +48,11 @@ pub struct QuoteRecordAnalysis {
     pub price_target: Option<PriceTarget>,
 }
 
+/// How long a price-tick flash stays coloured before reverting to the default
+/// day-change styling. Shared by [`QuoteTick::record_flash`] (eviction) and the
+/// TUI's `price_change_color` (render check) so the two never drift.
+pub const FLASH_TTL: Duration = Duration::from_millis(500);
+
 pub struct QuoteTick {
     pub ticker: Option<String>,
     pub price: Option<f64>,
@@ -79,6 +89,23 @@ impl QuoteTick {
         row.day_volume = self.day_volume.or(row.day_volume);
         row.as_of = self.as_of.or(row.as_of);
         Some(i)
+    }
+
+    /// Records a price-flash for this tick's ticker: the signed delta from the
+    /// row's pre-update price and the current time. Expired entries are evicted
+    /// first so the map stays bounded. A no-op when either price is absent.
+    pub fn record_flash(&self, map: &mut HashMap<String, (f64, Instant)>, record: &QuoteRecord) {
+        // Drop flashes that have already expired so the map doesn't grow unbounded.
+        map.retain(|_, (_, ts)| ts.elapsed() < FLASH_TTL);
+
+        let (Some(new), Some(old)) = (self.price, record.price) else {
+            return;
+        };
+        if let Some(ticker) = self.ticker.as_deref() {
+            // Key on the uppercase ticker so the render-side lookup (which uses
+            // the stored row's ticker) matches regardless of source casing.
+            map.insert(ticker.to_ascii_uppercase(), (new - old, Instant::now()));
+        }
     }
 }
 
@@ -220,5 +247,75 @@ mod tests {
         assert_eq!(rows[0].price, Some(101.0)); // updated
         assert_eq!(rows[0].previous_close, Some(99.0)); // preserved
         assert_eq!(rows[0].day_volume, Some(5_000.0)); // preserved
+    }
+
+    /// A flash records the signed delta from the row's old price, keyed by the
+    /// uppercase ticker regardless of the source casing.
+    #[test]
+    fn test_record_flash_records_uppercase_keyed_delta() {
+        let mut map = HashMap::new();
+        let record = QuoteRecord {
+            ticker: Some("aapl".to_string()),
+            price: Some(100.0),
+            ..Default::default()
+        };
+        let tick = QuoteTick {
+            ticker: Some("aapl".to_string()),
+            price: Some(102.5),
+            previous_close: None,
+            day_volume: None,
+            as_of: None,
+        };
+        tick.record_flash(&mut map, &record);
+        let (diff, _) = map.get("AAPL").expect("flash keyed by uppercase ticker");
+        assert!((diff - 2.5).abs() < 1e-9);
+    }
+
+    /// A tick with no price (or against a row with no price) records nothing.
+    #[test]
+    fn test_record_flash_noop_without_prices() {
+        let mut map = HashMap::new();
+        let record = QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: None,
+            ..Default::default()
+        };
+        let tick = QuoteTick {
+            ticker: Some("AAPL".to_string()),
+            price: Some(100.0),
+            previous_close: None,
+            day_volume: None,
+            as_of: None,
+        };
+        tick.record_flash(&mut map, &record);
+        assert!(map.is_empty());
+    }
+
+    /// Expired entries are evicted when a new flash is recorded, so the map
+    /// cannot grow without bound.
+    #[test]
+    fn test_record_flash_evicts_expired() {
+        let mut map = HashMap::new();
+        let expired = Instant::now()
+            .checked_sub(FLASH_TTL + Duration::from_millis(100))
+            .expect("test clock underflow");
+        map.insert("OLD".to_string(), (1.0, expired));
+
+        let record = QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(100.0),
+            ..Default::default()
+        };
+        let tick = QuoteTick {
+            ticker: Some("AAPL".to_string()),
+            price: Some(101.0),
+            previous_close: None,
+            day_volume: None,
+            as_of: None,
+        };
+        tick.record_flash(&mut map, &record);
+
+        assert!(!map.contains_key("OLD"), "expired entry should be evicted");
+        assert!(map.contains_key("AAPL"));
     }
 }
