@@ -9,17 +9,15 @@ use ratatui_notifications::{
     Anchor, Animation, AutoDismiss, Level, Notification, Notifications, SlideDirection,
 };
 use tokio::sync::mpsc;
-use yfinance::models::QuoteTick;
-use yfinance::stream::start_quote_stream;
 
 use super::theme::{Appearance, Theme};
-use yfinance::fetch::fetch_chart_data;
 use yfinance::{
-    fetch::{fetch_analysis, fetch_quote_and_store, fetch_sorted},
-    models::{QuoteRecord, QuoteRecordAnalysis},
+    models::{QuoteRecord, QuoteRecordAnalysis, QuoteTick},
     sort::{SortMode, SortOrder},
 };
 use yfinance_rs::{Candle, StreamHandle};
+
+mod tasks;
 
 /// Maximum number of rows fetched from the database per reload.
 const PAGE_FETCH_LIMIT: i64 = 200;
@@ -341,55 +339,6 @@ impl App {
         }
     }
 
-    fn spawn_fetch(&self, symbol: String) {
-        let tx = self.event_tx.clone();
-        let pool = self.pool.clone();
-        tokio::spawn(async move {
-            let _ = tx.send(AppEvent::FetchSpawned(symbol.clone()));
-            match fetch_quote_and_store(&pool, &symbol).await {
-                Ok(Some(record)) => {
-                    let _ = tx.send(AppEvent::FetchCompleted(record));
-                }
-                Ok(None) => {
-                    let _ = tx.send(AppEvent::LogLine(format!("no quote found for {symbol}")));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("{symbol}: {e}")));
-                }
-            }
-        });
-    }
-
-    fn spawn_stream(&self, symbols: Vec<String>) {
-        let tx = self.event_tx.clone();
-        let count = symbols.len();
-        tokio::spawn(async move {
-            match start_quote_stream(symbols).await {
-                Ok(Some((handle, mut receiver))) => {
-                    let _ = tx.send(AppEvent::StreamStarted(handle));
-                    let _ = tx.send(AppEvent::LogLine(format!(
-                        "[STREAM] connected: {count} tickers"
-                    )));
-                    while let Some(update) = receiver.recv().await {
-                        if tx
-                            .send(AppEvent::QuoteTick(QuoteTick::from(update)))
-                            .is_err()
-                        {
-                            break;
-                        };
-                    }
-                    let _ = tx.send(AppEvent::LogLine("quote stream ended".to_string()));
-                }
-                Ok(None) => {
-                    let _ = tx.send(AppEvent::LogLine("no symbols to stream".to_string()));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("stream error: {e}")));
-                }
-            }
-        });
-    }
-
     /// Sets the sort column and re-fetches the table.
     fn set_sort_mode(&mut self, mode: SortMode) {
         self.logs.push(format!("[SORT] mode → {mode:?}"));
@@ -446,6 +395,41 @@ impl App {
         self.db_display.table_state.select(Some(i));
     }
 
+    pub fn set_page_size(&mut self, size: usize) {
+        let size = size.max(1);
+        if self.db_display.page_size == size {
+            return;
+        }
+        let global_idx = self
+            .db_display
+            .table_state
+            .selected()
+            .map(|i| self.db_display.page * self.db_display.page_size + i);
+
+        self.db_display.page_size = size;
+
+        let target_page = global_idx.map(|gi| gi / size).unwrap_or(0);
+        self.db_display.page = target_page.min(self.db_display.total_pages().saturating_sub(1));
+
+        let win_len = self.db_display.window_len();
+        if win_len == 0 {
+            self.db_display.table_state.select(None);
+        } else {
+            let local = global_idx.map(|gi| gi % size).unwrap_or(0).min(win_len - 1);
+            self.db_display.table_state.select(Some(local));
+        }
+        self.resubscribe_stream();
+    }
+
+    /// Selects row 0 in the current window, or clears selection if empty.
+    fn reset_selection(&mut self) {
+        if self.db_display.window_len() == 0 {
+            self.db_display.table_state.select(None);
+        } else {
+            self.db_display.table_state.select(Some(0));
+        }
+    }
+
     fn open_info_modal(&mut self) {
         let Some(stock) = self
             .db_display
@@ -487,130 +471,6 @@ impl App {
         if let Some(t) = ticker.as_deref() {
             self.spawn_chart_data(t);
         }
-    }
-
-    pub fn set_page_size(&mut self, size: usize) {
-        let size = size.max(1);
-        if self.db_display.page_size == size {
-            return;
-        }
-        let global_idx = self
-            .db_display
-            .table_state
-            .selected()
-            .map(|i| self.db_display.page * self.db_display.page_size + i);
-
-        self.db_display.page_size = size;
-
-        let target_page = global_idx.map(|gi| gi / size).unwrap_or(0);
-        self.db_display.page = target_page.min(self.db_display.total_pages().saturating_sub(1));
-
-        let win_len = self.db_display.window_len();
-        if win_len == 0 {
-            self.db_display.table_state.select(None);
-        } else {
-            let local = global_idx.map(|gi| gi % size).unwrap_or(0).min(win_len - 1);
-            self.db_display.table_state.select(Some(local));
-        }
-        self.resubscribe_stream();
-    }
-
-    /// Selects row 0 in the current window, or clears selection if empty.
-    fn reset_selection(&mut self) {
-        if self.db_display.window_len() == 0 {
-            self.db_display.table_state.select(None);
-        } else {
-            self.db_display.table_state.select(Some(0));
-        }
-    }
-
-    pub fn spawn_theme_watcher(&self) {
-        let tx = self.event_tx.clone();
-        let mut last = self.appearance;
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(2));
-            loop {
-                ticker.tick().await;
-                let current = poll_appearance().await;
-                if current != last {
-                    last = current;
-                    if tx.send(AppEvent::ThemeChanged(current)).is_err() {
-                        break;
-                    }
-                }
-            }
-        });
-    }
-
-    pub fn spawn_reload(&self) {
-        let pool = self.pool.clone();
-        let tx = self.event_tx.clone();
-        let mode = self.db_display.sort_mode;
-        let order = self.db_display.sort_order;
-        tokio::spawn(async move {
-            match fetch_sorted(&pool, mode, order, PAGE_FETCH_LIMIT).await {
-                Ok(rows) => {
-                    let _ = tx.send(AppEvent::PageLoaded(rows));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("Failed to fetch quotes: {e}")));
-                }
-            }
-        });
-    }
-
-    fn spawn_analysis(&self, symbol: &str) {
-        let tx = self.event_tx.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_analysis(&symbol).await {
-                Ok(a) => {
-                    let _ = tx.send(AppEvent::StockAnalysisReady(a));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
-                }
-            }
-        });
-    }
-
-    fn spawn_chart_data(&self, symbol: &str) {
-        let tx = self.event_tx.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_chart_data(&symbol).await {
-                Ok(a) => {
-                    let _ = tx.send(AppEvent::ChartDataReady(a));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
-                }
-            }
-        });
-    }
-
-    // TODO(STREAM): debounce if pagination thrash causes reconnect spam.
-    fn resubscribe_stream(&mut self) {
-        let tickers = self.db_display.window_tickers();
-        if self.subscribed_symbols == tickers {
-            return;
-        }
-        if let Some(handle) = self.stream_handle.take() {
-            handle.abort();
-        }
-        self.subscribed_symbols = tickers.clone();
-        self.spawn_stream(tickers);
-    }
-}
-
-async fn poll_appearance() -> Appearance {
-    match tokio::process::Command::new("defaults")
-        .args(["read", "-g", "AppleInterfaceStyle"])
-        .output()
-        .await
-    {
-        Ok(output) => super::theme::parse_appearance(&String::from_utf8_lossy(&output.stdout)),
-        Err(_) => Appearance::Dark,
     }
 }
 

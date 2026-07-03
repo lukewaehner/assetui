@@ -111,6 +111,19 @@ fn opt_cell<T>(value: Option<T>, fmt: impl Fn(T) -> String) -> Cell<'static> {
     Cell::from(value.map(fmt).unwrap_or_else(|| "-".to_string()))
 }
 
+fn price_change_color(stock: &QuoteRecord, t: &Theme) -> Color {
+    let price = stock.price.unwrap_or_default();
+    let prev = stock.previous_close.unwrap_or_default();
+    let diff = price - prev;
+    if diff > 0.001 {
+        t.up
+    } else if diff < -0.001 {
+        t.down
+    } else {
+        t.neutral
+    }
+}
+
 fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Color) {
     let t = app.theme;
     let page_size = area.height.saturating_sub(4).max(1) as usize;
@@ -624,17 +637,4 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
         .y_axis(y_axis)
         .legend_position(Some(LegendPosition::TopLeft));
     f.render_widget(chart, area);
-}
-
-fn price_change_color(stock: &QuoteRecord, t: &Theme) -> Color {
-    let price = stock.price.unwrap_or_default();
-    let prev = stock.previous_close.unwrap_or_default();
-    let diff = price - prev;
-    if diff > 0.001 {
-        t.up
-    } else if diff < -0.001 {
-        t.down
-    } else {
-        t.neutral
-    }
 }
