@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use yfinance::models::QuoteTick;
 use yfinance::stream::start_quote_stream;
 
-use super::theme::Theme;
+use super::theme::{Appearance, Theme};
 use yfinance::fetch::fetch_chart_data;
 use yfinance::{
     fetch::{fetch_analysis, fetch_quote_and_store, fetch_sorted},
@@ -44,6 +44,8 @@ pub enum AppEvent {
     QuoteTick(QuoteTick),
     /// A stream was started for the current window of tickers.
     StreamStarted(StreamHandle),
+    /// The macOS system appearance changed.
+    ThemeChanged(Appearance),
     Error(String),
 }
 
@@ -69,6 +71,8 @@ pub struct App {
     pub stock_modal: StockInfoModal,
     /// Slide-in error notifications shown top-right.
     pub notifications: Notifications,
+    /// The system appearance the current [`theme`](Self::theme) was derived from.
+    pub appearance: Appearance,
     /// Colour palette used by every draw call.
     pub theme: Theme,
     /// Handler for the live quotes stream.
@@ -172,6 +176,7 @@ fn sort_mode_for_key(key: char) -> Option<SortMode> {
 impl App {
     /// Creates a new `App` with sensible defaults.
     pub fn new(pool: sqlx::PgPool, event_tx: mpsc::UnboundedSender<AppEvent>) -> Self {
+        let appearance = super::theme::detect_appearance();
         Self {
             input_mode: InputMode {
                 input: String::new(),
@@ -200,7 +205,8 @@ impl App {
                 chart_data: None,
             },
             notifications: Notifications::new(),
-            theme: super::theme::MUTED,
+            appearance,
+            theme: Theme::for_appearance(appearance),
             stream_handle: None,
             subscribed_symbols: Vec::new(),
         }
@@ -253,6 +259,10 @@ impl App {
             }
             AppEvent::StreamStarted(handle) => {
                 self.stream_handle = Some(handle);
+            }
+            AppEvent::ThemeChanged(appearance) => {
+                self.appearance = appearance;
+                self.theme = Theme::for_appearance(appearance);
             }
         }
     }
@@ -514,6 +524,24 @@ impl App {
         }
     }
 
+    pub fn spawn_theme_watcher(&self) {
+        let tx = self.event_tx.clone();
+        let mut last = self.appearance;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                ticker.tick().await;
+                let current = poll_appearance().await;
+                if current != last {
+                    last = current;
+                    if tx.send(AppEvent::ThemeChanged(current)).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     pub fn spawn_reload(&self) {
         let pool = self.pool.clone();
         let tx = self.event_tx.clone();
@@ -572,6 +600,17 @@ impl App {
         }
         self.subscribed_symbols = tickers.clone();
         self.spawn_stream(tickers);
+    }
+}
+
+async fn poll_appearance() -> Appearance {
+    match tokio::process::Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+        .await
+    {
+        Ok(output) => super::theme::parse_appearance(&String::from_utf8_lossy(&output.stdout)),
+        Err(_) => Appearance::Dark,
     }
 }
 

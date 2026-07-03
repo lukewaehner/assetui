@@ -38,6 +38,7 @@ async fn main() -> io::Result<()> {
 
     let mut app = App::new(pool, event_tx);
     app.spawn_reload();
+    app.spawn_theme_watcher();
 
     let mut terminal = ratatui::init();
     let result = run(&mut terminal, &mut app, &mut event_rx).await;
