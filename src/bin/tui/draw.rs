@@ -332,27 +332,49 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     mid
 }
 
-/// Builds a modal block: panel background, themed border, and a bold accent
-/// ` title ` - the shared overlay pattern for the info and chart modals.
-fn modal_block(title: String, t: &Theme) -> Block<'static> {
+/// Builds a modal block: panel background, themed border, a composed title
+/// line, and inner padding so content doesn't sit against the frame - the
+/// shared overlay chrome for the info and chart modals.
+fn modal_block(title: Line<'static>, t: &Theme) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(t.border).bg(t.panel))
-        .title(block_title(title, t))
+        .title(title)
+        .padding(Padding::new(2, 2, 1, 0))
         .style(Style::default().bg(t.panel))
 }
 
-/// A dimmed label span for `Label: value` pairs.
+/// ` TICKER · suffix ` modal title: bold accent ticker, dimmed suffix.
+fn modal_title(ticker: &str, suffix: &str, t: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            ticker.to_string(),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" · {suffix} "), Style::default().fg(t.dim)),
+    ])
+}
+
+/// A dimmed label span for `label  value` pairs.
 fn label(text: &'static str, t: &Theme) -> Span<'static> {
     Span::styled(text, Style::default().fg(t.dim))
 }
 
-/// A bold accent section heading.
-fn heading(text: &'static str, t: &Theme) -> Paragraph<'static> {
-    Paragraph::new(Span::styled(
+/// A dim, bold, upper-case section heading with an optional ` · meta` suffix,
+/// e.g. `ANALYST CONSENSUS · 2026-06`.
+fn section_heading(text: &'static str, meta: Option<String>, t: &Theme) -> Line<'static> {
+    let mut spans = vec![Span::styled(
         text,
-        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-    ))
+        Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
+    )];
+    if let Some(meta) = meta {
+        spans.push(Span::styled(
+            format!(" · {meta}"),
+            Style::default().fg(t.dim),
+        ));
+    }
+    Line::from(spans)
 }
 
 /// A dimmed "Loading…"-style placeholder paragraph.
@@ -367,205 +389,399 @@ fn money_opt(value: Option<f64>) -> String {
         .unwrap_or_else(|| "-".into())
 }
 
+/// Human-readable share volume: `55_000_000.0` → `"55.0M"`.
+fn fmt_volume(v: f64) -> String {
+    let abs = v.abs();
+    if abs >= 1e9 {
+        format!("{:.1}B", v / 1e9)
+    } else if abs >= 1e6 {
+        format!("{:.1}M", v / 1e6)
+    } else if abs >= 1e3 {
+        format!("{:.1}K", v / 1e3)
+    } else {
+        format!("{v:.0}")
+    }
+}
+
 // ===== Stock detail modal =====
 
 /// Renders the stock-detail overlay modal at 65 × 55% of the terminal area.
 ///
-/// Shows the ticker, company name, current price, previous close, and - once
-/// the background fetch completes - the analyst consensus breakdown and price
-/// targets.  While the analysis is loading a "Loading analysis…" placeholder
-/// is shown instead.
+/// Layout (top to bottom): bold price with the day-change delta, dimmed
+/// label/value quote metadata, an ANALYST CONSENSUS section (rating chip,
+/// proportional buy/hold/sell distribution bar, per-bucket legend), a PRICE
+/// TARGET section (low→high range gauge with the current price and mean
+/// target plotted on it), and a bottom-right key-hint footer.  While the
+/// analysis is loading a dimmed placeholder holds the sections' place.
 fn draw_stock_modal(f: &mut Frame, app: &mut App) {
     let t = app.theme;
     let area = centered_rect(65, 55, f.area());
     f.render_widget(Clear, area);
     let stock = &app.stock_modal.stock;
-    // Cut title since the ticker is already inside the modal body
-    // Helps avoid modal title being too long
-    let modal = modal_block("".into(), &t);
+    let modal = modal_block(
+        modal_title(
+            stock.ticker.as_deref().unwrap_or("-"),
+            stock.name.as_deref().unwrap_or("-"),
+            &t,
+        ),
+        &t,
+    );
 
     let inner = modal.inner(area);
     f.render_widget(modal, area);
 
-    let [title_area, price_area, _, analysis_area] = Layout::vertical([
-        Constraint::Length(1), // ticker + name
-        Constraint::Length(1), // price + prev close
-        Constraint::Length(1), // blank
-        Constraint::Min(0),    // analysis
-    ])
-    .areas(inner);
+    let [content, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
 
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
+    let mut lines: Vec<Line> = vec![
+        price_line(stock, &app.row_flash_map, &t),
+        Line::raw(""),
+        Line::from(vec![
+            label("prev close  ", &t),
+            Span::styled(money_opt(stock.previous_close), Style::default().fg(t.fg)),
+            Span::raw("      "),
+            label("volume  ", &t),
             Span::styled(
-                stock.ticker.as_deref().unwrap_or("-").to_string(),
-                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  ·  ", Style::default().fg(t.dim)),
-            Span::styled(
-                stock.name.as_deref().unwrap_or("-").to_string(),
+                stock
+                    .day_volume
+                    .map(fmt_volume)
+                    .unwrap_or_else(|| "-".into()),
                 Style::default().fg(t.fg),
             ),
-        ])),
-        title_area,
-    );
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            label("Price: ", &t),
+        ]),
+        Line::from(vec![
+            label("as of       ", &t),
             Span::styled(
-                money_opt(stock.price),
-                Style::default().fg(price_change_color(stock, &app.row_flash_map, &t)),
+                stock
+                    .as_of
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| "-".into()),
+                Style::default().fg(t.fg),
             ),
-            Span::raw("    "),
-            label("Prev Close: ", &t),
-            Span::styled(
-                money_opt(stock.previous_close),
-                Style::default().fg(t.neutral),
-            ),
-        ])),
-        price_area,
-    );
+        ]),
+        Line::raw(""),
+    ];
 
     match &app.stock_modal.analysis {
         None => {
-            f.render_widget(placeholder("Loading analysis...", &t), analysis_area);
+            lines.push(section_heading("ANALYST CONSENSUS", None, &t));
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                "loading analysis…",
+                Style::default().fg(t.dim),
+            ));
         }
-        Some(analysis) => draw_analysis(f, analysis_area, analysis, &t),
+        Some(analysis) => {
+            push_analysis_lines(
+                &mut lines,
+                analysis,
+                stock.price,
+                content.width as usize,
+                &t,
+            );
+        }
     }
+
+    f.render_widget(Paragraph::new(lines), content);
+
+    // Bottom-right key hints, mirroring the status bar's accent-key style.
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("enter", Style::default().fg(t.accent)),
+            Span::styled(" chart · ", Style::default().fg(t.dim)),
+            Span::styled("esc", Style::default().fg(t.accent)),
+            Span::styled(" close", Style::default().fg(t.dim)),
+        ]))
+        .alignment(Alignment::Right),
+        footer,
+    );
 }
 
-/// Renders the analyst consensus and price-target sections of the modal.
-fn draw_analysis(f: &mut Frame, area: Rect, analysis: &QuoteRecordAnalysis, t: &Theme) {
-    let [
-        consensus_heading,
-        consensus_line,
-        _,
-        breakdown,
-        _,
-        target_heading,
-        target_line,
-        _,
-    ] = Layout::vertical([
-        Constraint::Length(1), // "Analyst Consensus" heading
-        Constraint::Length(1), // period + consensus rating
-        Constraint::Length(1), // blank
-        Constraint::Length(2), // buy/sell breakdown table
-        Constraint::Length(1), // blank
-        Constraint::Length(1), // "Price Target" heading
-        Constraint::Length(1), // mean / low / high / analysts
-        Constraint::Min(0),
-    ])
-    .areas(area);
-
-    f.render_widget(heading("Analyst Consensus", t), consensus_heading);
-    if let Some(rec) = &analysis.recommendation_summary {
-        draw_consensus(f, consensus_line, breakdown, rec, t);
+/// `$189.50  ▲ $2.25 (+1.20%)` - the current price in the live change colour
+/// with the day-change delta beside it.  Delta spans are omitted when either
+/// price is missing.
+fn price_line(
+    stock: &QuoteRecord,
+    flash_map: &HashMap<String, (f64, Instant)>,
+    t: &Theme,
+) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        money_opt(stock.price),
+        Style::default()
+            .fg(price_change_color(stock, flash_map, t))
+            .add_modifier(Modifier::BOLD),
+    )];
+    if let (Some(price), Some(prev)) = (stock.price, stock.previous_close)
+        && prev != 0.0
+    {
+        let diff = price - prev;
+        let pct = diff / prev * 100.0;
+        let (arrow, color) = if diff > 0.001 {
+            ("▲", t.up)
+        } else if diff < -0.001 {
+            ("▼", t.down)
+        } else {
+            ("·", t.neutral)
+        };
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("{arrow} ${:.2} ({pct:+.2}%)", diff.abs()),
+            Style::default().fg(color),
+        ));
     }
-
-    f.render_widget(heading("Price Target", t), target_heading);
-    if let Some(pt) = &analysis.price_target {
-        draw_price_target(f, target_line, pt, t);
-    }
+    Line::from(spans)
 }
 
-/// Renders the consensus rating line and the buy/sell breakdown table.
-fn draw_consensus(
-    f: &mut Frame,
-    line_area: Rect,
-    table_area: Rect,
-    rec: &RecommendationSummary,
+/// Appends the ANALYST CONSENSUS and PRICE TARGET sections to `lines`.
+fn push_analysis_lines(
+    lines: &mut Vec<Line<'static>>,
+    analysis: &QuoteRecordAnalysis,
+    current_price: Option<f64>,
+    width: usize,
     t: &Theme,
 ) {
-    let period_str = rec
-        .latest_period
+    let period = analysis
+        .recommendation_summary
         .as_ref()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "-".into());
-    let mean_str = rec
-        .mean
-        .map(|m| format!("{m:.2}"))
-        .unwrap_or_else(|| "-".into());
-    let rating = rec.mean_rating_text.as_deref().unwrap_or("-");
+        .and_then(|r| r.latest_period.as_ref().map(|p| p.to_string()));
+    lines.push(section_heading("ANALYST CONSENSUS", period, t));
+    lines.push(Line::raw(""));
+    match &analysis.recommendation_summary {
+        Some(rec) => push_consensus_lines(lines, rec, width, t),
+        None => lines.push(Line::styled(
+            "no analyst coverage",
+            Style::default().fg(t.dim),
+        )),
+    }
+    lines.push(Line::raw(""));
 
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            label("Period: ", t),
-            Span::raw(period_str),
-            Span::raw("    "),
-            label("Consensus: ", t),
-            Span::styled(
-                rating,
-                Style::default()
-                    .fg(rating_color(rating, t))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("  ({mean_str})"), Style::default().fg(t.dim)),
-        ])),
-        line_area,
-    );
-
-    let fmt_u = |v: Option<u32>| v.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
-    f.render_widget(
-        Table::new(
-            [
-                Row::new([
-                    Cell::from("Str Buy").style(
-                        Style::default()
-                            .fg(t.up_strong)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Cell::from("Buy").style(Style::default().fg(t.up)),
-                    Cell::from("Hold").style(Style::default().fg(t.neutral)),
-                    Cell::from("Sell").style(Style::default().fg(t.down)),
-                    Cell::from("Str Sell").style(
-                        Style::default()
-                            .fg(t.down_strong)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-                Row::new([
-                    Cell::from(fmt_u(rec.strong_buy)),
-                    Cell::from(fmt_u(rec.buy)),
-                    Cell::from(fmt_u(rec.hold)),
-                    Cell::from(fmt_u(rec.sell)),
-                    Cell::from(fmt_u(rec.strong_sell)),
-                ]),
-            ],
-            [Constraint::Ratio(1, 5); 5],
-        ),
-        table_area,
-    );
+    let analysts = analysis
+        .price_target
+        .as_ref()
+        .and_then(|p| p.number_of_analysts)
+        .map(|n| format!("{n} analysts"));
+    lines.push(section_heading("PRICE TARGET", analysts, t));
+    lines.push(Line::raw(""));
+    match &analysis.price_target {
+        Some(pt) => push_target_lines(lines, pt, current_price, width, t),
+        None => lines.push(Line::styled(
+            "no price target data",
+            Style::default().fg(t.dim),
+        )),
+    }
 }
 
-/// Renders the mean/low/high price targets and the analyst count.
-fn draw_price_target(f: &mut Frame, area: Rect, pt: &PriceTarget, t: &Theme) {
-    let money = |m: &Option<Price>| {
-        m.as_ref()
-            .map(|p| format!("${:.2}", p.amount()))
-            .unwrap_or_else(|| "-".into())
-    };
+/// Appends the consensus rating chip, the proportional distribution bar, and
+/// the per-bucket count legend.
+fn push_consensus_lines(
+    lines: &mut Vec<Line<'static>>,
+    rec: &RecommendationSummary,
+    width: usize,
+    t: &Theme,
+) {
+    let rating = rec.mean_rating_text.as_deref().unwrap_or("-");
+    let mut head = vec![Span::styled(
+        format!(" {} ", rating.to_uppercase()),
+        Style::default()
+            .fg(t.mode_fg)
+            .bg(rating_color(rating, t))
+            .add_modifier(Modifier::BOLD),
+    )];
+    if let Some(mean) = rec.mean {
+        head.push(Span::styled(
+            format!("  {mean:.1} mean score"),
+            Style::default().fg(t.dim),
+        ));
+    }
+    lines.push(Line::from(head));
 
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            label("Mean: ", t),
-            Span::styled(money(&pt.mean), Style::default().fg(t.neutral)),
+    let buckets = [
+        (rec.strong_buy.unwrap_or(0), t.up_strong, "str buy"),
+        (rec.buy.unwrap_or(0), t.up, "buy"),
+        (rec.hold.unwrap_or(0), t.neutral, "hold"),
+        (rec.sell.unwrap_or(0), t.down, "sell"),
+        (rec.strong_sell.unwrap_or(0), t.down_strong, "str sell"),
+    ];
+    let total: u32 = buckets.iter().map(|(n, _, _)| n).sum();
+    if total == 0 {
+        return;
+    }
+
+    // Distribution bar: one contiguous run of blocks per non-empty bucket,
+    // sized by cumulative rounding so the segments always sum to bar_width.
+    let bar_width = width.clamp(10, 48);
+    let mut bar: Vec<Span> = Vec::new();
+    let mut used = 0usize;
+    let mut acc = 0u32;
+    for (n, color, _) in buckets {
+        acc += n;
+        let end = ((f64::from(acc) / f64::from(total)) * bar_width as f64).round() as usize;
+        if end > used {
+            bar.push(Span::styled(
+                "█".repeat(end - used),
+                Style::default().fg(color),
+            ));
+            used = end;
+        }
+    }
+    lines.push(Line::from(bar));
+
+    let mut legend: Vec<Span> = Vec::new();
+    for (n, color, name) in buckets {
+        if n == 0 {
+            continue;
+        }
+        if !legend.is_empty() {
+            legend.push(Span::styled(" · ", Style::default().fg(t.dim)));
+        }
+        legend.push(Span::styled(
+            format!("{n} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+        legend.push(Span::styled(name, Style::default().fg(t.dim)));
+    }
+    lines.push(Line::from(legend));
+}
+
+/// Appends the low→high target-range gauge (falling back to a plain
+/// low/mean/high row when the range is degenerate or the modal too narrow)
+/// and a summary row relating the current price to the mean target.
+fn push_target_lines(
+    lines: &mut Vec<Line<'static>>,
+    pt: &PriceTarget,
+    current_price: Option<f64>,
+    width: usize,
+    t: &Theme,
+) {
+    let to_f64 = |p: &Option<Price>| p.as_ref().map(|p| p.amount().as_f64());
+    let low = to_f64(&pt.low);
+    let high = to_f64(&pt.high);
+    let mean = to_f64(&pt.mean);
+
+    let gauge = match (low, high) {
+        (Some(lo), Some(hi)) if hi > lo => target_gauge(lo, hi, mean, current_price, width, t),
+        _ => None,
+    };
+    match gauge {
+        Some(gauge) => lines.push(gauge),
+        None => lines.push(Line::from(vec![
+            label("low  ", t),
+            Span::styled(money_opt(low), Style::default().fg(t.down)),
             Span::raw("    "),
-            label("Low: ", t),
-            Span::styled(money(&pt.low), Style::default().fg(t.down)),
+            label("mean  ", t),
+            Span::styled(money_opt(mean), Style::default().fg(t.neutral)),
             Span::raw("    "),
-            label("High: ", t),
-            Span::styled(money(&pt.high), Style::default().fg(t.up)),
-            Span::raw("    "),
-            label("Analysts: ", t),
-            Span::raw(
-                pt.number_of_analysts
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| "-".into()),
-            ),
+            label("high  ", t),
+            Span::styled(money_opt(high), Style::default().fg(t.up)),
         ])),
-        area,
-    );
+    }
+
+    // `● price $189.50   ◆ mean $185.00 · ▼ -2.4% to mean`
+    let mut summary: Vec<Span> = Vec::new();
+    if let Some(cur) = current_price {
+        summary.push(Span::styled("● ", Style::default().fg(t.accent)));
+        summary.push(label("price ", t));
+        summary.push(Span::styled(
+            format!("${cur:.2}"),
+            Style::default().fg(t.fg),
+        ));
+        summary.push(Span::raw("   "));
+    }
+    summary.push(Span::styled("◆ ", Style::default().fg(t.neutral)));
+    summary.push(label("mean ", t));
+    summary.push(Span::styled(money_opt(mean), Style::default().fg(t.fg)));
+    if let (Some(m), Some(cur)) = (mean, current_price)
+        && cur > 0.0
+    {
+        let pct = (m - cur) / cur * 100.0;
+        let (arrow, color) = if pct >= 0.0 {
+            ("▲", t.up)
+        } else {
+            ("▼", t.down)
+        };
+        summary.push(Span::styled(" · ", Style::default().fg(t.dim)));
+        summary.push(Span::styled(
+            format!("{arrow} {pct:+.1}%"),
+            Style::default().fg(color),
+        ));
+        summary.push(label(" to mean", t));
+    }
+    lines.push(Line::from(summary));
+}
+
+/// `$120.00 ├───●────◆──────┤ $210.00` - the analyst target range as a track
+/// with the current price (`●`, accent) and mean target (`◆`, neutral)
+/// plotted on it; the current price wins marker collisions and out-of-range
+/// values clamp to the track ends.  Returns `None` when the modal is too
+/// narrow for a meaningful track.
+fn target_gauge(
+    low: f64,
+    high: f64,
+    mean: Option<f64>,
+    current: Option<f64>,
+    width: usize,
+    t: &Theme,
+) -> Option<Line<'static>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        Track,
+        Mean,
+        Current,
+    }
+
+    let low_label = format!("${low:.2} ");
+    let high_label = format!(" ${high:.2}");
+    let track_len = width.checked_sub(low_label.len() + high_label.len() + 2)?;
+    if track_len < 8 {
+        return None;
+    }
+
+    let pos = |v: f64| -> usize {
+        let frac = (v - low) / (high - low);
+        ((frac * (track_len - 1) as f64).round()).clamp(0.0, (track_len - 1) as f64) as usize
+    };
+    let mut cells = vec![Mark::Track; track_len];
+    if let Some(m) = mean {
+        cells[pos(m)] = Mark::Mean;
+    }
+    if let Some(c) = current {
+        cells[pos(c)] = Mark::Current;
+    }
+
+    let dim = Style::default().fg(t.dim);
+    let mut spans = vec![
+        Span::styled(low_label, Style::default().fg(t.down)),
+        Span::styled("├", dim),
+    ];
+    // Coalesce consecutive track cells into single spans.
+    let mut run = 0usize;
+    for cell in cells {
+        match cell {
+            Mark::Track => run += 1,
+            mark => {
+                if run > 0 {
+                    spans.push(Span::styled("─".repeat(run), dim));
+                    run = 0;
+                }
+                spans.push(match mark {
+                    Mark::Current => Span::styled(
+                        "●",
+                        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                    ),
+                    _ => Span::styled(
+                        "◆",
+                        Style::default().fg(t.neutral).add_modifier(Modifier::BOLD),
+                    ),
+                });
+            }
+        }
+    }
+    if run > 0 {
+        spans.push(Span::styled("─".repeat(run), dim));
+    }
+    spans.push(Span::styled("┤", dim));
+    spans.push(Span::styled(high_label, Style::default().fg(t.up)));
+    Some(Line::from(spans))
 }
 
 /// Maps an analyst rating string to its display colour.
@@ -588,7 +804,7 @@ fn draw_chart_modal(f: &mut Frame, app: &mut App) {
     f.render_widget(Clear, area);
     let stock = &app.stock_modal.stock;
     let modal = modal_block(
-        format!("{} · ytd", stock.ticker.as_deref().unwrap_or("-")),
+        modal_title(stock.ticker.as_deref().unwrap_or("-"), "ytd", &t),
         &t,
     );
 
