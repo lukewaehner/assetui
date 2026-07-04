@@ -13,18 +13,19 @@ use std::{collections::HashMap, time::Instant};
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::Marker,
     text::{Line, Span},
     widgets::{
-        Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, LegendPosition, Paragraph,
-        Row, Table, Wrap,
+        Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, LegendPosition, Padding,
+        Paragraph, Row, Table, Wrap,
     },
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
 use yfinance::models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis};
+use yfinance::search::subseq_match_ci;
 
 use super::app::App;
 use super::theme::Theme;
@@ -84,6 +85,9 @@ fn block_title(text: String, t: &Theme) -> Line<'static> {
 }
 
 /// Renders the ticker input box with a blinking cursor while focused.
+///
+/// In fuzzy-search mode the title switches to `search` and the query is
+/// prefixed with a dim `/`, so the box always signals what typing will do.
 fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     let t = app.theme;
     let cursor = if app.input_mode.toggled && app.blink_state {
@@ -91,16 +95,26 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     } else {
         " "
     };
+    let title = if app.input_mode.fuzzy_search {
+        "yfinance · search"
+    } else {
+        "yfinance · query"
+    };
     let input_block = Block::default()
-        .title(block_title("yfinance · query".into(), &t))
+        .title(block_title(title.into(), &t))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color).bg(t.panel))
         .style(Style::default().bg(t.panel));
-    let input_line = Line::from(vec![
-        Span::styled(app.input_mode.input.clone(), Style::default().fg(t.fg)),
-        Span::styled(cursor, Style::default().fg(t.accent)),
-    ]);
-    f.render_widget(Paragraph::new(input_line).block(input_block), area);
+    let mut spans = Vec::with_capacity(3);
+    if app.input_mode.fuzzy_search {
+        spans.push(Span::styled("/", Style::default().fg(t.dim)));
+    }
+    spans.push(Span::styled(
+        app.input_mode.input.clone(),
+        Style::default().fg(t.fg),
+    ));
+    spans.push(Span::styled(cursor, Style::default().fg(t.accent)));
+    f.render_widget(Paragraph::new(Line::from(spans)).block(input_block), area);
 }
 
 /// Renders the log panel, keeping the most recent lines visible.
@@ -132,6 +146,45 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
 /// Builds a table cell from an optional value, showing `-` when absent.
 fn opt_cell<T>(value: Option<T>, fmt: impl Fn(T) -> String) -> Cell<'static> {
     Cell::from(value.map(fmt).unwrap_or_else(|| "-".to_string()))
+}
+
+/// Builds a text cell with the characters matched by the active fuzzy query
+/// highlighted in bold accent.  Plain text when search is off, the query is
+/// blank, or this field simply isn't where the row matched (a row can match
+/// on name alone, leaving its ticker unhighlighted).
+fn fuzzy_cell(text: Option<&str>, query: &str, active: bool, t: &Theme) -> Cell<'static> {
+    let Some(text) = text else {
+        return Cell::from("-");
+    };
+    let query = query.trim();
+    let positions = if active && !query.is_empty() {
+        subseq_match_ci(text, query)
+    } else {
+        None
+    };
+    let Some(positions) = positions else {
+        return Cell::from(text.to_string());
+    };
+
+    let hl = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut plain = String::new();
+    let mut matched = positions.iter().peekable();
+    for (byte, ch) in text.char_indices() {
+        if matched.peek() == Some(&&byte) {
+            matched.next();
+            if !plain.is_empty() {
+                spans.push(Span::raw(std::mem::take(&mut plain)));
+            }
+            spans.push(Span::styled(ch.to_string(), hl));
+        } else {
+            plain.push(ch);
+        }
+    }
+    if !plain.is_empty() {
+        spans.push(Span::raw(plain));
+    }
+    Cell::from(Line::from(spans))
 }
 
 /// Up-colour when the price is above the previous close, down-colour when
@@ -198,15 +251,17 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     .bottom_margin(1);
 
     let window = app.db_display.window_range();
+    let query = &app.input_mode.input;
+    let searching = app.input_mode.fuzzy_search;
     let rows = app.db_display.rows[window].iter().map(|q| {
         Row::new(vec![
             opt_cell(q.id, |id| id.to_string()),
-            Cell::from(q.ticker.as_deref().unwrap_or("-")),
-            Cell::from(q.name.as_deref().unwrap_or("-")),
+            fuzzy_cell(q.ticker.as_deref(), query, searching, &t),
+            fuzzy_cell(q.name.as_deref(), query, searching, &t),
             opt_cell(q.price, |p| format!("{p:.2}"))
                 .style(Style::default().fg(price_change_color(q, &app.row_flash_map, &t))),
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
-            opt_cell(q.day_volume, |v| format!("{v:.0}")),
+            opt_cell(q.day_volume, fmt_volume),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
         ])
     });
@@ -225,6 +280,12 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         " yfinance · quotes ",
         Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
     )];
+    if searching && !query.trim().is_empty() {
+        title.push(Span::styled(
+            format!("filter: {} ", query.trim()),
+            Style::default().fg(t.dim),
+        ));
+    }
     if !app.db_display.status.is_empty() {
         title.push(Span::styled(
             format!("{} ", app.db_display.status),
@@ -262,22 +323,37 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
     let (mode, hint) = if app.stock_modal.info_visible || app.stock_modal.chart_visible {
         ("VIEW", "esc close")
+    } else if app.input_mode.toggled && app.input_mode.fuzzy_search {
+        ("SEARCH", "type to filter · enter apply · esc cancel")
     } else if app.input_mode.toggled {
         ("INPUT", "type ticker · enter fetch · esc done")
+    } else if app.input_mode.fuzzy_search {
+        (
+            "FILTER",
+            "j/k move · h/l page · / new search · esc clear · ? info · enter chart · q quit",
+        )
     } else {
         (
             "NORMAL",
-            "j/k move · h/l page · i query · ? info · enter chart · o order · q quit",
+            "j/k move · h/l page · i query · / search · ? info · enter chart · o order · q quit",
         )
     };
 
     let chip = format!(" {mode} ");
     let page = app.db_display.page + 1;
     let total_pages = app.db_display.total_pages();
-    let right = format!(
-        "{} quotes · page {page}/{total_pages} ",
-        app.db_display.rows.len()
-    );
+    // While a filter is active, show `matched/total` so it's obvious rows
+    // are being hidden rather than missing.
+    let count = if app.input_mode.fuzzy_search {
+        format!(
+            "{}/{}",
+            app.db_display.rows.len(),
+            app.db_display.all_rows.len()
+        )
+    } else {
+        app.db_display.rows.len().to_string()
+    };
+    let right = format!("{count} quotes · page {page}/{total_pages} ");
 
     let [chip_area, hint_area, right_area] = Layout::horizontal([
         Constraint::Length(chip.len() as u16),

@@ -121,13 +121,20 @@ pub struct InputMode {
     pub input: String,
     /// Whether the input box is currently focused (i.e. typing goes here).
     pub toggled: bool,
+    /// Whether the input box is currently in fuzzy search mode
+    pub fuzzy_search: bool,
 }
 
 /// State for the quotes table on the right side of the layout.
 pub struct DbDisplay {
-    /// All rows fetched from the database; the visible page is a window into
-    /// this, derived from `page` and `page_size` via [`Self::window_range`].
+    /// The rows currently being displayed: [`Self::all_rows`] narrowed by the
+    /// active fuzzy query (or a straight copy when no filter is active).  The
+    /// visible page is a window into this, derived from `page` and
+    /// `page_size` via [`Self::window_range`].
     pub rows: Vec<QuoteRecord>,
+    /// Master list of every row from the last database load, unaffected by
+    /// filtering; [`App::apply_filter`] rebuilds `rows` from it.
+    pub all_rows: Vec<QuoteRecord>,
     /// Ratatui widget state tracking the selected row index.
     pub table_state: TableState,
     /// Short status message shown in the table's title bar.
@@ -227,10 +234,12 @@ impl App {
             input_mode: InputMode {
                 input: String::new(),
                 toggled: false,
+                fuzzy_search: false,
             },
             should_quit: false,
             db_display: DbDisplay {
                 rows: Vec::new(),
+                all_rows: Vec::new(),
                 status: String::from("Loading..."),
                 table_state: TableState::default(),
                 sort_mode: SortMode::ById,
@@ -303,9 +312,10 @@ impl App {
         match event {
             AppEvent::PageLoaded(rows) => {
                 self.db_display.status = String::new();
-                self.db_display.rows = rows;
-                self.db_display.page = 0;
-                self.reset_selection();
+                self.db_display.all_rows = rows;
+                // Re-derives `rows` through any active fuzzy query, so a
+                // sort-triggered reload keeps the filter applied.
+                self.apply_filter();
                 self.resubscribe_stream();
             }
             AppEvent::FetchSpawned(symbol) => {
@@ -316,8 +326,8 @@ impl App {
                 let name = record.ticker.as_deref().unwrap_or("?");
                 self.db_display.status = format!("stored {name}");
                 self.push_log(format!("[SUCCESS] stored {name}"));
-                self.db_display.rows.insert(0, record);
-                self.reset_selection();
+                self.db_display.all_rows.insert(0, record);
+                self.apply_filter();
             }
             AppEvent::LogLine(line) => {
                 self.push_log(line);
@@ -330,6 +340,11 @@ impl App {
                 self.stock_modal.chart_data = Some(data);
             }
             AppEvent::QuoteTick(tick) => {
+                // Keep the master list in sync first so refiltering later
+                // doesn't resurrect pre-tick values; the scratch map discards
+                // that pass's duplicate flash (the real one is recorded
+                // against the visible row below).
+                tick.apply(&mut self.db_display.all_rows, &mut HashMap::new());
                 // Applies to the visible window only (the stream subscribes to
                 // the visible tickers) and records the price flash from the
                 // row's pre-update value in the same pass.  A tick for a
@@ -377,16 +392,34 @@ impl App {
                 if self.stock_modal.info_visible || self.stock_modal.chart_visible {
                     self.stock_modal.info_visible = false;
                     self.stock_modal.chart_visible = false;
+                } else if self.input_mode.fuzzy_search {
+                    // Cancels the search whether the query is still being
+                    // typed or was already accepted with Enter.
+                    self.cancel_fuzzy_search();
                 } else {
                     self.input_mode.toggled = false;
                 }
             }
-            KeyCode::Char(c) if self.input_mode.toggled => self.input_mode.input.push(c),
+            KeyCode::Char(c) if self.input_mode.toggled => {
+                self.input_mode.input.push(c);
+                if self.input_mode.fuzzy_search {
+                    self.apply_filter();
+                }
+            }
             KeyCode::Char(c) => self.handle_command_key(c),
             KeyCode::Backspace if self.input_mode.toggled => {
                 self.input_mode.input.pop();
+                if self.input_mode.fuzzy_search {
+                    self.apply_filter();
+                }
             }
-            KeyCode::Enter if self.input_mode.toggled => self.submit_input(),
+            KeyCode::Enter if self.input_mode.toggled => {
+                if self.input_mode.fuzzy_search {
+                    self.accept_fuzzy_search();
+                } else {
+                    self.submit_input();
+                }
+            }
             KeyCode::Enter => self.open_chart_modal(),
             _ => {}
         }
@@ -415,7 +448,14 @@ impl App {
         }
         match key {
             'q' => self.should_quit = true,
-            'i' => self.input_mode.toggled = !self.input_mode.toggled,
+            'i' => {
+                // An accepted fuzzy filter still owns the input box; drop it
+                // so typed characters compose a ticker, not a query.
+                if self.input_mode.fuzzy_search {
+                    self.cancel_fuzzy_search();
+                }
+                self.input_mode.toggled = !self.input_mode.toggled;
+            }
             'j' => self.move_selection(1),
             'k' => self.move_selection(-1),
             // Paginate: h = prev page, l = next page
@@ -423,6 +463,7 @@ impl App {
             'l' => self.paginate(1),
             'o' => self.toggle_sort_order(),
             '?' => self.open_info_modal(),
+            '/' => self.start_fuzzy_search(),
             _ => {}
         }
     }
@@ -496,6 +537,64 @@ impl App {
             })
             .unwrap_or(0);
         self.db_display.table_state.select(Some(i));
+    }
+
+    // ---- Fuzzy search ----
+
+    /// Enters fuzzy-search mode (`/`): the input box becomes a live filter
+    /// query over ticker and company name.  Any previous query is discarded
+    /// so `/` always starts a fresh search.
+    fn start_fuzzy_search(&mut self) {
+        self.input_mode.toggled = true;
+        self.input_mode.fuzzy_search = true;
+        self.input_mode.input.clear();
+        self.apply_filter();
+    }
+
+    /// Accepts the current query (Enter while searching): the input box
+    /// loses focus but the filter stays applied, so `j`/`k`, paging, and the
+    /// modals all operate on the narrowed table.  An empty query is treated
+    /// as a cancel.
+    fn accept_fuzzy_search(&mut self) {
+        if self.input_mode.input.trim().is_empty() {
+            self.cancel_fuzzy_search();
+            return;
+        }
+        self.input_mode.toggled = false;
+        self.resubscribe_stream();
+    }
+
+    /// Cancels fuzzy search (Esc): clears the query and restores the full
+    /// table.
+    fn cancel_fuzzy_search(&mut self) {
+        self.input_mode.fuzzy_search = false;
+        self.input_mode.toggled = false;
+        self.input_mode.input.clear();
+        self.apply_filter();
+        self.resubscribe_stream();
+    }
+
+    /// Rebuilds the displayed `rows` from the master `all_rows` list through
+    /// the active fuzzy query (everything when search is off or the query is
+    /// blank), then resets to the first page.
+    ///
+    /// Deliberately does NOT touch the quote stream: re-subscribing here
+    /// would reconnect the websocket on every keystroke.  Call sites
+    /// re-subscribe once the query settles (accept, cancel, page load).
+    fn apply_filter(&mut self) {
+        let query = &self.input_mode.input;
+        self.db_display.rows = if self.input_mode.fuzzy_search {
+            self.db_display
+                .all_rows
+                .iter()
+                .filter(|r| r.matches_query(query))
+                .cloned()
+                .collect()
+        } else {
+            self.db_display.all_rows.clone()
+        };
+        self.db_display.page = 0;
+        self.reset_selection();
     }
 
     /// Updates `page_size` to `size` and shifts the visible page so the
@@ -611,6 +710,33 @@ mod tests {
 
     fn n_records(n: usize) -> Vec<QuoteRecord> {
         (0..n).map(|_| QuoteRecord::default()).collect()
+    }
+
+    fn named(ticker: &str, name: &str) -> QuoteRecord {
+        QuoteRecord {
+            ticker: Some(ticker.to_string()),
+            name: Some(name.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Loads three named quotes and returns the app ready for search tests.
+    fn app_with_three_stocks() -> App {
+        let (mut app, _rx) = make_test_app();
+        // The receiver is dropped here; spawned sends fail silently, which is
+        // fine because these tests only exercise synchronous state.
+        app.handle_event(AppEvent::PageLoaded(vec![
+            named("AAPL", "Apple Inc."),
+            named("TSLA", "Tesla Inc."),
+            named("NVDA", "NVIDIA Corp."),
+        ]));
+        app
+    }
+
+    fn type_str(app: &mut App, s: &str) {
+        for c in s.chars() {
+            app.handle_key(KeyCode::Char(c));
+        }
     }
 
     #[tokio::test]
@@ -798,5 +924,155 @@ mod tests {
         app.handle_command_key('l');
         app.handle_command_key('l'); // already on last page
         assert_eq!(app.db_display.page, 1);
+    }
+
+    // ---- Fuzzy search ----
+
+    /// `/` enters search mode and typing narrows the table live; the master
+    /// list is untouched.
+    #[tokio::test]
+    async fn test_fuzzy_search_filters_live() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('/'));
+        assert!(app.input_mode.toggled && app.input_mode.fuzzy_search);
+        assert_eq!(app.db_display.rows.len(), 3, "empty query shows all");
+
+        type_str(&mut app, "apl");
+        assert_eq!(app.db_display.rows.len(), 1);
+        assert_eq!(app.db_display.rows[0].ticker.as_deref(), Some("AAPL"));
+        assert_eq!(app.db_display.all_rows.len(), 3, "master list untouched");
+        assert_eq!(app.db_display.table_state.selected(), Some(0));
+    }
+
+    /// Backspace widens the match set again.
+    #[tokio::test]
+    async fn test_fuzzy_search_backspace_widens() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('/'));
+        // "tesla inc" and "nvidia corp" both contain the subsequence "la"?
+        // No: use a query that matches exactly one, then delete to widen.
+        type_str(&mut app, "tsla");
+        assert_eq!(app.db_display.rows.len(), 1);
+        app.handle_key(KeyCode::Backspace);
+        app.handle_key(KeyCode::Backspace);
+        app.handle_key(KeyCode::Backspace);
+        app.handle_key(KeyCode::Backspace);
+        assert_eq!(app.db_display.rows.len(), 3, "empty query shows all");
+    }
+
+    /// Enter accepts the query: focus leaves the input box but the filter
+    /// stays applied, and navigation works over the narrowed rows.
+    #[tokio::test]
+    async fn test_fuzzy_search_enter_keeps_filter() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('/'));
+        type_str(&mut app, "inc");
+        assert_eq!(app.db_display.rows.len(), 2, "Apple Inc. + Tesla Inc.");
+
+        app.handle_key(KeyCode::Enter);
+        assert!(!app.input_mode.toggled, "input box loses focus");
+        assert!(app.input_mode.fuzzy_search, "filter stays active");
+        assert_eq!(app.db_display.rows.len(), 2);
+
+        // j/k now route as command keys over the filtered rows.
+        app.handle_key(KeyCode::Char('j'));
+        assert_eq!(app.db_display.table_state.selected(), Some(1));
+    }
+
+    /// Esc cancels the search - whether mid-typing or after Enter - and
+    /// restores the full table.
+    #[tokio::test]
+    async fn test_fuzzy_search_esc_restores_all_rows() {
+        let mut app = app_with_three_stocks();
+        // Cancel mid-typing.
+        app.handle_key(KeyCode::Char('/'));
+        type_str(&mut app, "aapl");
+        assert_eq!(app.db_display.rows.len(), 1);
+        app.handle_key(KeyCode::Esc);
+        assert!(!app.input_mode.fuzzy_search);
+        assert!(app.input_mode.input.is_empty());
+        assert_eq!(app.db_display.rows.len(), 3);
+
+        // Cancel an accepted filter.
+        app.handle_key(KeyCode::Char('/'));
+        type_str(&mut app, "aapl");
+        app.handle_key(KeyCode::Enter);
+        app.handle_key(KeyCode::Esc);
+        assert!(!app.input_mode.fuzzy_search);
+        assert_eq!(app.db_display.rows.len(), 3);
+    }
+
+    /// Enter on an empty query is a cancel, not an accepted empty filter.
+    #[tokio::test]
+    async fn test_fuzzy_search_empty_enter_cancels() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('/'));
+        app.handle_key(KeyCode::Enter);
+        assert!(!app.input_mode.fuzzy_search);
+        assert!(!app.input_mode.toggled);
+        assert_eq!(app.db_display.rows.len(), 3);
+    }
+
+    /// `i` while a filter is applied drops the filter and opens a clean
+    /// ticker input, so typed characters compose a symbol rather than a
+    /// query.
+    #[tokio::test]
+    async fn test_i_key_clears_accepted_filter() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('/'));
+        type_str(&mut app, "aapl");
+        app.handle_key(KeyCode::Enter);
+
+        app.handle_key(KeyCode::Char('i'));
+        assert!(app.input_mode.toggled, "input box focused for a fetch");
+        assert!(!app.input_mode.fuzzy_search);
+        assert!(app.input_mode.input.is_empty());
+        assert_eq!(app.db_display.rows.len(), 3, "filter cleared");
+    }
+
+    /// A reload (e.g. a sort-key press finishing) re-applies the active
+    /// filter instead of dumping the full page back on screen.
+    #[tokio::test]
+    async fn test_page_load_reapplies_filter() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('/'));
+        type_str(&mut app, "aapl");
+        app.handle_key(KeyCode::Enter);
+
+        app.handle_event(AppEvent::PageLoaded(vec![
+            named("AAPL", "Apple Inc."),
+            named("TSLA", "Tesla Inc."),
+        ]));
+        assert_eq!(app.db_display.all_rows.len(), 2);
+        assert_eq!(app.db_display.rows.len(), 1, "filter survives the reload");
+        assert_eq!(app.db_display.rows[0].ticker.as_deref(), Some("AAPL"));
+    }
+
+    /// Ticks that arrive while a filter hides their row still update the
+    /// master list, so clearing the filter shows the fresh price.
+    #[tokio::test]
+    async fn test_tick_updates_master_list_while_filtered() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('/'));
+        type_str(&mut app, "aapl");
+        app.handle_key(KeyCode::Enter);
+        assert_eq!(app.db_display.rows.len(), 1, "TSLA is hidden");
+
+        app.handle_event(AppEvent::QuoteTick(QuoteTick {
+            ticker: Some("TSLA".to_string()),
+            price: Some(456.0),
+            previous_close: None,
+            day_volume: None,
+            as_of: None,
+        }));
+
+        app.handle_key(KeyCode::Esc); // clear the filter
+        let tsla = app
+            .db_display
+            .rows
+            .iter()
+            .find(|r| r.ticker.as_deref() == Some("TSLA"))
+            .expect("TSLA back after clearing");
+        assert_eq!(tsla.price, Some(456.0), "tick reached the master list");
     }
 }
