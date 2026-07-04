@@ -80,6 +80,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
+name = "assetui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "comfy-table",
+ "crossterm",
+ "csv",
+ "dotenvy",
+ "futures-util",
+ "ratatui",
+ "ratatui-notifications",
+ "serde",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "yfinance-rs",
+]
+
+[[package]]
 name = "async-compression"
 version = "0.4.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4153,27 +4174,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
-]
-
-[[package]]
-name = "yfinance"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "comfy-table",
- "crossterm",
- "csv",
- "dotenvy",
- "futures-util",
- "ratatui",
- "ratatui-notifications",
- "serde",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "yfinance-rs",
 ]
 
 [[package]]

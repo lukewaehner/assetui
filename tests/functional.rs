@@ -1,8 +1,8 @@
 use chrono::{DateTime, TimeZone, Utc};
-use yfinance::db::quotes::{dump_table_to_csv, fetch_all_quotes, store_quote_to_db};
-use yfinance::fetch::fetch_sorted;
-use yfinance::models::QuoteRecord;
-use yfinance::sort::{SortMode, SortOrder};
+use assetui::db::quotes::{dump_table_to_csv, fetch_all_quotes, store_quote_to_db};
+use assetui::fetch::fetch_sorted;
+use assetui::models::QuoteRecord;
+use assetui::sort::{SortMode, SortOrder};
 
 fn full_quote(
     ticker: &str,

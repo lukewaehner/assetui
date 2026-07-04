@@ -1,4 +1,4 @@
-use yfinance::run::fetch_and_store;
+use assetui::run::fetch_and_store;
 use yfinance_rs::YfClient;
 
 #[sqlx::test]
