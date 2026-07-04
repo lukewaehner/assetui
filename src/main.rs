@@ -6,11 +6,11 @@
 use std::path::Path;
 
 use tracing_subscriber::EnvFilter;
-use yfinance::AppError;
-use yfinance::cli::{Mode, pick_tickers, print_tickers, select_mode};
-use yfinance::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
-use yfinance::db::quotes::dump_table_to_csv;
-use yfinance::run::fetch_and_store;
+use assetui::AppError;
+use assetui::cli::{Mode, pick_tickers, print_tickers, select_mode};
+use assetui::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
+use assetui::db::quotes::dump_table_to_csv;
+use assetui::run::fetch_and_store;
 use yfinance_rs::YfClient;
 
 /// Initialises the `tracing` subscriber with an `EnvFilter` so log verbosity

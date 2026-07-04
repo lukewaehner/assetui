@@ -1,8 +1,8 @@
 use chrono::{TimeZone, Utc};
-use yfinance::db::quotes::store_quote_to_db;
-use yfinance::fetch::fetch_sorted;
-use yfinance::models::QuoteRecord;
-use yfinance::sort::{SortMode, SortOrder};
+use assetui::db::quotes::store_quote_to_db;
+use assetui::fetch::fetch_sorted;
+use assetui::models::QuoteRecord;
+use assetui::sort::{SortMode, SortOrder};
 
 /// Construct a `QuoteRecord` suitable for TUI workflow tests.
 ///

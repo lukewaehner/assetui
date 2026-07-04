@@ -18,7 +18,7 @@ use ratatui_notifications::{
 use tokio::sync::mpsc;
 
 use super::theme::{Appearance, Theme};
-use yfinance::{
+use assetui::{
     cli::parse_tickers,
     models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis, QuoteTick},
     sort::{SortMode, SortOrder},
@@ -699,8 +699,8 @@ impl App {
 mod tests {
     use super::*;
     use tokio::sync::mpsc;
-    use yfinance::models::QuoteRecord;
-    use yfinance::sort::{SortMode, SortOrder};
+    use assetui::models::QuoteRecord;
+    use assetui::sort::{SortMode, SortOrder};
 
     fn make_test_app() -> (App, mpsc::UnboundedReceiver<AppEvent>) {
         let pool = sqlx::PgPool::connect_lazy("postgres://localhost/nonexistent_test_db").unwrap();

@@ -10,8 +10,8 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
-use yfinance::AppError;
-use yfinance::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
+use assetui::AppError;
+use assetui::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
 use yfinance_rs::YfClient;
 
 use app::{App, AppEvent, table_page_size};

@@ -99,9 +99,9 @@ pub async fn fetch_and_store(
     }
 
     if failed > 0 {
-        warn!(stored, failed, "yfinance run complete with errors");
+        warn!(stored, failed, "assetui run complete with errors");
     } else {
-        info!(stored, "yfinance run complete");
+        info!(stored, "assetui run complete");
     }
     Ok(())
 }

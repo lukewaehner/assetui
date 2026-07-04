@@ -1,4 +1,4 @@
-use yfinance::run::fetch_and_store;
+use assetui::run::fetch_and_store;
 use yfinance_rs::YfClient;
 
 /// Passing an empty ticker slice exercises the channel-setup and drain loop

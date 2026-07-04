@@ -1,4 +1,4 @@
-# yfinance
+# assetui
 
 A Rust tool for pulling stock quotes from Yahoo Finance and keeping a local history in Postgres. Two ways to use it: a simple CLI for batch operations and a ratatui TUI for browsing what you've collected.
 

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use yfinance::db::quotes::{dump_table_to_csv, fetch_all_quotes, store_quote_to_db};
-use yfinance::models::QuoteRecord;
+use assetui::db::quotes::{dump_table_to_csv, fetch_all_quotes, store_quote_to_db};
+use assetui::models::QuoteRecord;
 
 fn make_quote(ticker: &str) -> QuoteRecord {
     QuoteRecord {

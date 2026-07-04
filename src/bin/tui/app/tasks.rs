@@ -7,9 +7,9 @@
 
 use std::time::Duration;
 
-use yfinance::fetch::{fetch_analysis, fetch_chart_data, fetch_quote_and_store, fetch_sorted};
-use yfinance::models::QuoteTick;
-use yfinance::stream::start_quote_stream;
+use assetui::fetch::{fetch_analysis, fetch_chart_data, fetch_quote_and_store, fetch_sorted};
+use assetui::models::QuoteTick;
+use assetui::stream::start_quote_stream;
 
 use crate::theme::{Appearance, parse_appearance};
 

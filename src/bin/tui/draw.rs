@@ -24,8 +24,8 @@ use ratatui::{
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
-use yfinance::models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis};
-use yfinance::search::subseq_match_ci;
+use assetui::models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis};
+use assetui::search::subseq_match_ci;
 
 use super::app::App;
 use super::theme::Theme;
@@ -96,9 +96,9 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
         " "
     };
     let title = if app.input_mode.fuzzy_search {
-        "yfinance · search"
+        "assetui · search"
     } else {
-        "yfinance · query"
+        "assetui · query"
     };
     let input_block = Block::default()
         .title(block_title(title.into(), &t))
@@ -121,7 +121,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
 fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
     let log_block = Block::default()
-        .title(block_title("yfinance · logs".into(), &t))
+        .title(block_title("assetui · logs".into(), &t))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(t.border).bg(t.panel))
         .style(Style::default().bg(t.panel));
@@ -277,7 +277,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     ];
 
     let mut title = vec![Span::styled(
-        " yfinance · quotes ",
+        " assetui · quotes ",
         Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
     )];
     if searching && !query.trim().is_empty() {
