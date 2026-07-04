@@ -36,6 +36,19 @@ pub struct QuoteRecordAnalysis {
     pub price_target: Option<PriceTarget>,
 }
 
+impl QuoteRecord {
+    pub fn matches_query(&self, query: &str) -> bool {
+        let query = query.trim();
+        if query.is_empty() {
+            return true;
+        }
+        [self.ticker.as_deref(), self.name.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|field| crate::search::subseq_match_ci(field, query).is_some())
+    }
+}
+
 /// How long a price-tick flash stays coloured before reverting to the default day-change styling.
 pub const FLASH_TTL: Duration = Duration::from_millis(500);
 
@@ -47,6 +60,11 @@ pub struct QuoteTick {
     pub as_of: Option<DateTime<Utc>>,
 }
 
+/// Treats a non-positive volume as absent.
+fn positive_volume(volume: Option<f64>) -> Option<f64> {
+    volume.filter(|v| *v > 0.0)
+}
+
 impl From<QuoteUpdate> for QuoteTick {
     fn from(update: QuoteUpdate) -> Self {
         Self {
@@ -55,7 +73,9 @@ impl From<QuoteUpdate> for QuoteTick {
             previous_close: update
                 .previous_close
                 .map(|p| p.as_decimal().round_dp(2).as_f64()),
-            day_volume: update.volume.map(|v| v.into_inner().as_decimal().as_f64()),
+            day_volume: positive_volume(
+                update.volume.map(|v| v.into_inner().as_decimal().as_f64()),
+            ),
             as_of: Some(update.ts),
         }
     }
@@ -204,6 +224,38 @@ mod tests {
         assert_eq!(tick.apply(&mut rows, &mut flash_map), None);
         assert_eq!(rows[0].price, Some(100.0));
         assert!(flash_map.is_empty(), "no flash for an unmatched ticker");
+    }
+
+    /// The fuzzy query matches on ticker or company name, case-insensitively and with gaps.
+    #[test]
+    fn test_matches_query() {
+        let record = QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            name: Some("Apple Inc.".to_string()),
+            ..Default::default()
+        };
+        assert!(record.matches_query("aapl"), "ticker, case-insensitive");
+        assert!(record.matches_query("apl"), "ticker subsequence");
+        assert!(record.matches_query("apple"), "company name");
+        assert!(record.matches_query("apn"), "name subsequence with gaps");
+        assert!(record.matches_query(""), "blank matches everything");
+        assert!(record.matches_query("   "), "whitespace-only is blank");
+        assert!(!record.matches_query("tsla"), "no match anywhere");
+    }
+
+    #[test]
+    fn test_matches_query_empty_record() {
+        let record = QuoteRecord::default();
+        assert!(record.matches_query(""));
+        assert!(!record.matches_query("a"));
+    }
+
+    #[test]
+    fn test_positive_volume_filters_non_positive() {
+        assert_eq!(positive_volume(Some(0.0)), None);
+        assert_eq!(positive_volume(Some(-1.0)), None);
+        assert_eq!(positive_volume(None), None);
+        assert_eq!(positive_volume(Some(63_825_743.0)), Some(63_825_743.0));
     }
 
     #[test]
