@@ -479,6 +479,11 @@ impl App {
         }
         match key {
             'q' => self.should_quit = true,
+            'o' => self.toggle_sort_order(),
+            '?' => self.open_info_modal(),
+            'w' => {
+                self.append_selected_to_watchlist();
+            }
             'i' => {
                 // An accepted fuzzy filter still owns the input box; drop it
                 // so typed characters compose a ticker, not a query.
@@ -487,14 +492,13 @@ impl App {
                 }
                 self.input_mode.toggled = !self.input_mode.toggled;
             }
+            '/' => self.start_fuzzy_search(),
+            // Move keys
             'j' => self.move_selection(1),
             'k' => self.move_selection(-1),
             // Paginate: h = prev page, l = next page
             'h' => self.paginate(-1),
             'l' => self.paginate(1),
-            'o' => self.toggle_sort_order(),
-            '?' => self.open_info_modal(),
-            '/' => self.start_fuzzy_search(),
             _ => {}
         }
     }
@@ -507,6 +511,19 @@ impl App {
         self.input_mode.input.clear();
         for symbol in symbols {
             self.spawn_fetch(symbol);
+        }
+    }
+
+    fn append_selected_to_watchlist(&mut self) {
+        if let Some(selected_idx) = self.db_display.table_state.selected() {
+            let window = self.db_display.window();
+            if let Some(row) = window.get(selected_idx) {
+                if let Some(ticker) = &row.ticker {
+                    self.db_display.watchlist.insert(ticker.clone());
+                    self.spawn_watchlist_save(ticker.clone().await?);
+                    self.push_log(format!("[INFO] added {ticker} to watchlist"));
+                }
+            }
         }
     }
 
@@ -1105,5 +1122,62 @@ mod tests {
             .find(|r| r.ticker.as_deref() == Some("TSLA"))
             .expect("TSLA back after clearing");
         assert_eq!(tsla.price, Some(456.0), "tick reached the master list");
+    }
+
+    // ---- WATCH-2: watchlist load & setup ----
+
+    /// A fresh app starts before `spawn_load_watchlist` returns, so the
+    /// watchlist must be empty and the (WATCH-5) filter toggle off.
+    #[tokio::test]
+    async fn test_app_new_starts_with_empty_watchlist() {
+        let (app, _rx) = make_test_app();
+        assert!(app.db_display.watchlist.is_empty());
+        assert!(!app.db_display.watchlist_only);
+    }
+
+    /// `WatchlistLoaded` populates the tracked-ticker set from the db result.
+    #[tokio::test]
+    async fn test_handle_event_watchlist_loaded() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::WatchlistLoaded(vec![
+            "AAPL".to_string(),
+            "TSLA".to_string(),
+        ]));
+        assert_eq!(app.db_display.watchlist.len(), 2);
+        assert!(app.db_display.watchlist.contains("AAPL"));
+        assert!(app.db_display.watchlist.contains("TSLA"));
+    }
+
+    /// The set collapses duplicate tickers coming back from the db.
+    #[tokio::test]
+    async fn test_watchlist_loaded_dedups() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::WatchlistLoaded(vec![
+            "AAPL".to_string(),
+            "AAPL".to_string(),
+        ]));
+        assert_eq!(app.db_display.watchlist.len(), 1);
+        assert!(app.db_display.watchlist.contains("AAPL"));
+    }
+
+    /// A reload replaces the previous set rather than merging into it, so a
+    /// ticker removed in the db drops out of the in-memory watchlist.
+    #[tokio::test]
+    async fn test_watchlist_loaded_replaces_previous() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
+        app.handle_event(AppEvent::WatchlistLoaded(vec!["TSLA".to_string()]));
+        assert_eq!(app.db_display.watchlist.len(), 1);
+        assert!(app.db_display.watchlist.contains("TSLA"));
+        assert!(!app.db_display.watchlist.contains("AAPL"));
+    }
+
+    /// An empty db result clears an existing watchlist.
+    #[tokio::test]
+    async fn test_watchlist_loaded_empty_clears() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
+        app.handle_event(AppEvent::WatchlistLoaded(vec![]));
+        assert!(app.db_display.watchlist.is_empty());
     }
 }

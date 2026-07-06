@@ -14,7 +14,10 @@ pub async fn add_to_watchlist(pool: &Pool<Postgres>, ticker: &str) -> Result<(),
     Ok(())
 }
 
+/// Removes a ticker from the watchlist. Tickers are stored uppercased (see
+/// [`add_to_watchlist`]), so the argument is uppercased to match.
 pub async fn remove_from_watchlist(pool: &Pool<Postgres>, ticker: &str) -> Result<(), AppError> {
+    let ticker = ticker.to_uppercase();
     sqlx::query("DELETE FROM watchlist WHERE ticker = $1")
         .bind(ticker)
         .execute(pool)
