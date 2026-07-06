@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use crate::db::watchlist::fetch_watchlist;
+use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{fetch_analysis, fetch_chart_data, fetch_quote_and_store, fetch_sorted};
 use crate::models::QuoteTick;
 use crate::tui::stream::start_quote_stream;
@@ -192,6 +192,33 @@ impl App {
                     let _ = tx.send(AppEvent::Error(format!("Failed to fetch watchlist: {e}")));
                 }
             }
+        });
+    }
+
+    /// Spawns a task to save the ticker to the watchlist,
+    pub(crate) fn spawn_save_to_watchlist(&self, ticker: String) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            add_to_watchlist(&pool, &ticker).await.unwrap_or_else(|e| {
+                let _ = tx.send(AppEvent::Error(format!(
+                    "Failed to add {ticker} to watchlist: {e}"
+                )));
+            });
+        });
+    }
+
+    pub(crate) fn spawn_remove_from_watchlist(&self, ticker: String) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            remove_from_watchlist(&pool, &ticker)
+                .await
+                .unwrap_or_else(|e| {
+                    let _ = tx.send(AppEvent::Error(format!(
+                        "Failed to add {ticker} to watchlist: {e}"
+                    )));
+                });
         });
     }
 }

@@ -45,6 +45,8 @@ pub struct Theme {
     pub down_strong: Color,
     /// Unchanged / hold / reference values (e.g. previous close).
     pub neutral: Color,
+    /// Watchlist star and other "favourited" accents.
+    pub gold: Color,
 }
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
@@ -70,6 +72,7 @@ pub const MUTED: Theme = Theme {
     down: rgb(0xe0, 0x7a, 0x7a),
     down_strong: rgb(0xf0, 0x9a, 0x9a),
     neutral: rgb(0xd4, 0xb0, 0x6a),
+    gold: rgb(0xe8, 0xb3, 0x3e),
 };
 
 /// The active colour scheme, following the macOS system appearance.
@@ -98,6 +101,7 @@ pub const LIGHT: Theme = Theme {
     down: rgb(0xc0, 0x3a, 0x3a),
     down_strong: rgb(0x9a, 0x24, 0x24),
     neutral: rgb(0xb0, 0x82, 0x1a),
+    gold: rgb(0xc8, 0x8f, 0x14),
 };
 
 impl Theme {

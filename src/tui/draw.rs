@@ -9,7 +9,10 @@
 //! All colours come from the [`Theme`] on [`App`]; nothing in this module
 //! hardcodes a palette.
 
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 use ratatui::{
     Frame,
@@ -240,6 +243,8 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     };
 
     let header = Row::new(vec![
+        // Watchlist star gutter — no label.
+        Cell::from(""),
         hcell("ID ", "(d)"),
         hcell("Ticker ", "(t)"),
         hcell("Name", "(n)"),
@@ -254,12 +259,19 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     let query = &app.input_mode.input;
     let searching = app.input_mode.fuzzy_search;
     let rows = app.db_display.rows[window].iter().map(|q| {
+        let star = if is_watchlisted(q.ticker.as_deref(), &app.db_display.watchlist) {
+            Cell::from(Span::styled("★", Style::default().fg(t.gold)))
+        } else {
+            Cell::from("")
+        };
         Row::new(vec![
+            star,
             opt_cell(q.id, |id| id.to_string()),
             fuzzy_cell(q.ticker.as_deref(), query, searching, &t),
             fuzzy_cell(q.name.as_deref(), query, searching, &t),
-            opt_cell(q.price, |p| format!("{p:.2}"))
-                .style(Style::default().fg(price_change_color(q, &app.animations.row_flash_map, &t))),
+            opt_cell(q.price, |p| format!("{p:.2}")).style(
+                Style::default().fg(price_change_color(q, &app.animations.row_flash_map, &t)),
+            ),
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
             opt_cell(q.day_volume, fmt_volume),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
@@ -267,6 +279,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     });
 
     let widths = [
+        Constraint::Length(1), // watchlist star gutter
         Constraint::Length(6),
         Constraint::Length(10),
         Constraint::Length(24),
@@ -310,6 +323,12 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     f.render_stateful_widget(table, area, &mut app.db_display.table_state);
 }
 
+/// Whether a row's ticker is on the watchlist. The set is keyed uppercase, so
+/// the comparison is case-insensitive; a tickerless row is never watchlisted.
+fn is_watchlisted(ticker: Option<&str>, watchlist: &HashSet<String>) -> bool {
+    ticker.is_some_and(|t| watchlist.contains(&t.to_ascii_uppercase()))
+}
+
 // ===== Status bar =====
 
 /// Renders the one-line status bar: a bold mode chip on the left,
@@ -330,12 +349,12 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     } else if app.input_mode.fuzzy_search {
         (
             "FILTER",
-            "j/k move · h/l page · / new search · esc clear · ? info · enter chart · q quit",
+            "w|r add|remove favorite · / new search · esc clear · ? info · enter chart · q quit",
         )
     } else {
         (
             "NORMAL",
-            "j/k move · h/l page · i query · / search · ? info · enter chart · o order · q quit",
+            "w|r add|remove favorite · i query · / search · ? info · enter chart · o order · q quit",
         )
     };
 
@@ -1005,4 +1024,38 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
         .y_axis(y_axis)
         .legend_position(Some(LegendPosition::TopLeft));
     f.render_widget(chart, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn watchlist(tickers: &[&str]) -> HashSet<String> {
+        tickers.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn watchlisted_ticker_is_starred() {
+        let wl = watchlist(&["AAPL"]);
+        assert!(is_watchlisted(Some("AAPL"), &wl));
+    }
+
+    #[test]
+    fn untracked_ticker_is_not_starred() {
+        let wl = watchlist(&["AAPL"]);
+        assert!(!is_watchlisted(Some("TSLA"), &wl));
+    }
+
+    #[test]
+    fn match_is_case_insensitive() {
+        // Watchlist is keyed uppercase; a lowercase row ticker still matches.
+        let wl = watchlist(&["AAPL"]);
+        assert!(is_watchlisted(Some("aapl"), &wl));
+    }
+
+    #[test]
+    fn missing_ticker_is_not_starred() {
+        let wl = watchlist(&["AAPL"]);
+        assert!(!is_watchlisted(None, &wl));
+    }
 }

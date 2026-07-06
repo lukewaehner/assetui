@@ -484,6 +484,9 @@ impl App {
             'w' => {
                 self.append_selected_to_watchlist();
             }
+            'r' => {
+                self.remove_selected_from_watchlist();
+            }
             'i' => {
                 // An accepted fuzzy filter still owns the input box; drop it
                 // so typed characters compose a ticker, not a query.
@@ -515,15 +518,30 @@ impl App {
     }
 
     fn append_selected_to_watchlist(&mut self) {
-        if let Some(selected_idx) = self.db_display.table_state.selected() {
+        let ticker = if let Some(selected_idx) = self.db_display.table_state.selected() {
             let window = self.db_display.window();
-            if let Some(row) = window.get(selected_idx) {
-                if let Some(ticker) = &row.ticker {
-                    self.db_display.watchlist.insert(ticker.clone());
-                    self.spawn_watchlist_save(ticker.clone().await?);
-                    self.push_log(format!("[INFO] added {ticker} to watchlist"));
-                }
-            }
+            window.get(selected_idx).and_then(|row| row.ticker.clone())
+        } else {
+            None
+        };
+
+        if let Some(ticker) = ticker {
+            self.db_display.watchlist.insert(ticker.clone());
+            self.spawn_save_to_watchlist(ticker.clone());
+        }
+    }
+
+    fn remove_selected_from_watchlist(&mut self) {
+        let ticker = if let Some(selected_idx) = self.db_display.table_state.selected() {
+            let window = self.db_display.window();
+            window.get(selected_idx).and_then(|row| row.ticker.clone())
+        } else {
+            None
+        };
+
+        if let Some(ticker) = ticker {
+            self.db_display.watchlist.remove(&ticker.clone());
+            self.spawn_remove_from_watchlist(ticker.clone());
         }
     }
 
