@@ -2,9 +2,10 @@
 //!
 //! The library exposes a fetch layer ([`fetch`]), a database layer ([`db`]),
 //! shared data models ([`models`]), sort configuration ([`sort`]), fuzzy
-//! matching ([`search`]), an async pipeline ([`run`]), and CLI presentation
-//! helpers ([`cli`]).  Both the interactive CLI binary and the ratatui TUI
-//! binary are built on top of this crate.
+//! matching ([`search`]), an async pipeline ([`run`]), CLI presentation
+//! helpers ([`cli`]), and the interactive ratatui interface ([`tui`]).  The
+//! single `assetui` binary drives the TUI by default and exposes the CLI
+//! operations behind subcommands.
 
 pub mod cli;
 pub mod db;
@@ -13,7 +14,7 @@ pub mod models;
 pub mod run;
 pub mod search;
 pub mod sort;
-pub mod stream;
+pub mod tui;
 
 /// Shared error type used throughout the crate.
 ///

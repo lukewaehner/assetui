@@ -24,8 +24,8 @@ use ratatui::{
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
-use assetui::models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis};
-use assetui::search::subseq_match_ci;
+use crate::models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis};
+use crate::search::subseq_match_ci;
 
 use super::app::App;
 use super::theme::Theme;

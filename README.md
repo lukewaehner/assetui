@@ -28,24 +28,12 @@ Build both binaries:
 cargo build --release
 ```
 
-## CLI
+## TUI
+
+The TUI is the default: run with no subcommand to launch it.
 
 ```sh
 cargo run
-```
-
-Prompts you to pick a mode:
-
-1. **Fetch and store** - enter comma-separated tickers (e.g. `AAPL,MSFT,GOOG`), fetches them in parallel
-2. **Dump to CSV** - writes the full quotes table to `quotes_dump_YYYYMMDDHHMMSS.csv`
-3. **Pull from DB** - prints a formatted table of everything stored
-
-Log verbosity is controlled via `RUST_LOG` (defaults to `info`).
-
-## TUI
-
-```sh
-cargo run --bin tui
 ```
 
 ### Keys
@@ -82,22 +70,36 @@ Updates are display-only; streamed ticks are not written to Postgres. Ticks only
 
 On macOS the TUI follows your system appearance: it picks a light or dark palette at launch and switches automatically within a couple of seconds when you toggle the OS between Light and Dark - no key or restart needed. On other platforms it defaults to the dark palette.
 
+## CLI
+
+For batch operations, pass a subcommand instead of launching the TUI:
+
+```sh
+cargo run -- fetch-and-store --ticker AAPL,MSFT,GOOG   # fetch quotes in parallel and store them
+cargo run -- dump-to-csv                               # write the quotes table to quotes_dump.csv
+cargo run -- pull-from-db                              # print a formatted table of everything stored
+```
+
+Tickers can also be passed as `-t`. Log verbosity is controlled via `RUST_LOG` (defaults to `info`); the TUI captures its own logs in-app instead.
+
 ## Project layout
 
 ```
 src/
   lib.rs              library root
-  main.rs             CLI binary entry point
+  main.rs             binary entry point (TUI default + CLI subcommands)
   models.rs           QuoteRecord, QuoteRecordAnalysis, QuoteTick
   fetch.rs            Yahoo Finance API calls
-  stream.rs           live quote stream adapter (websocket + fallback)
   run.rs              parallel fetch pipeline (CLI path)
+  search.rs           fuzzy subsequence matching
   sort.rs             SortMode / SortOrder enums
   cli/                stdin prompts and comfy-table rendering
   db/                 Postgres pool setup and queries
-  bin/tui/            ratatui TUI binary
+  tui/                ratatui interface (default mode)
+    run.rs                 terminal setup and event loop
     app.rs, app/tasks.rs   state, key handling, background tasks
     draw.rs                table, modals, chart, and status-bar rendering
+    stream.rs              live quote stream adapter (websocket + fallback)
     theme.rs               light/dark palettes and macOS appearance detection
 migrations/           sqlx migration files
 ```

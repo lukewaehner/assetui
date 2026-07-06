@@ -7,11 +7,10 @@
 
 use std::time::Duration;
 
-use assetui::fetch::{fetch_analysis, fetch_chart_data, fetch_quote_and_store, fetch_sorted};
-use assetui::models::QuoteTick;
-use assetui::stream::start_quote_stream;
-
-use crate::theme::{Appearance, parse_appearance};
+use crate::fetch::{fetch_analysis, fetch_chart_data, fetch_quote_and_store, fetch_sorted};
+use crate::models::QuoteTick;
+use crate::tui::stream::start_quote_stream;
+use crate::tui::theme::{Appearance, parse_appearance};
 
 use super::{App, AppEvent, PAGE_FETCH_LIMIT};
 
