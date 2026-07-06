@@ -1,4 +1,4 @@
-//! TUI binary entry point.
+//! TUI event loop and entry point.
 
 use std::io;
 use std::time::Duration;
@@ -7,38 +7,31 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
-use assetui::AppError;
-use assetui::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
 use yfinance_rs::YfClient;
 
-use app::{App, AppEvent, table_page_size};
-
-mod app;
-mod draw;
-mod theme;
+use super::app::{App, AppEvent, table_page_size};
+use super::draw;
+use crate::AppError;
 
 /// Cadence of time-based updates (cursor blink, notification animations, price-flash expiry).
 const TICK_RATE: Duration = Duration::from_millis(100);
 
-#[tokio::main]
-async fn main() -> Result<(), AppError> {
-    let database_url = dotenvy::var("DATABASE_URL")?;
-    let pool = setup_pool(&database_url, DEFAULT_MAX_CONNECTIONS).await?;
-
+/// Runs the interactive TUI to completion, returning once the user quits or stdin closes.
+pub async fn run(pool: sqlx::PgPool, client: YfClient) -> Result<(), AppError> {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
 
-    let mut app = App::new(pool, YfClient::default(), event_tx);
+    let mut app = App::new(pool, client, event_tx);
     app.spawn_reload();
     app.spawn_theme_watcher();
 
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, &mut event_rx).await;
+    let result = run_loop(&mut terminal, &mut app, &mut event_rx).await;
     ratatui::restore();
     Ok(result?)
 }
 
 /// Main event loop.
-async fn run<B: ratatui::backend::Backend>(
+async fn run_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,

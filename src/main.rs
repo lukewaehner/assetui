@@ -1,14 +1,36 @@
-//! CLI binary entry point.
+//! `assetui` binary entry point.
 
+use clap::{Parser, Subcommand};
 use std::path::Path;
 
-use tracing_subscriber::EnvFilter;
 use assetui::AppError;
-use assetui::cli::{Mode, pick_tickers, print_tickers, select_mode};
+use assetui::cli::print_tickers;
 use assetui::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
 use assetui::db::quotes::dump_table_to_csv;
 use assetui::run::fetch_and_store;
+use tracing_subscriber::EnvFilter;
 use yfinance_rs::YfClient;
+
+#[derive(Parser)]
+struct Args {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    #[arg(short, long, value_delimiter = ',')]
+    ticker: Option<Vec<String>>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Fetches quotes for the specified ticker and stores them in the database.
+    FetchAndStore,
+
+    /// Dumps the quotes table to a CSV file in the current directory.
+    DumpToCsv,
+
+    /// Pulls all tickers from the database and prints them to stdout.
+    PullFromDb,
+}
 
 fn init_tracing() {
     tracing_subscriber::fmt()
@@ -21,21 +43,38 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
-    init_tracing();
+    let args = Args::parse();
+
+    if args.command.is_some() {
+        init_tracing();
+    }
 
     let database_url = dotenvy::var("DATABASE_URL")?;
     let pool = setup_pool(&database_url, DEFAULT_MAX_CONNECTIONS).await?;
+    let client = YfClient::default();
 
-    match select_mode()? {
-        Mode::FetchAndStore => {
-            let client = YfClient::default();
-            fetch_and_store(&pool, &client, &pick_tickers()?).await?
+    match &args.command {
+        Some(Commands::FetchAndStore) => {
+            let ticker = match &args.ticker {
+                Some(t) => t.clone(),
+                None => {
+                    println!("Please provide tickers with --ticker or -t.");
+                    return Ok(());
+                }
+            };
+            fetch_and_store(&pool, &client, &ticker).await?;
         }
-        Mode::DumpToCsv => {
-            dump_table_to_csv(&pool, Path::new(".")).await?;
+        Some(Commands::DumpToCsv) => {
+            let output_path = Path::new("quotes_dump.csv");
+            dump_table_to_csv(&pool, output_path).await?;
+            println!("Quotes table dumped to {:?}", output_path);
         }
-        Mode::PullFromDb => print_tickers(&pool).await?,
+        Some(Commands::PullFromDb) => {
+            print_tickers(&pool).await?;
+        }
+        None => {
+            assetui::tui::run(pool, client).await?;
+        }
     }
-
     Ok(())
 }

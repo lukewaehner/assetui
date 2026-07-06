@@ -7,7 +7,7 @@ pub mod models;
 pub mod run;
 pub mod search;
 pub mod sort;
-pub mod stream;
+pub mod tui;
 
 /// Shared error type used throughout the crate.
 #[derive(Debug, thiserror::Error)]
