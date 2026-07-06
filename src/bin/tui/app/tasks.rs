@@ -48,7 +48,9 @@ impl App {
                     let _ = tx.send(AppEvent::FetchCompleted(record));
                 }
                 Ok(None) => {
-                    let _ = tx.send(AppEvent::LogLine(format!("no quote found for {symbol}")));
+                    let _ = tx.send(AppEvent::LogLine(format!(
+                        "[ERROR] no quote found for {symbol}"
+                    )));
                 }
                 Err(e) => {
                     let _ = tx.send(AppEvent::Error(format!("{symbol}: {e}")));
@@ -114,10 +116,12 @@ impl App {
                             break; // Event loop is gone
                         };
                     }
-                    let _ = tx.send(AppEvent::LogLine("quote stream ended".to_string()));
+                    let _ = tx.send(AppEvent::LogLine("[STREAM] ended stream".to_string()));
                 }
                 Ok(None) => {
-                    let _ = tx.send(AppEvent::LogLine("no symbols to stream".to_string()));
+                    let _ = tx.send(AppEvent::LogLine(
+                        "[STREAM] no symbols to stream".to_string(),
+                    ));
                 }
                 Err(e) => {
                     let _ = tx.send(AppEvent::Error(format!("stream error: {e}")));
