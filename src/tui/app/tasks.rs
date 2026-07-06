@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use crate::db::watchlist::fetch_watchlist;
 use crate::fetch::{fetch_analysis, fetch_chart_data, fetch_quote_and_store, fetch_sorted};
 use crate::models::QuoteTick;
 use crate::tui::stream::start_quote_stream;
@@ -18,8 +19,8 @@ impl App {
     /// Spawns a task to re-fetch the current page with the active sort applied,
     /// then sends a [`AppEvent::PageLoaded`] back when done.
     pub(crate) fn spawn_reload(&self) {
-        let pool = self.pool.clone();
-        let tx = self.event_tx.clone();
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
         let mode = self.db_display.sort_mode;
         let order = self.db_display.sort_order;
         tokio::spawn(async move {
@@ -37,9 +38,9 @@ impl App {
     /// Spawns a task to fetch and store a quote for `symbol`, reporting
     /// progress and the result back as [`AppEvent`]s.
     pub(crate) fn spawn_fetch(&self, symbol: String) {
-        let tx = self.event_tx.clone();
-        let pool = self.pool.clone();
-        let client = self.client.clone();
+        let tx = self.services.event_tx.clone();
+        let pool = self.services.pool.clone();
+        let client = self.services.client.clone();
         tokio::spawn(async move {
             let _ = tx.send(AppEvent::FetchSpawned(symbol.clone()));
             match fetch_quote_and_store(&pool, &client, &symbol).await {
@@ -61,8 +62,8 @@ impl App {
     /// Spawns a background task to fetch analyst data for `symbol` and sends
     /// the result back as [`AppEvent::StockAnalysisReady`].
     pub(crate) fn spawn_analysis(&self, symbol: &str) {
-        let tx = self.event_tx.clone();
-        let client = self.client.clone();
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
         let symbol = symbol.to_owned();
         tokio::spawn(async move {
             match fetch_analysis(&client, &symbol).await {
@@ -79,8 +80,8 @@ impl App {
     /// Spawns a background task to fetch price history for `symbol` and sends
     /// the candles back as [`AppEvent::ChartDataReady`].
     pub(crate) fn spawn_chart_data(&self, symbol: &str) {
-        let tx = self.event_tx.clone();
-        let client = self.client.clone();
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
         let symbol = symbol.to_owned();
         tokio::spawn(async move {
             match fetch_chart_data(&client, &symbol).await {
@@ -97,8 +98,8 @@ impl App {
     /// Spawns a task to start a live quote stream for symbols, sends incoming
     /// ticks back as [`AppEvent::QuoteTick`]s, and logs the stream lifecycle.
     pub(crate) fn spawn_stream(&self, symbols: Vec<String>) {
-        let tx = self.event_tx.clone();
-        let client = self.client.clone();
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
         let count = symbols.len();
         tokio::spawn(async move {
             match start_quote_stream(&client, symbols).await {
@@ -157,7 +158,7 @@ impl App {
         if !cfg!(target_os = "macos") {
             return;
         }
-        let tx = self.event_tx.clone();
+        let tx = self.services.event_tx.clone();
         // Seed from the appearance already detected in `App::new` so startup
         // performs a single `defaults` read and there is no window where the
         // watcher's baseline disagrees with the rendered theme.
@@ -172,6 +173,23 @@ impl App {
                     if tx.send(AppEvent::ThemeChanged(current)).is_err() {
                         break; // event loop is gone
                     }
+                }
+            }
+        });
+    }
+
+    /// Spawns a task to fetch the current watchlist,
+    /// then sends a [`AppEvent::WatchlistLoaded`] back when done.
+    pub(crate) fn spawn_load_watchlist(&self) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            match fetch_watchlist(&pool).await {
+                Ok(tickers) => {
+                    let _ = tx.send(AppEvent::WatchlistLoaded(tickers));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("Failed to fetch watchlist: {e}")));
                 }
             }
         });

@@ -6,7 +6,7 @@
 //! [`draw`](super::draw::draw) then renders the current state on the next
 //! frame.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -57,6 +57,8 @@ pub enum AppEvent {
     FetchSpawned(String),
     /// A quote was fetched and stored; the record is ready for display.
     FetchCompleted(QuoteRecord),
+    /// The watchlist returned successfully from db
+    WatchlistLoaded(Vec<String>),
     /// Analyst consensus and price targets loaded for the selected stock.
     StockAnalysisReady(QuoteRecordAnalysis),
     /// Stock price history loaded for the selected stock
@@ -85,17 +87,10 @@ pub struct App {
     /// Lines shown in the log panel (most recent at the bottom), capped at
     /// [`MAX_LOG_LINES`].
     pub logs: VecDeque<String>,
-    /// Shared database connection pool passed to async tasks.
-    pub pool: sqlx::PgPool,
-    /// Shared Yahoo Finance client (and its HTTP connection pool), cloned
-    /// into every async fetch/stream task.
-    pub client: YfClient,
-    /// Channel used by async tasks to push [`AppEvent`]s back to the loop.
-    pub event_tx: mpsc::UnboundedSender<AppEvent>,
-    /// Current state of the blinking cursor in the input box.
-    pub blink_state: bool,
-    /// Timestamp of the last blink toggle, used to drive the blink interval.
-    pub last_blink: Instant,
+    /// Shared handles (pool, client, event channel) cloned into async tasks.
+    pub services: Services,
+    /// Transient animation state advanced by [`App::tick`].
+    pub animations: Animations,
     /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
     /// Slide-in error notifications shown top-right.
@@ -109,6 +104,25 @@ pub struct App {
     pub stream_handle: Option<StreamHandle>,
     /// Subscribed symbols - starts as an empty vec, fills when subscribed
     pub subscribed_symbols: Vec<String>,
+}
+
+/// Shared handles cloned into every async fetch/stream task.
+pub struct Services {
+    /// Shared database connection pool passed to async tasks.
+    pub pool: sqlx::PgPool,
+    /// Shared Yahoo Finance client (and its HTTP connection pool), cloned
+    /// into every async fetch/stream task.
+    pub client: YfClient,
+    /// Channel used by async tasks to push [`AppEvent`]s back to the loop.
+    pub event_tx: mpsc::UnboundedSender<AppEvent>,
+}
+
+/// Transient animation state advanced by [`App::tick`].
+pub struct Animations {
+    /// Current state of the blinking cursor in the input box.
+    pub blink_state: bool,
+    /// Timestamp of the last blink toggle, used to drive the blink interval.
+    pub last_blink: Instant,
     /// Per-ticker price-flash state (signed price delta + timestamp), keyed by
     /// uppercase ticker. Written on each `QuoteTick`; read by the draw layer.
     /// Expired entries are evicted opportunistically in [`QuoteTick::record_flash`].
@@ -135,6 +149,10 @@ pub struct DbDisplay {
     /// Master list of every row from the last database load, unaffected by
     /// filtering; [`App::apply_filter`] rebuilds `rows` from it.
     pub all_rows: Vec<QuoteRecord>,
+    /// Watchlist hashset of tracked tickers
+    pub watchlist: HashSet<String>,
+    /// TODO: WATCH-5
+    pub watchlist_only: bool,
     /// Ratatui widget state tracking the selected row index.
     pub table_state: TableState,
     /// Short status message shown in the table's title bar.
@@ -191,7 +209,7 @@ impl DbDisplay {
     }
 }
 
-/// State for the stock-detail overlay modal.
+/// State for the stock-detail overlay modals.
 pub struct StockInfoModal {
     /// The quote row that was selected when `?` was pressed.
     pub stock: QuoteRecord,
@@ -242,17 +260,24 @@ impl App {
                 all_rows: Vec::new(),
                 status: String::from("Loading..."),
                 table_state: TableState::default(),
+                watchlist: HashSet::new(),
+                watchlist_only: false,
                 sort_mode: SortMode::ById,
                 sort_order: SortOrder::Descending,
                 page: 0,
                 page_size: 25,
             },
             logs: VecDeque::new(),
-            pool,
-            client,
-            event_tx,
-            blink_state: true,
-            last_blink: Instant::now(),
+            services: Services {
+                pool,
+                client,
+                event_tx,
+            },
+            animations: Animations {
+                blink_state: true,
+                last_blink: Instant::now(),
+                row_flash_map: HashMap::new(),
+            },
             stock_modal: StockInfoModal {
                 stock: QuoteRecord::default(),
                 analysis: None,
@@ -265,7 +290,6 @@ impl App {
             theme: Theme::for_appearance(appearance),
             stream_handle: None,
             subscribed_symbols: Vec::new(),
-            row_flash_map: HashMap::new(),
         }
     }
 
@@ -279,9 +303,9 @@ impl App {
     pub fn tick(&mut self, elapsed: Duration) -> bool {
         let now = Instant::now();
         let mut blinked = false;
-        if now.duration_since(self.last_blink) >= BLINK_INTERVAL {
-            self.blink_state = !self.blink_state;
-            self.last_blink = now;
+        if now.duration_since(self.animations.last_blink) >= BLINK_INTERVAL {
+            self.animations.blink_state = !self.animations.blink_state;
+            self.animations.last_blink = now;
             blinked = true;
         }
         self.notifications.tick(elapsed);
@@ -289,8 +313,9 @@ impl App {
         // Evict expired price flashes here (not just on the next tick's
         // `record_flash`) so `had_flashes` forces one final redraw that
         // repaints the rows in their normal colours.
-        let had_flashes = !self.row_flash_map.is_empty();
-        self.row_flash_map
+        let had_flashes = !self.animations.row_flash_map.is_empty();
+        self.animations
+            .row_flash_map
             .retain(|_, (_, ts)| ts.elapsed() < FLASH_TTL);
 
         (blinked && self.input_mode.toggled) || self.notifications.has_notification() || had_flashes
@@ -332,6 +357,9 @@ impl App {
             AppEvent::LogLine(line) => {
                 self.push_log(line);
             }
+            AppEvent::WatchlistLoaded(tickers) => {
+                self.db_display.watchlist = tickers.into_iter().collect();
+            }
             AppEvent::Error(e) => self.push_error(e),
             AppEvent::StockAnalysisReady(analysis) => {
                 self.stock_modal.analysis = Some(analysis);
@@ -350,7 +378,10 @@ impl App {
                 // row's pre-update value in the same pass.  A tick for a
                 // ticker not on screen is a silent no-op.
                 let range = self.db_display.window_range();
-                tick.apply(&mut self.db_display.rows[range], &mut self.row_flash_map);
+                tick.apply(
+                    &mut self.db_display.rows[range],
+                    &mut self.animations.row_flash_map,
+                );
             }
             AppEvent::StreamStarted(handle) => {
                 self.stream_handle = Some(handle);
@@ -698,9 +729,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
     use crate::models::QuoteRecord;
     use crate::sort::{SortMode, SortOrder};
+    use tokio::sync::mpsc;
 
     fn make_test_app() -> (App, mpsc::UnboundedReceiver<AppEvent>) {
         let pool = sqlx::PgPool::connect_lazy("postgres://localhost/nonexistent_test_db").unwrap();

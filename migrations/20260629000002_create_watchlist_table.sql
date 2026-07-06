@@ -1,0 +1,4 @@
+CREATE TABLE watchlist (
+ticker TEXT PRIMARY KEY,
+  added_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

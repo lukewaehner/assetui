@@ -90,7 +90,7 @@ fn block_title(text: String, t: &Theme) -> Line<'static> {
 /// prefixed with a dim `/`, so the box always signals what typing will do.
 fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     let t = app.theme;
-    let cursor = if app.input_mode.toggled && app.blink_state {
+    let cursor = if app.input_mode.toggled && app.animations.blink_state {
         "▌"
     } else {
         " "
@@ -259,7 +259,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             fuzzy_cell(q.ticker.as_deref(), query, searching, &t),
             fuzzy_cell(q.name.as_deref(), query, searching, &t),
             opt_cell(q.price, |p| format!("{p:.2}"))
-                .style(Style::default().fg(price_change_color(q, &app.row_flash_map, &t))),
+                .style(Style::default().fg(price_change_color(q, &app.animations.row_flash_map, &t))),
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
             opt_cell(q.day_volume, fmt_volume),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
@@ -510,7 +510,7 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
 
     let mut lines: Vec<Line> = vec![
-        price_line(stock, &app.row_flash_map, &t),
+        price_line(stock, &app.animations.row_flash_map, &t),
         Line::raw(""),
         Line::from(vec![
             label("prev close  ", &t),
