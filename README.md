@@ -12,17 +12,19 @@ The TUI loads your most recent 200 quotes on startup, pages through them, and le
 
 You need Postgres running and [sqlx-cli](https://github.com/launchbr/sqlx-cli) installed for the migrations.
 
+Create an empty database, and add the database connection string to a `.env` file at the project root
+
 ```
-DATABASE_URL=postgres://user:pass@localhost/yfinance
+DATABASE_URL=postgres://<user>:<pass>@localhost/<database_name>
 ```
 
-Put that in a `.env` file at the project root, then run migrations:
+Put that in a `.env` file you just created at the project root, then optionally run migrations (running the app will run migrations):
 
 ```sh
 sqlx migrate run
 ```
 
-Build both binaries:
+Build the binary:
 
 ```sh
 cargo build --release
@@ -41,10 +43,12 @@ cargo run
 | Key | Action |
 |-----|--------|
 | `i` | Toggle ticker input (type a symbol, press Enter to fetch) |
+| `f` | Add or remove a ticker to the favorites watchlist  |
 | `/` | Fuzzy search: filter the table by ticker or company name |
 | `j` / `k` | Navigate rows |
 | `h` / `l` | Previous / next page |
-| `?` | Open the info modal (analyst consensus + price targets) |
+| `s` | Open the info modal |
+| `?` | Open the help modal |
 | `Enter` | Open the chart modal (price history) for the selected row |
 | `Esc` | Close modal, cancel search, or exit input mode |
 | `o` | Toggle sort direction |
