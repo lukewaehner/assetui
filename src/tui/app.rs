@@ -144,16 +144,18 @@ pub struct InputMode {
 /// State for the quotes table on the right side of the layout.
 pub struct DbDisplay {
     /// The rows currently being displayed: [`Self::all_rows`] narrowed by the
-    /// active fuzzy query (or a straight copy when no filter is active).  The
-    /// visible page is a window into this, derived from `page` and
-    /// `page_size` via [`Self::window_range`].
+    /// active fuzzy query and, when `watchlist_only` is set, by watchlist
+    /// membership (or a straight copy when no filter is active).  The visible
+    /// page is a window into this, derived from `page` and `page_size` via
+    /// [`Self::window_range`].
     pub rows: Vec<QuoteRecord>,
     /// Master list of every row from the last database load, unaffected by
     /// filtering; [`App::apply_filter`] rebuilds `rows` from it.
     pub all_rows: Vec<QuoteRecord>,
     /// Watchlist hashset of tracked tickers
     pub watchlist: HashSet<String>,
-    /// TODO: WATCH-5
+    /// When true, [`App::apply_filter`] narrows `rows` to watchlisted tickers
+    /// only, on top of any active fuzzy query.
     pub watchlist_only: bool,
     /// Ratatui widget state tracking the selected row index.
     pub table_state: TableState,
@@ -208,6 +210,14 @@ impl DbDisplay {
         syms.sort();
         syms.dedup();
         syms
+    }
+
+    fn on_watchlist(&self, row: &QuoteRecord) -> bool {
+        if let Some(ticker) = row.ticker.as_deref() {
+            self.watchlist.contains(&ticker.to_ascii_uppercase())
+        } else {
+            false
+        }
     }
 }
 
@@ -468,7 +478,6 @@ impl App {
     /// Only called when the input box is not focused; while focused, characters
     /// are appended to [`InputMode::input`] instead.
     pub fn handle_command_key(&mut self, key: char) {
-        let key = key.to_ascii_lowercase();
         // The help overlay is modal: only Esc (handled in `handle_key`) closes it.
         if self.help_visible {
             return;
@@ -493,6 +502,11 @@ impl App {
             's' => self.open_info_modal(),
             '?' => self.open_help_modal(),
             'w' => self.toggle_watchlist(),
+            'W' => {
+                self.db_display.watchlist_only = !self.db_display.watchlist_only;
+                self.apply_filter();
+                self.resubscribe_stream();
+            }
             'i' => {
                 // An accepted fuzzy filter still owns the input box; drop it
                 // so typed characters compose a ticker, not a query.
@@ -539,6 +553,13 @@ impl App {
         } else {
             self.db_display.watchlist.insert(ticker.clone());
             self.spawn_save_to_watchlist(ticker);
+        }
+
+        // In watchlist-only mode the visible set is derived from the watchlist,
+        // so a membership change must rebuild `rows` (and the stream) now.
+        if self.db_display.watchlist_only {
+            self.apply_filter();
+            self.resubscribe_stream();
         }
     }
 
@@ -646,7 +667,7 @@ impl App {
     /// re-subscribe once the query settles (accept, cancel, page load).
     fn apply_filter(&mut self) {
         let query = &self.input_mode.input;
-        self.db_display.rows = if self.input_mode.fuzzy_search {
+        let mut rows: Vec<QuoteRecord> = if self.input_mode.fuzzy_search {
             self.db_display
                 .all_rows
                 .iter()
@@ -656,6 +677,10 @@ impl App {
         } else {
             self.db_display.all_rows.clone()
         };
+        if self.db_display.watchlist_only {
+            rows.retain(|r| self.db_display.on_watchlist(r));
+        }
+        self.db_display.rows = rows;
         self.db_display.page = 0;
         self.reset_selection();
     }

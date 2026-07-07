@@ -262,6 +262,20 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     let window = app.db_display.window_range();
     let query = &app.input_mode.input;
     let searching = app.input_mode.fuzzy_search;
+
+    // If the table is empty, show a dimmed placeholder instead of a blank table
+    if app.db_display.rows.is_empty() {
+        let centered = centered_rect(40, 10, area); // 40% width, 10% height
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "no subscribed stocks",
+                Style::default().fg(t.dim),
+            ))
+            .alignment(Alignment::Center),
+            centered,
+        );
+        return;
+    }
     let rows = app.db_display.rows[window].iter().map(|q| {
         let star = if is_watchlisted(q.ticker.as_deref(), &app.db_display.watchlist) {
             Cell::from(Span::styled("★", Style::default().fg(t.gold)))
@@ -293,8 +307,15 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         Constraint::Length(12),
     ];
 
+    let mut quotes_table_title_text = "assetui · ".to_string();
+    quotes_table_title_text.push_str(if app.db_display.watchlist_only {
+        "watchlist"
+    } else {
+        "quotes"
+    });
+
     let mut title = vec![Span::styled(
-        " assetui · quotes ",
+        quotes_table_title_text,
         Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
     )];
     if searching && !query.trim().is_empty() {
