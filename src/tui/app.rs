@@ -93,6 +93,8 @@ pub struct App {
     pub animations: Animations,
     /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
+    /// Whether the keybinding help overlay is visible.
+    pub help_visible: bool,
     /// Slide-in error notifications shown top-right.
     pub notifications: Notifications,
     /// The system appearance the current [`theme`](Self::theme) was derived
@@ -285,6 +287,7 @@ impl App {
                 chart_visible: false,
                 chart_data: None,
             },
+            help_visible: false,
             notifications: Notifications::new(),
             appearance,
             theme: Theme::for_appearance(appearance),
@@ -420,9 +423,13 @@ impl App {
     pub fn handle_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
-                if self.stock_modal.info_visible || self.stock_modal.chart_visible {
+                if self.stock_modal.info_visible
+                    || self.stock_modal.chart_visible
+                    || self.help_visible
+                {
                     self.stock_modal.info_visible = false;
                     self.stock_modal.chart_visible = false;
+                    self.help_visible = false;
                 } else if self.input_mode.fuzzy_search {
                     // Cancels the search whether the query is still being
                     // typed or was already accepted with Enter.
@@ -461,17 +468,20 @@ impl App {
     /// Only called when the input box is not focused; while focused, characters
     /// are appended to [`InputMode::input`] instead.
     pub fn handle_command_key(&mut self, key: char) {
+        let key = key.to_ascii_lowercase();
+        // The help overlay is modal: only Esc (handled in `handle_key`) closes it.
+        if self.help_visible {
+            return;
+        }
         if self.stock_modal.info_visible || self.stock_modal.chart_visible {
-            // Disable all command keys while a modal is open
-            // Unless we want modal-specific commands eventually
-            // For now, '?' is allowed to switch to the info modal from the chart modal, and vice
-            // versa
-            if key == '?' {
-                self.open_info_modal()
+            // Command keys are otherwise disabled while a stock modal is open,
+            // except `s`, which switches to the info modal from the chart modal
+            // (Enter, handled in `handle_key`, switches the other way).
+            if key == 's' {
+                self.open_info_modal();
             }
             return;
         }
-        let key = key.to_ascii_lowercase();
         // Return early if the key corresponds to a sort order
         if let Some(mode) = sort_mode_for_key(key) {
             self.set_sort_mode(mode);
@@ -480,13 +490,9 @@ impl App {
         match key {
             'q' => self.should_quit = true,
             'o' => self.toggle_sort_order(),
-            '?' => self.open_info_modal(),
-            'w' => {
-                self.append_selected_to_watchlist();
-            }
-            'r' => {
-                self.remove_selected_from_watchlist();
-            }
+            's' => self.open_info_modal(),
+            '?' => self.open_help_modal(),
+            'w' => self.toggle_watchlist(),
             'i' => {
                 // An accepted fuzzy filter still owns the input box; drop it
                 // so typed characters compose a ticker, not a query.
@@ -517,31 +523,22 @@ impl App {
         }
     }
 
-    fn append_selected_to_watchlist(&mut self) {
-        let ticker = if let Some(selected_idx) = self.db_display.table_state.selected() {
-            let window = self.db_display.window();
-            window.get(selected_idx).and_then(|row| row.ticker.clone())
-        } else {
-            None
-        };
-
-        if let Some(ticker) = ticker {
-            self.db_display.watchlist.insert(ticker.clone());
-            self.spawn_save_to_watchlist(ticker.clone());
-        }
+    fn selected_ticker(&self) -> Option<String> {
+        let selected_idx = self.db_display.table_state.selected()?;
+        let window = self.db_display.window();
+        window.get(selected_idx).and_then(|row| row.ticker.clone())
     }
 
-    fn remove_selected_from_watchlist(&mut self) {
-        let ticker = if let Some(selected_idx) = self.db_display.table_state.selected() {
-            let window = self.db_display.window();
-            window.get(selected_idx).and_then(|row| row.ticker.clone())
-        } else {
-            None
+    fn toggle_watchlist(&mut self) {
+        let Some(ticker) = self.selected_ticker() else {
+            return;
         };
 
-        if let Some(ticker) = ticker {
-            self.db_display.watchlist.remove(&ticker.clone());
-            self.spawn_remove_from_watchlist(ticker.clone());
+        if self.db_display.watchlist.remove(&ticker) {
+            self.spawn_remove_from_watchlist(ticker);
+        } else {
+            self.db_display.watchlist.insert(ticker.clone());
+            self.spawn_save_to_watchlist(ticker);
         }
     }
 
@@ -721,6 +718,7 @@ impl App {
         };
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
+        self.help_visible = false;
         self.stock_modal.chart_visible = false;
         self.stock_modal.info_visible = true;
 
@@ -753,11 +751,20 @@ impl App {
         // Keep any cached analysis: the chart modal never reads it, and
         // `open_info_modal` reuses it (guarded by a ticker match) so returning
         // to the info modal doesn't trigger a redundant refetch.
+        self.help_visible = false;
         self.stock_modal.info_visible = false;
         self.stock_modal.chart_visible = true;
         if let Some(t) = ticker.as_deref() {
             self.spawn_chart_data(t);
         }
+    }
+
+    /// Opens the keybinding help overlay, closing any stock modal so the two
+    /// never stack.
+    fn open_help_modal(&mut self) {
+        self.stock_modal.info_visible = false;
+        self.stock_modal.chart_visible = false;
+        self.help_visible = true;
     }
 }
 
@@ -1197,5 +1204,54 @@ mod tests {
         app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
         app.handle_event(AppEvent::WatchlistLoaded(vec![]));
         assert!(app.db_display.watchlist.is_empty());
+    }
+
+    // ---- Help modal & remapped info key ----
+
+    #[tokio::test]
+    async fn test_question_mark_opens_help_modal() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_key(KeyCode::Char('?'));
+        assert!(app.help_visible);
+        assert!(!app.stock_modal.info_visible);
+    }
+
+    #[tokio::test]
+    async fn test_esc_closes_help_modal() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_key(KeyCode::Char('?'));
+        app.handle_key(KeyCode::Esc);
+        assert!(!app.help_visible);
+    }
+
+    #[tokio::test]
+    async fn test_s_opens_info_modal() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('s'));
+        assert!(app.stock_modal.info_visible);
+        assert!(!app.help_visible);
+    }
+
+    #[tokio::test]
+    async fn test_help_modal_disables_command_keys() {
+        // While help is open it is modal: only Esc closes it, so `s` must not
+        // punch through and open the info modal underneath.
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('?'));
+        app.handle_key(KeyCode::Char('s'));
+        assert!(app.help_visible);
+        assert!(!app.stock_modal.info_visible);
+    }
+
+    #[tokio::test]
+    async fn test_s_switches_from_chart_to_info() {
+        // Enter opens the chart; `s` switches across to the info modal without
+        // stacking (the previous `?`-based behaviour, now on the new keys).
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Enter);
+        assert!(app.stock_modal.chart_visible);
+        app.handle_key(KeyCode::Char('s'));
+        assert!(app.stock_modal.info_visible);
+        assert!(!app.stock_modal.chart_visible);
     }
 }

@@ -73,6 +73,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_chart_modal(f, app);
     }
 
+    if app.help_visible {
+        draw_help_modal(f, app);
+    }
+
     let area = f.area();
     app.notifications.render(f, area);
 }
@@ -340,8 +344,10 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         area,
     );
 
-    let (mode, hint) = if app.stock_modal.info_visible || app.stock_modal.chart_visible {
-        ("VIEW", "esc close")
+    let (mode, hint) = if app.help_visible {
+        ("HELP", "esc close")
+    } else if app.stock_modal.info_visible || app.stock_modal.chart_visible {
+        ("VIEW", "s info · enter chart · esc close")
     } else if app.input_mode.toggled && app.input_mode.fuzzy_search {
         ("SEARCH", "type to filter · enter apply · esc cancel")
     } else if app.input_mode.toggled {
@@ -349,12 +355,12 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     } else if app.input_mode.fuzzy_search {
         (
             "FILTER",
-            "w|r add|remove favorite · / new search · esc clear · ? info · enter chart · q quit",
+            "j/k move · s info · enter chart · w ★ · / new search · esc clear · ? help",
         )
     } else {
         (
             "NORMAL",
-            "w|r add|remove favorite · i query · / search · ? info · enter chart · o order · q quit",
+            "j/k move · h/l page · s info · enter chart · w ★ · i query · / search · o order · ? help · q quit",
         )
     };
 
@@ -401,6 +407,76 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(
         Paragraph::new(Span::styled(right, Style::default().fg(t.dim))),
         right_area,
+    );
+}
+
+// ===== Help modal =====
+
+/// One `keys    description` row in the help overlay: bold-accent keys in a
+/// fixed-width gutter, dimmed description alongside.
+fn help_row(keys: &'static str, desc: &'static str, t: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {keys:<14}"),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(desc, Style::default().fg(t.fg)),
+    ])
+}
+
+/// Renders the keybinding help overlay: a centred reference of every command
+/// key, grouped by purpose. Purely informational; Esc closes it.
+fn draw_help_modal(f: &mut Frame, app: &App) {
+    let t = app.theme;
+    let area = centered_rect(48, 80, f.area());
+    f.render_widget(Clear, area);
+
+    let title = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            "assetui",
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · keybindings ", Style::default().fg(t.dim)),
+    ]);
+    let modal = modal_block(title, &t);
+    let inner = modal.inner(area);
+    f.render_widget(modal, area);
+
+    let [content, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+
+    let lines = vec![
+        section_heading("NAVIGATION", None, &t),
+        help_row("j / k", "move selection up / down", &t),
+        help_row("h / l", "previous / next page", &t),
+        Line::raw(""),
+        section_heading("VIEWS", None, &t),
+        help_row("s", "stock details", &t),
+        help_row("enter", "price chart", &t),
+        help_row("?", "this help", &t),
+        Line::raw(""),
+        section_heading("WATCHLIST", None, &t),
+        help_row("w / r", "add / remove favourite (★)", &t),
+        Line::raw(""),
+        section_heading("QUERY & SEARCH", None, &t),
+        help_row("i", "fetch tickers (input box)", &t),
+        help_row("/", "fuzzy search the table", &t),
+        Line::raw(""),
+        section_heading("SORT", None, &t),
+        help_row("o", "toggle ascending / descending", &t),
+        help_row("d t n p c v a", "sort by column", &t),
+        Line::raw(""),
+        section_heading("GENERAL", None, &t),
+        help_row("esc", "close modal / cancel", &t),
+        help_row("q", "quit", &t),
+    ];
+    f.render_widget(Paragraph::new(lines), content);
+
+    f.render_widget(
+        Paragraph::new(Span::styled("esc close ", Style::default().fg(t.dim)))
+            .alignment(Alignment::Right),
+        footer,
     );
 }
 

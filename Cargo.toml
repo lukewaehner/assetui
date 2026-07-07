@@ -3,10 +3,19 @@ name = "assetui"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = false
+debug-assertions = false
+
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.3", features = [
-  "rt-multi-thread",
+  "rt",
   "macros",
   "sync",
   "time",

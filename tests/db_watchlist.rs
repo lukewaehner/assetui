@@ -11,7 +11,10 @@ async fn test_fetch_empty_returns_empty(pool: sqlx::PgPool) {
     let tickers = fetch_watchlist(&pool)
         .await
         .expect("fetch_watchlist should succeed on empty db");
-    assert!(tickers.is_empty(), "expected empty watchlist, got {tickers:?}");
+    assert!(
+        tickers.is_empty(),
+        "expected empty watchlist, got {tickers:?}"
+    );
 }
 
 /// A ticker added to the watchlist is returned by a subsequent fetch.
@@ -50,7 +53,11 @@ async fn test_add_is_idempotent(pool: sqlx::PgPool) {
         .expect("duplicate add should not error");
 
     let tickers = fetch_watchlist(&pool).await.expect("fetch should succeed");
-    assert_eq!(tickers, vec!["AAPL".to_string()], "duplicate should not add a second row");
+    assert_eq!(
+        tickers,
+        vec!["AAPL".to_string()],
+        "duplicate should not add a second row"
+    );
 }
 
 /// Removing a tracked ticker drops it from the watchlist.
@@ -68,7 +75,11 @@ async fn test_remove_deletes_ticker(pool: sqlx::PgPool) {
         .expect("remove should succeed");
 
     let tickers = fetch_watchlist(&pool).await.expect("fetch should succeed");
-    assert_eq!(tickers, vec!["TSLA".to_string()], "only AAPL should be removed");
+    assert_eq!(
+        tickers,
+        vec!["TSLA".to_string()],
+        "only AAPL should be removed"
+    );
 }
 
 /// Removal matches the stored (uppercase) form regardless of the caller's
@@ -84,7 +95,10 @@ async fn test_remove_is_case_insensitive(pool: sqlx::PgPool) {
         .expect("remove should succeed");
 
     let tickers = fetch_watchlist(&pool).await.expect("fetch should succeed");
-    assert!(tickers.is_empty(), "lowercase remove should delete the stored ticker");
+    assert!(
+        tickers.is_empty(),
+        "lowercase remove should delete the stored ticker"
+    );
 }
 
 /// Removing a ticker that isn't tracked is a no-op, not an error.

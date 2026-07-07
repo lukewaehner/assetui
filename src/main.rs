@@ -48,7 +48,9 @@ fn init_tracing() {
         .init();
 }
 
-#[tokio::main]
+// A single-threaded runtime: this is an I/O-bound, mostly-idle TUI, so extra
+// worker threads add memory and scheduler overhead with no throughput benefit.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), AppError> {
     let args = Args::parse();
 
