@@ -9,7 +9,10 @@
 //! All colours come from the [`Theme`] on [`App`]; nothing in this module
 //! hardcodes a palette.
 
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 
 use ratatui::{
     Frame,
@@ -70,6 +73,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_chart_modal(f, app);
     }
 
+    if app.help_visible {
+        draw_help_modal(f, app);
+    }
+
     let area = f.area();
     app.notifications.render(f, area);
 }
@@ -90,7 +97,7 @@ fn block_title(text: String, t: &Theme) -> Line<'static> {
 /// prefixed with a dim `/`, so the box always signals what typing will do.
 fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     let t = app.theme;
-    let cursor = if app.input_mode.toggled && app.blink_state {
+    let cursor = if app.input_mode.toggled && app.animations.blink_state {
         "▌"
     } else {
         " "
@@ -240,6 +247,8 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     };
 
     let header = Row::new(vec![
+        // Watchlist star gutter — no label.
+        Cell::from(""),
         hcell("ID ", "(d)"),
         hcell("Ticker ", "(t)"),
         hcell("Name", "(n)"),
@@ -253,13 +262,34 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     let window = app.db_display.window_range();
     let query = &app.input_mode.input;
     let searching = app.input_mode.fuzzy_search;
+
+    // If the table is empty, show a dimmed placeholder instead of a blank table
+    if app.db_display.rows.is_empty() {
+        let centered = centered_rect(40, 10, area); // 40% width, 10% height
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "no subscribed stocks",
+                Style::default().fg(t.dim),
+            ))
+            .alignment(Alignment::Center),
+            centered,
+        );
+        return;
+    }
     let rows = app.db_display.rows[window].iter().map(|q| {
+        let star = if is_watchlisted(q.ticker.as_deref(), &app.db_display.watchlist) {
+            Cell::from(Span::styled("★", Style::default().fg(t.gold)))
+        } else {
+            Cell::from("")
+        };
         Row::new(vec![
+            star,
             opt_cell(q.id, |id| id.to_string()),
             fuzzy_cell(q.ticker.as_deref(), query, searching, &t),
             fuzzy_cell(q.name.as_deref(), query, searching, &t),
-            opt_cell(q.price, |p| format!("{p:.2}"))
-                .style(Style::default().fg(price_change_color(q, &app.row_flash_map, &t))),
+            opt_cell(q.price, |p| format!("{p:.2}")).style(
+                Style::default().fg(price_change_color(q, &app.animations.row_flash_map, &t)),
+            ),
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
             opt_cell(q.day_volume, fmt_volume),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
@@ -267,6 +297,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     });
 
     let widths = [
+        Constraint::Length(1), // watchlist star gutter
         Constraint::Length(6),
         Constraint::Length(10),
         Constraint::Length(24),
@@ -276,8 +307,15 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         Constraint::Length(12),
     ];
 
+    let mut quotes_table_title_text = "assetui · ".to_string();
+    quotes_table_title_text.push_str(if app.db_display.watchlist_only {
+        "watchlist"
+    } else {
+        "quotes"
+    });
+
     let mut title = vec![Span::styled(
-        " assetui · quotes ",
+        quotes_table_title_text,
         Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
     )];
     if searching && !query.trim().is_empty() {
@@ -310,6 +348,12 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     f.render_stateful_widget(table, area, &mut app.db_display.table_state);
 }
 
+/// Whether a row's ticker is on the watchlist. The set is keyed uppercase, so
+/// the comparison is case-insensitive; a tickerless row is never watchlisted.
+fn is_watchlisted(ticker: Option<&str>, watchlist: &HashSet<String>) -> bool {
+    ticker.is_some_and(|t| watchlist.contains(&t.to_ascii_uppercase()))
+}
+
 // ===== Status bar =====
 
 /// Renders the one-line status bar: a bold mode chip on the left,
@@ -321,8 +365,10 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         area,
     );
 
-    let (mode, hint) = if app.stock_modal.info_visible || app.stock_modal.chart_visible {
-        ("VIEW", "esc close")
+    let (mode, hint) = if app.help_visible {
+        ("HELP", "esc close")
+    } else if app.stock_modal.info_visible || app.stock_modal.chart_visible {
+        ("VIEW", "s info · enter chart · esc close")
     } else if app.input_mode.toggled && app.input_mode.fuzzy_search {
         ("SEARCH", "type to filter · enter apply · esc cancel")
     } else if app.input_mode.toggled {
@@ -330,12 +376,12 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     } else if app.input_mode.fuzzy_search {
         (
             "FILTER",
-            "j/k move · h/l page · / new search · esc clear · ? info · enter chart · q quit",
+            "j/k move · s info · enter chart · w ★ · / new search · esc clear · ? help",
         )
     } else {
         (
             "NORMAL",
-            "j/k move · h/l page · i query · / search · ? info · enter chart · o order · q quit",
+            "j/k move · h/l page · s info · enter chart · w ★ · i query · / search · o order · ? help · q quit",
         )
     };
 
@@ -382,6 +428,76 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(
         Paragraph::new(Span::styled(right, Style::default().fg(t.dim))),
         right_area,
+    );
+}
+
+// ===== Help modal =====
+
+/// One `keys    description` row in the help overlay: bold-accent keys in a
+/// fixed-width gutter, dimmed description alongside.
+fn help_row(keys: &'static str, desc: &'static str, t: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {keys:<14}"),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(desc, Style::default().fg(t.fg)),
+    ])
+}
+
+/// Renders the keybinding help overlay: a centred reference of every command
+/// key, grouped by purpose. Purely informational; Esc closes it.
+fn draw_help_modal(f: &mut Frame, app: &App) {
+    let t = app.theme;
+    let area = centered_rect(48, 80, f.area());
+    f.render_widget(Clear, area);
+
+    let title = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            "assetui",
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · keybindings ", Style::default().fg(t.dim)),
+    ]);
+    let modal = modal_block(title, &t);
+    let inner = modal.inner(area);
+    f.render_widget(modal, area);
+
+    let [content, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+
+    let lines = vec![
+        section_heading("NAVIGATION", None, &t),
+        help_row("j / k", "move selection up / down", &t),
+        help_row("h / l", "previous / next page", &t),
+        Line::raw(""),
+        section_heading("VIEWS", None, &t),
+        help_row("s", "stock details", &t),
+        help_row("enter", "price chart", &t),
+        help_row("?", "this help", &t),
+        Line::raw(""),
+        section_heading("WATCHLIST", None, &t),
+        help_row("w / r", "add / remove favourite (★)", &t),
+        Line::raw(""),
+        section_heading("QUERY & SEARCH", None, &t),
+        help_row("i", "fetch tickers (input box)", &t),
+        help_row("/", "fuzzy search the table", &t),
+        Line::raw(""),
+        section_heading("SORT", None, &t),
+        help_row("o", "toggle ascending / descending", &t),
+        help_row("d t n p c v a", "sort by column", &t),
+        Line::raw(""),
+        section_heading("GENERAL", None, &t),
+        help_row("esc", "close modal / cancel", &t),
+        help_row("q", "quit", &t),
+    ];
+    f.render_widget(Paragraph::new(lines), content);
+
+    f.render_widget(
+        Paragraph::new(Span::styled("esc close ", Style::default().fg(t.dim)))
+            .alignment(Alignment::Right),
+        footer,
     );
 }
 
@@ -510,7 +626,7 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
 
     let mut lines: Vec<Line> = vec![
-        price_line(stock, &app.row_flash_map, &t),
+        price_line(stock, &app.animations.row_flash_map, &t),
         Line::raw(""),
         Line::from(vec![
             label("prev close  ", &t),
@@ -1005,4 +1121,38 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
         .y_axis(y_axis)
         .legend_position(Some(LegendPosition::TopLeft));
     f.render_widget(chart, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn watchlist(tickers: &[&str]) -> HashSet<String> {
+        tickers.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn watchlisted_ticker_is_starred() {
+        let wl = watchlist(&["AAPL"]);
+        assert!(is_watchlisted(Some("AAPL"), &wl));
+    }
+
+    #[test]
+    fn untracked_ticker_is_not_starred() {
+        let wl = watchlist(&["AAPL"]);
+        assert!(!is_watchlisted(Some("TSLA"), &wl));
+    }
+
+    #[test]
+    fn match_is_case_insensitive() {
+        // Watchlist is keyed uppercase; a lowercase row ticker still matches.
+        let wl = watchlist(&["AAPL"]);
+        assert!(is_watchlisted(Some("aapl"), &wl));
+    }
+
+    #[test]
+    fn missing_ticker_is_not_starred() {
+        let wl = watchlist(&["AAPL"]);
+        assert!(!is_watchlisted(None, &wl));
+    }
 }

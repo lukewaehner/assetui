@@ -25,6 +25,8 @@ pub mod tui;
 pub enum AppError {
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("migration error: {0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
     #[error("Yahoo Finance error: {0}")]
     Yahoo(#[from] yfinance_rs::YfError),
     #[error("I/O error: {0}")]

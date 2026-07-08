@@ -48,7 +48,9 @@ fn init_tracing() {
         .init();
 }
 
-#[tokio::main]
+// A single-threaded runtime: this is an I/O-bound, mostly-idle TUI, so extra
+// worker threads add memory and scheduler overhead with no throughput benefit.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), AppError> {
     let args = Args::parse();
 
@@ -59,9 +61,11 @@ async fn main() -> Result<(), AppError> {
         init_tracing();
     }
 
+    // Pull database url, setup env and client, run migrations
     let database_url = dotenvy::var("DATABASE_URL")?;
     let pool = setup_pool(&database_url, DEFAULT_MAX_CONNECTIONS).await?;
     let client = YfClient::default();
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
     match &args.command {
         Some(Commands::FetchAndStore) => {
