@@ -1,0 +1,8 @@
+# Build for the host CPU's full instruction set (AVX2, etc.) rather than the
+# conservative baseline. Worth a modest speedup for a locally-run tool.
+#
+# Trade-off: the resulting binary is only guaranteed to run on the machine class
+# it was built on. For distribution, drop `target-cpu=native` (or
+# swap it for a portable baseline like `target-cpu=x86-64-v3`).
+[build]
+rustflags = ["-C", "target-cpu=native"]

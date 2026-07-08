@@ -1,6 +1,6 @@
 //! Application state and event handling for the TUI binary.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,8 @@ pub enum AppEvent {
     FetchSpawned(String),
     /// A quote was fetched and stored.
     FetchCompleted(QuoteRecord),
+    /// The watchlist returned successfully from db.
+    WatchlistLoaded(Vec<String>),
     /// Analyst consensus and price targets loaded for the selected stock.
     StockAnalysisReady(QuoteRecordAnalysis),
     /// Stock price history loaded for the selected stock.
@@ -66,17 +68,13 @@ pub struct App {
     pub db_display: DbDisplay,
     /// Lines shown in the log panel (most recent at the bottom), capped at [`MAX_LOG_LINES`].
     pub logs: VecDeque<String>,
-    /// Shared database connection pool passed to async tasks.
-    pub pool: sqlx::PgPool,
-    pub client: YfClient,
-    /// Channel used by async tasks to push [`AppEvent`]s back to the loop.
-    pub event_tx: mpsc::UnboundedSender<AppEvent>,
-    /// Current state of the blinking cursor in the input box.
-    pub blink_state: bool,
-    /// Timestamp of the last blink toggle, used to drive the blink interval.
-    pub last_blink: Instant,
+    /// Shared handles (pool, client, event channel) cloned into async tasks.
+    pub services: Services,
+    /// Transient animation state advanced by [`App::tick`].
+    pub animations: Animations,
     /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
+    pub help_visible: bool,
     /// Slide-in error notifications shown top-right.
     pub notifications: Notifications,
     /// The system appearance the current [`theme`](Self::theme) was derived from.
@@ -87,6 +85,23 @@ pub struct App {
     pub stream_handle: Option<StreamHandle>,
     /// Subscribed symbols - starts as an empty vec, fills when subscribed.
     pub subscribed_symbols: Vec<String>,
+}
+
+/// Shared handles cloned into every async fetch/stream task.
+pub struct Services {
+    /// Shared database connection pool passed to async tasks.
+    pub pool: sqlx::PgPool,
+    pub client: YfClient,
+    /// Channel used by async tasks to push [`AppEvent`]s back to the loop.
+    pub event_tx: mpsc::UnboundedSender<AppEvent>,
+}
+
+/// Transient animation state advanced by [`App::tick`].
+pub struct Animations {
+    /// Current state of the blinking cursor in the input box.
+    pub blink_state: bool,
+    /// Timestamp of the last blink toggle, used to drive the blink interval.
+    pub last_blink: Instant,
     /// Per-ticker price-flash state (signed price delta + timestamp), keyed by uppercase ticker.
     pub row_flash_map: HashMap<String, (f64, Instant)>,
 }
@@ -106,6 +121,9 @@ pub struct DbDisplay {
     pub rows: Vec<QuoteRecord>,
     /// Master list of every row from the last database load, unaffected by filtering.
     pub all_rows: Vec<QuoteRecord>,
+    /// Watchlist hashset of tracked tickers.
+    pub watchlist: HashSet<String>,
+    pub watchlist_only: bool,
     /// Ratatui widget state tracking the selected row index.
     pub table_state: TableState,
     /// Short status message shown in the table's title bar.
@@ -159,9 +177,17 @@ impl DbDisplay {
         syms.dedup();
         syms
     }
+
+    fn on_watchlist(&self, row: &QuoteRecord) -> bool {
+        if let Some(ticker) = row.ticker.as_deref() {
+            self.watchlist.contains(&ticker.to_ascii_uppercase())
+        } else {
+            false
+        }
+    }
 }
 
-/// State for the stock-detail overlay modal.
+/// State for the stock-detail overlay modals.
 pub struct StockInfoModal {
     /// The quote row that was selected when `?` was pressed.
     pub stock: QuoteRecord,
@@ -206,17 +232,24 @@ impl App {
                 all_rows: Vec::new(),
                 status: String::from("Loading..."),
                 table_state: TableState::default(),
+                watchlist: HashSet::new(),
+                watchlist_only: false,
                 sort_mode: SortMode::ById,
                 sort_order: SortOrder::Descending,
                 page: 0,
                 page_size: 25,
             },
             logs: VecDeque::new(),
-            pool,
-            client,
-            event_tx,
-            blink_state: true,
-            last_blink: Instant::now(),
+            services: Services {
+                pool,
+                client,
+                event_tx,
+            },
+            animations: Animations {
+                blink_state: true,
+                last_blink: Instant::now(),
+                row_flash_map: HashMap::new(),
+            },
             stock_modal: StockInfoModal {
                 stock: QuoteRecord::default(),
                 analysis: None,
@@ -224,27 +257,28 @@ impl App {
                 chart_visible: false,
                 chart_data: None,
             },
+            help_visible: false,
             notifications: Notifications::new(),
             appearance,
             theme: Theme::for_appearance(appearance),
             stream_handle: None,
             subscribed_symbols: Vec::new(),
-            row_flash_map: HashMap::new(),
         }
     }
 
     pub fn tick(&mut self, elapsed: Duration) -> bool {
         let now = Instant::now();
         let mut blinked = false;
-        if now.duration_since(self.last_blink) >= BLINK_INTERVAL {
-            self.blink_state = !self.blink_state;
-            self.last_blink = now;
+        if now.duration_since(self.animations.last_blink) >= BLINK_INTERVAL {
+            self.animations.blink_state = !self.animations.blink_state;
+            self.animations.last_blink = now;
             blinked = true;
         }
         self.notifications.tick(elapsed);
 
-        let had_flashes = !self.row_flash_map.is_empty();
-        self.row_flash_map
+        let had_flashes = !self.animations.row_flash_map.is_empty();
+        self.animations
+            .row_flash_map
             .retain(|_, (_, ts)| ts.elapsed() < FLASH_TTL);
 
         (blinked && self.input_mode.toggled) || self.notifications.has_notification() || had_flashes
@@ -281,6 +315,9 @@ impl App {
             AppEvent::LogLine(line) => {
                 self.push_log(line);
             }
+            AppEvent::WatchlistLoaded(tickers) => {
+                self.db_display.watchlist = tickers.into_iter().collect();
+            }
             AppEvent::Error(e) => self.push_error(e),
             AppEvent::StockAnalysisReady(analysis) => {
                 self.stock_modal.analysis = Some(analysis);
@@ -291,7 +328,10 @@ impl App {
             AppEvent::QuoteTick(tick) => {
                 tick.apply(&mut self.db_display.all_rows, &mut HashMap::new());
                 let range = self.db_display.window_range();
-                tick.apply(&mut self.db_display.rows[range], &mut self.row_flash_map);
+                tick.apply(
+                    &mut self.db_display.rows[range],
+                    &mut self.animations.row_flash_map,
+                );
             }
             AppEvent::StreamStarted(handle) => {
                 self.stream_handle = Some(handle);
@@ -324,9 +364,13 @@ impl App {
     pub fn handle_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
-                if self.stock_modal.info_visible || self.stock_modal.chart_visible {
+                if self.stock_modal.info_visible
+                    || self.stock_modal.chart_visible
+                    || self.help_visible
+                {
                     self.stock_modal.info_visible = false;
                     self.stock_modal.chart_visible = false;
+                    self.help_visible = false;
                 } else if self.input_mode.fuzzy_search {
                     self.cancel_fuzzy_search();
                 } else {
@@ -360,32 +404,41 @@ impl App {
 
     /// Routes a single command key to the appropriate state change.
     pub fn handle_command_key(&mut self, key: char) {
+        if self.help_visible {
+            return;
+        }
         if self.stock_modal.info_visible || self.stock_modal.chart_visible {
-            if key == '?' {
-                self.open_info_modal()
+            if key == 's' {
+                self.open_info_modal();
             }
             return;
         }
-        let key = key.to_ascii_lowercase();
         if let Some(mode) = sort_mode_for_key(key) {
             self.set_sort_mode(mode);
             return;
         }
         match key {
             'q' => self.should_quit = true,
+            'o' => self.toggle_sort_order(),
+            's' => self.open_info_modal(),
+            '?' => self.open_help_modal(),
+            'w' => self.toggle_watchlist(),
+            'W' => {
+                self.db_display.watchlist_only = !self.db_display.watchlist_only;
+                self.apply_filter();
+                self.resubscribe_stream();
+            }
             'i' => {
                 if self.input_mode.fuzzy_search {
                     self.cancel_fuzzy_search();
                 }
                 self.input_mode.toggled = !self.input_mode.toggled;
             }
+            '/' => self.start_fuzzy_search(),
             'j' => self.move_selection(1),
             'k' => self.move_selection(-1),
             'h' => self.paginate(-1),
             'l' => self.paginate(1),
-            'o' => self.toggle_sort_order(),
-            '?' => self.open_info_modal(),
-            '/' => self.start_fuzzy_search(),
             _ => {}
         }
     }
@@ -395,6 +448,30 @@ impl App {
         self.input_mode.input.clear();
         for symbol in symbols {
             self.spawn_fetch(symbol);
+        }
+    }
+
+    fn selected_ticker(&self) -> Option<String> {
+        let selected_idx = self.db_display.table_state.selected()?;
+        let window = self.db_display.window();
+        window.get(selected_idx).and_then(|row| row.ticker.clone())
+    }
+
+    fn toggle_watchlist(&mut self) {
+        let Some(ticker) = self.selected_ticker() else {
+            return;
+        };
+
+        if self.db_display.watchlist.remove(&ticker) {
+            self.spawn_remove_from_watchlist(ticker);
+        } else {
+            self.db_display.watchlist.insert(ticker.clone());
+            self.spawn_save_to_watchlist(ticker);
+        }
+
+        if self.db_display.watchlist_only {
+            self.apply_filter();
+            self.resubscribe_stream();
         }
     }
 
@@ -481,7 +558,7 @@ impl App {
 
     fn apply_filter(&mut self) {
         let query = &self.input_mode.input;
-        self.db_display.rows = if self.input_mode.fuzzy_search {
+        let mut rows: Vec<QuoteRecord> = if self.input_mode.fuzzy_search {
             self.db_display
                 .all_rows
                 .iter()
@@ -491,6 +568,10 @@ impl App {
         } else {
             self.db_display.all_rows.clone()
         };
+        if self.db_display.watchlist_only {
+            rows.retain(|r| self.db_display.on_watchlist(r));
+        }
+        self.db_display.rows = rows;
         self.db_display.page = 0;
         self.reset_selection();
     }
@@ -542,6 +623,7 @@ impl App {
         };
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
+        self.help_visible = false;
         self.stock_modal.chart_visible = false;
         self.stock_modal.info_visible = true;
 
@@ -569,20 +651,28 @@ impl App {
         };
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
+        self.help_visible = false;
         self.stock_modal.info_visible = false;
         self.stock_modal.chart_visible = true;
         if let Some(t) = ticker.as_deref() {
             self.spawn_chart_data(t);
         }
     }
+
+    /// Opens the keybinding help overlay, closing any stock modal so the two never stack.
+    fn open_help_modal(&mut self) {
+        self.stock_modal.info_visible = false;
+        self.stock_modal.chart_visible = false;
+        self.help_visible = true;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
     use crate::models::QuoteRecord;
     use crate::sort::{SortMode, SortOrder};
+    use tokio::sync::mpsc;
 
     fn make_test_app() -> (App, mpsc::UnboundedReceiver<AppEvent>) {
         let pool = sqlx::PgPool::connect_lazy("postgres://localhost/nonexistent_test_db").unwrap();
@@ -926,5 +1016,97 @@ mod tests {
             .find(|r| r.ticker.as_deref() == Some("TSLA"))
             .expect("TSLA back after clearing");
         assert_eq!(tsla.price, Some(456.0), "tick reached the master list");
+    }
+
+    #[tokio::test]
+    async fn test_app_new_starts_with_empty_watchlist() {
+        let (app, _rx) = make_test_app();
+        assert!(app.db_display.watchlist.is_empty());
+        assert!(!app.db_display.watchlist_only);
+    }
+
+    #[tokio::test]
+    async fn test_handle_event_watchlist_loaded() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::WatchlistLoaded(vec![
+            "AAPL".to_string(),
+            "TSLA".to_string(),
+        ]));
+        assert_eq!(app.db_display.watchlist.len(), 2);
+        assert!(app.db_display.watchlist.contains("AAPL"));
+        assert!(app.db_display.watchlist.contains("TSLA"));
+    }
+
+    /// The set collapses duplicate tickers coming back from the db.
+    #[tokio::test]
+    async fn test_watchlist_loaded_dedups() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::WatchlistLoaded(vec![
+            "AAPL".to_string(),
+            "AAPL".to_string(),
+        ]));
+        assert_eq!(app.db_display.watchlist.len(), 1);
+        assert!(app.db_display.watchlist.contains("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn test_watchlist_loaded_replaces_previous() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
+        app.handle_event(AppEvent::WatchlistLoaded(vec!["TSLA".to_string()]));
+        assert_eq!(app.db_display.watchlist.len(), 1);
+        assert!(app.db_display.watchlist.contains("TSLA"));
+        assert!(!app.db_display.watchlist.contains("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn test_watchlist_loaded_empty_clears() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
+        app.handle_event(AppEvent::WatchlistLoaded(vec![]));
+        assert!(app.db_display.watchlist.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_question_mark_opens_help_modal() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_key(KeyCode::Char('?'));
+        assert!(app.help_visible);
+        assert!(!app.stock_modal.info_visible);
+    }
+
+    #[tokio::test]
+    async fn test_esc_closes_help_modal() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_key(KeyCode::Char('?'));
+        app.handle_key(KeyCode::Esc);
+        assert!(!app.help_visible);
+    }
+
+    #[tokio::test]
+    async fn test_s_opens_info_modal() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('s'));
+        assert!(app.stock_modal.info_visible);
+        assert!(!app.help_visible);
+    }
+
+    #[tokio::test]
+    async fn test_help_modal_disables_command_keys() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Char('?'));
+        app.handle_key(KeyCode::Char('s'));
+        assert!(app.help_visible);
+        assert!(!app.stock_modal.info_visible);
+    }
+
+    #[tokio::test]
+    async fn test_s_switches_from_chart_to_info() {
+        let mut app = app_with_three_stocks();
+        app.handle_key(KeyCode::Enter);
+        assert!(app.stock_modal.chart_visible);
+        app.handle_key(KeyCode::Char('s'));
+        assert!(app.stock_modal.info_visible);
+        assert!(!app.stock_modal.chart_visible);
     }
 }

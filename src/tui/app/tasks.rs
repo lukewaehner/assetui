@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{fetch_analysis, fetch_chart_data, fetch_quote_and_store, fetch_sorted};
 use crate::models::QuoteTick;
 use crate::tui::stream::start_quote_stream;
@@ -11,8 +12,8 @@ use super::{App, AppEvent, PAGE_FETCH_LIMIT};
 
 impl App {
     pub(crate) fn spawn_reload(&self) {
-        let pool = self.pool.clone();
-        let tx = self.event_tx.clone();
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
         let mode = self.db_display.sort_mode;
         let order = self.db_display.sort_order;
         tokio::spawn(async move {
@@ -28,9 +29,9 @@ impl App {
     }
 
     pub(crate) fn spawn_fetch(&self, symbol: String) {
-        let tx = self.event_tx.clone();
-        let pool = self.pool.clone();
-        let client = self.client.clone();
+        let tx = self.services.event_tx.clone();
+        let pool = self.services.pool.clone();
+        let client = self.services.client.clone();
         tokio::spawn(async move {
             let _ = tx.send(AppEvent::FetchSpawned(symbol.clone()));
             match fetch_quote_and_store(&pool, &client, &symbol).await {
@@ -50,8 +51,8 @@ impl App {
     }
 
     pub(crate) fn spawn_analysis(&self, symbol: &str) {
-        let tx = self.event_tx.clone();
-        let client = self.client.clone();
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
         let symbol = symbol.to_owned();
         tokio::spawn(async move {
             match fetch_analysis(&client, &symbol).await {
@@ -66,8 +67,8 @@ impl App {
     }
 
     pub(crate) fn spawn_chart_data(&self, symbol: &str) {
-        let tx = self.event_tx.clone();
-        let client = self.client.clone();
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
         let symbol = symbol.to_owned();
         tokio::spawn(async move {
             match fetch_chart_data(&client, &symbol).await {
@@ -82,8 +83,8 @@ impl App {
     }
 
     pub(crate) fn spawn_stream(&self, symbols: Vec<String>) {
-        let tx = self.event_tx.clone();
-        let client = self.client.clone();
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
         let count = symbols.len();
         tokio::spawn(async move {
             match start_quote_stream(&client, symbols).await {
@@ -131,7 +132,7 @@ impl App {
         if !cfg!(target_os = "macos") {
             return;
         }
-        let tx = self.event_tx.clone();
+        let tx = self.services.event_tx.clone();
         let mut last = self.appearance;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(2));
@@ -145,6 +146,47 @@ impl App {
                     }
                 }
             }
+        });
+    }
+
+    pub(crate) fn spawn_load_watchlist(&self) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            match fetch_watchlist(&pool).await {
+                Ok(tickers) => {
+                    let _ = tx.send(AppEvent::WatchlistLoaded(tickers));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("Failed to fetch watchlist: {e}")));
+                }
+            }
+        });
+    }
+
+    pub(crate) fn spawn_save_to_watchlist(&self, ticker: String) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            add_to_watchlist(&pool, &ticker).await.unwrap_or_else(|e| {
+                let _ = tx.send(AppEvent::Error(format!(
+                    "Failed to add {ticker} to watchlist: {e}"
+                )));
+            });
+        });
+    }
+
+    pub(crate) fn spawn_remove_from_watchlist(&self, ticker: String) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            remove_from_watchlist(&pool, &ticker)
+                .await
+                .unwrap_or_else(|e| {
+                    let _ = tx.send(AppEvent::Error(format!(
+                        "Failed to add {ticker} to watchlist: {e}"
+                    )));
+                });
         });
     }
 }
