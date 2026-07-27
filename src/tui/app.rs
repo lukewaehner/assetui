@@ -15,7 +15,8 @@ use super::theme::{Appearance, Theme};
 use crate::{
     cli::parse_tickers,
     models::{
-        FLASH_TTL, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics, QuoteTick, StockNews,
+        FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics,
+        QuoteTick, StockNews,
     },
     sort::{SortMode, SortOrder},
 };
@@ -53,6 +54,8 @@ pub enum AppEvent {
     StockNewsReady(StockNews),
     /// Stock price history loaded for the selected stock.
     ChartDataReady(Vec<Candle>),
+    /// Options chain (expirations + contracts) loaded for the selected stock.
+    OptionChainReady(OptionChain),
     /// Informational message for the log panel.
     LogLine(String),
     /// A quote update is returned from the stream.
@@ -207,6 +210,10 @@ pub struct StockInfoModal {
     pub chart_visible: bool,
     /// Stock price history fetched in the bg, None while loading.
     pub chart_data: Option<Vec<Candle>>,
+    pub options_visible: bool,
+    pub option_chain: Option<OptionChain>,
+    /// Index into the chain's `expirations` currently shown in the modal.
+    pub selected_expiry: usize,
 }
 
 fn sort_mode_for_key(key: char) -> Option<SortMode> {
@@ -268,6 +275,9 @@ impl App {
                 info_visible: false,
                 chart_visible: false,
                 chart_data: None,
+                options_visible: false,
+                option_chain: None,
+                selected_expiry: 0,
             },
             help_visible: false,
             notifications: Notifications::new(),
@@ -343,6 +353,11 @@ impl App {
             AppEvent::ChartDataReady(data) => {
                 self.stock_modal.chart_data = Some(data);
             }
+            AppEvent::OptionChainReady(mut chain) => {
+                chain.underlying_price = self.stock_modal.stock.price;
+                self.stock_modal.option_chain = Some(chain);
+                self.stock_modal.selected_expiry = 0;
+            }
             AppEvent::QuoteTick(tick) => {
                 tick.apply(&mut self.db_display.all_rows, &mut HashMap::new());
                 let range = self.db_display.window_range();
@@ -384,10 +399,12 @@ impl App {
             KeyCode::Esc => {
                 if self.stock_modal.info_visible
                     || self.stock_modal.chart_visible
+                    || self.stock_modal.options_visible
                     || self.help_visible
                 {
                     self.stock_modal.info_visible = false;
                     self.stock_modal.chart_visible = false;
+                    self.stock_modal.options_visible = false;
                     self.help_visible = false;
                 } else if self.input_mode.fuzzy_search {
                     self.cancel_fuzzy_search();
@@ -425,6 +442,9 @@ impl App {
         if self.help_visible {
             return;
         }
+        if self.stock_modal.options_visible {
+            return;
+        }
         if self.stock_modal.info_visible || self.stock_modal.chart_visible {
             if key == 's' {
                 self.open_info_modal();
@@ -441,6 +461,7 @@ impl App {
             's' => self.open_info_modal(),
             '?' => self.open_help_modal(),
             'w' => self.toggle_watchlist(),
+            'x' => self.open_options_modal(),
             'W' => {
                 self.db_display.watchlist_only = !self.db_display.watchlist_only;
                 self.apply_filter();
@@ -696,6 +717,42 @@ impl App {
         self.stock_modal.chart_visible = true;
         if let Some(t) = ticker.as_deref() {
             self.spawn_chart_data(t);
+        }
+    }
+
+    /// Opens the options-chain modal for the selected row and starts fetching its chain in the background.
+    fn open_options_modal(&mut self) {
+        let Some(stock) = self
+            .db_display
+            .table_state
+            .selected()
+            .and_then(|i| self.db_display.window().get(i))
+            .cloned()
+        else {
+            return;
+        };
+        let ticker = stock.ticker.clone();
+        let spot = stock.price;
+        self.stock_modal.stock = stock;
+        self.help_visible = false;
+        self.stock_modal.info_visible = false;
+        self.stock_modal.chart_visible = false;
+        self.stock_modal.options_visible = true;
+
+        let has_chain = self
+            .stock_modal
+            .option_chain
+            .as_ref()
+            .is_some_and(|c| Some(&c.underlying) == ticker.as_ref());
+
+        if has_chain {
+            if let Some(chain) = self.stock_modal.option_chain.as_mut() {
+                chain.underlying_price = spot;
+            }
+        } else if let Some(t) = ticker.as_deref() {
+            self.stock_modal.option_chain = None;
+            self.stock_modal.selected_expiry = 0;
+            self.spawn_option_chain(t);
         }
     }
 
@@ -958,6 +1015,108 @@ mod tests {
             app.stock_modal.news.and_then(|n| n.ticker).as_deref(),
             Some("AAPL")
         );
+    }
+
+    fn chain_for(ticker: &str) -> OptionChain {
+        OptionChain {
+            underlying: ticker.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_option_chain_ready_stores_chain_and_resets_expiry() {
+        let (mut app, _rx) = make_test_app();
+        app.stock_modal.selected_expiry = 3;
+
+        app.handle_event(AppEvent::OptionChainReady(chain_for("AAPL")));
+
+        assert_eq!(
+            app.stock_modal.option_chain.as_ref().map(|c| c.underlying.as_str()),
+            Some("AAPL")
+        );
+        assert_eq!(app.stock_modal.selected_expiry, 0);
+    }
+
+    #[tokio::test]
+    async fn test_option_chain_ready_fills_underlying_price_from_selected_quote() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(150.0),
+            ..Default::default()
+        }]));
+        app.open_options_modal();
+
+        app.handle_event(AppEvent::OptionChainReady(chain_for("AAPL")));
+
+        assert_eq!(
+            app.stock_modal.option_chain.and_then(|c| c.underlying_price),
+            Some(150.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_command_key_x_opens_options_modal() {
+        let mut app = app_with_three_stocks();
+
+        app.handle_command_key('x');
+
+        assert!(app.stock_modal.options_visible);
+    }
+
+    #[tokio::test]
+    async fn test_open_options_modal_clears_other_modals() {
+        let mut app = app_with_three_stocks();
+        app.stock_modal.info_visible = true;
+        app.stock_modal.chart_visible = true;
+        app.help_visible = true;
+
+        app.open_options_modal();
+
+        assert!(app.stock_modal.options_visible);
+        assert!(!app.stock_modal.info_visible);
+        assert!(!app.stock_modal.chart_visible);
+        assert!(!app.help_visible);
+    }
+
+    #[tokio::test]
+    async fn test_esc_closes_options_modal() {
+        let mut app = app_with_three_stocks();
+        app.handle_command_key('x');
+        assert!(app.stock_modal.options_visible);
+
+        app.handle_key(KeyCode::Esc);
+
+        assert!(!app.stock_modal.options_visible);
+    }
+
+    #[tokio::test]
+    async fn test_open_options_reuses_matching_chain() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.option_chain = Some(chain_for("AAPL"));
+
+        app.open_options_modal();
+
+        assert!(app.stock_modal.option_chain.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_open_options_refetches_chain_on_ticker_mismatch() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.option_chain = Some(chain_for("TSLA"));
+
+        app.open_options_modal();
+
+        assert!(app.stock_modal.option_chain.is_none());
     }
 
     #[tokio::test]

@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
-    fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_news, fetch_quote_and_store,
-    fetch_sorted,
+    fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_news, fetch_option_chain,
+    fetch_quote_and_store, fetch_sorted,
 };
 use crate::models::QuoteTick;
 use crate::tui::stream::start_quote_stream;
@@ -112,6 +112,22 @@ impl App {
                 }
                 Err(e) => {
                     let _ = tx.send(AppEvent::Error(format!("chart {symbol}: {e}")));
+                }
+            }
+        });
+    }
+
+    pub(crate) fn spawn_option_chain(&self, symbol: &str) {
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
+        let symbol = symbol.to_owned();
+        tokio::spawn(async move {
+            match fetch_option_chain(&client, &symbol).await {
+                Ok(chain) => {
+                    let _ = tx.send(AppEvent::OptionChainReady(chain));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("options {symbol}: {e}")));
                 }
             }
         });
