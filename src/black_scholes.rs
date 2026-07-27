@@ -175,6 +175,75 @@ pub fn greeks(inputs: &BlackScholesInputs, kind: OptionKind) -> Greeks {
     Greeks { delta, gamma, theta, vega, rho }
 }
 
+const IV_PRICE_TOLERANCE: f64 = 1e-8;
+
+const IV_MAX_ITERATIONS: usize = 100;
+
+pub fn implied_volatility(
+    market_price: f64,
+    inputs_without_sigma: &BlackScholesInputs,
+    kind: OptionKind,
+) -> Result<f64, BlackScholesError> {
+    let base = *inputs_without_sigma;
+    let disc_q = (-base.q * base.t).exp();
+    let disc_r = (-base.r * base.t).exp();
+
+    let (lower_bound, upper_bound) = match kind {
+        OptionKind::Call => (
+            (base.s * disc_q - base.k * disc_r).max(0.0),
+            base.s * disc_q,
+        ),
+        OptionKind::Put => (
+            (base.k * disc_r - base.s * disc_q).max(0.0),
+            base.k * disc_r,
+        ),
+    };
+    if market_price < lower_bound - IV_PRICE_TOLERANCE
+        || market_price > upper_bound + IV_PRICE_TOLERANCE
+    {
+        return Err(BlackScholesError::PriceOutOfBounds { market_price });
+    }
+
+    let priced_at = |sigma: f64| -> f64 {
+        let mut i = base;
+        i.sigma = sigma;
+        price(&i, kind)
+    };
+    let vega_at = |sigma: f64| -> f64 {
+        let mut i = base;
+        i.sigma = sigma;
+        greeks(&i, kind).vega
+    };
+
+    let mut lo = IV_PRICE_TOLERANCE;
+    let mut hi = 5.0;
+
+    let mut sigma =
+        ((2.0 * std::f64::consts::PI / base.t).sqrt() * market_price / base.s).clamp(lo, hi);
+
+    for _ in 0..IV_MAX_ITERATIONS {
+        let diff = priced_at(sigma) - market_price;
+        if diff.abs() < IV_PRICE_TOLERANCE {
+            return Ok(sigma);
+        }
+        if diff > 0.0 {
+            hi = sigma;
+        } else {
+            lo = sigma;
+        }
+
+        let vega = vega_at(sigma);
+        let next = sigma - diff / vega;
+        sigma = if vega.abs() < 1e-12 || !next.is_finite() || next <= lo || next >= hi {
+            0.5 * (lo + hi)
+        } else {
+            next
+        };
+    }
+
+    Err(BlackScholesError::DidNotConverge)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +359,65 @@ mod tests {
     #[test]
     fn norm_cdf_matches_known_quantile() {
         assert!((norm_cdf(1.96) - 0.975).abs() < 1e-4, "N(1.96) = {}", norm_cdf(1.96));
+    }
+
+    #[test]
+    fn implied_volatility_round_trips_a_call() {
+        // arrange
+        for &sigma in &[0.10_f64, 0.20, 0.35, 0.75] {
+            let inputs = BlackScholesInputs::new(42.0, 40.0, 0.5, 0.10, sigma, 0.0).unwrap();
+            let market = price(&inputs, OptionKind::Call);
+
+            // act
+            let recovered =
+                implied_volatility(market, &inputs, OptionKind::Call).unwrap();
+
+            // assert
+            assert!((recovered - sigma).abs() < 1e-6, "sigma {sigma} -> {recovered}");
+        }
+    }
+
+    #[test]
+    fn implied_volatility_round_trips_a_put() {
+        for &sigma in &[0.10_f64, 0.20, 0.35, 0.75] {
+            let inputs = BlackScholesInputs::new(42.0, 40.0, 0.5, 0.10, sigma, 0.0).unwrap();
+            let market = price(&inputs, OptionKind::Put);
+
+            let recovered =
+                implied_volatility(market, &inputs, OptionKind::Put).unwrap();
+
+            assert!((recovered - sigma).abs() < 1e-6, "sigma {sigma} -> {recovered}");
+        }
+    }
+
+    #[test]
+    fn implied_volatility_at_the_money_converges() {
+        // arrange
+        let inputs = BlackScholesInputs::new(100.0, 100.0, 0.25, 0.04, 0.30, 0.0).unwrap();
+        let market = price(&inputs, OptionKind::Call);
+
+        // act
+        let result = implied_volatility(market, &inputs, OptionKind::Call);
+
+        // assert
+        assert!((result.unwrap() - 0.30).abs() < 1e-6);
+    }
+
+    #[test]
+    fn implied_volatility_below_intrinsic_is_out_of_bounds() {
+        let inputs = BlackScholesInputs::new(60.0, 40.0, 0.5, 0.10, 0.20, 0.0).unwrap();
+
+        let err = implied_volatility(0.5, &inputs, OptionKind::Call).unwrap_err();
+
+        assert_eq!(err, BlackScholesError::PriceOutOfBounds { market_price: 0.5 });
+    }
+
+    #[test]
+    fn implied_volatility_above_ceiling_is_out_of_bounds() {
+        let inputs = BlackScholesInputs::new(42.0, 40.0, 0.5, 0.10, 0.20, 0.0).unwrap();
+
+        let err = implied_volatility(100.0, &inputs, OptionKind::Call).unwrap_err();
+
+        assert_eq!(err, BlackScholesError::PriceOutOfBounds { market_price: 100.0 });
     }
 }
