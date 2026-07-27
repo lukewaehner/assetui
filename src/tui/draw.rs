@@ -433,6 +433,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         section_heading("VIEWS", None, &t),
         help_row("s", "stock details", &t),
         help_row("enter", "price chart", &t),
+        help_row("x", "options chain (h/l expiry)", &t),
         help_row("?", "this help", &t),
         Line::raw(""),
         section_heading("WATCHLIST", None, &t),

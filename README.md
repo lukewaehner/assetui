@@ -6,7 +6,7 @@ A Rust tool for pulling stock quotes from Yahoo Finance and keeping a local hist
 
 Every fetch stores a timestamped snapshot of a quote (price, previous close, volume) in Postgres. Duplicate fetches - same ticker at the same `as_of` timestamp - are silently ignored, so you can run it on a schedule without cluttering the table.
 
-The TUI loads your most recent 200 quotes on startup, pages through them, and lets you sort by any column. Two modals cover the selected stock: an info modal (press `?`) with analyst consensus and price targets, and a chart modal (press `Enter`) that plots recent price history. While you're browsing, the rows on the current page update live from Yahoo's streaming feed - price cells flash green or red in the tick direction - and the colour theme follows your macOS light/dark setting.
+The TUI loads your most recent 200 quotes on startup, pages through them, and lets you sort by any column. Three modals cover the selected stock: an info modal (press `s`) with analyst consensus and price targets, a chart modal (press `Enter`) that plots recent price history, and an options modal (press `x`) that shows the option chain for a selectable expiry with side-by-side calls and puts, each contract's implied volatility, and a Black-Scholes theoretical price and Greeks. While you're browsing, the rows on the current page update live from Yahoo's streaming feed - price cells flash green or red in the tick direction - and the colour theme follows your macOS light/dark setting.
 
 ## Setup
 
@@ -48,6 +48,7 @@ cargo run
 | `j` / `k` | Navigate rows |
 | `h` / `l` | Previous / next page |
 | `s` | Open the info modal |
+| `x` | Open the options modal (chain, IV, and Greeks) for the selected row |
 | `?` | Open the help modal |
 | `Enter` | Open the chart modal (price history) for the selected row |
 | `Esc` | Close modal, cancel search, or exit input mode |
