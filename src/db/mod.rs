@@ -2,6 +2,7 @@
 
 pub mod alerts;
 pub mod connection;
+pub mod portfolio;
 pub mod quotes;
 pub mod watchlist;
 
