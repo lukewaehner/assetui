@@ -5,6 +5,7 @@ pub mod cli;
 pub mod db;
 pub mod fetch;
 pub mod models;
+pub mod portfolio;
 pub mod run;
 pub mod search;
 pub mod sort;
