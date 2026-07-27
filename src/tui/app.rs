@@ -16,7 +16,7 @@ use crate::{
     cli::parse_tickers,
     models::{
         Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics,
-        QuoteTick, StockNews,
+        QuoteTick, StockNews, crosses,
     },
     sort::{SortMode, SortOrder},
 };
@@ -374,6 +374,7 @@ impl App {
                     &mut self.db_display.rows[range],
                     &mut self.animations.row_flash_map,
                 );
+                self.evaluate_alerts(&tick);
             }
             AppEvent::StreamStarted(handle) => {
                 self.stream_handle = Some(handle);
@@ -399,6 +400,49 @@ impl App {
             .build()
         {
             let _ = self.notifications.add(notif);
+        }
+    }
+
+    fn push_alert_toast(&mut self, msg: String) {
+        self.push_log(format!("[ALERT] {msg}"));
+        if let Ok(notif) = Notification::new(msg)
+            .title("Alert")
+            .level(Level::Warn)
+            .anchor(Anchor::TopRight)
+            .animation(Animation::Slide)
+            .slide_direction(SlideDirection::FromRight)
+            .auto_dismiss(AutoDismiss::After(Duration::from_secs(5)))
+            .build()
+        {
+            let _ = self.notifications.add(notif);
+        }
+    }
+
+    fn evaluate_alerts(&mut self, tick: &QuoteTick) {
+        let (Some(ticker), Some(price)) = (tick.ticker.as_deref(), tick.price) else {
+            return;
+        };
+
+        let mut fired: Vec<Alert> = Vec::new();
+        self.alerts.retain(|a| {
+            let hit = a.ticker.eq_ignore_ascii_case(ticker) && crosses(a.direction, a.threshold, price);
+            if hit {
+                fired.push(a.clone());
+            }
+            !hit
+        });
+
+        let now = chrono::Utc::now();
+        for alert in fired {
+            let dir = match alert.direction {
+                crate::models::AlertDirection::Above => "above",
+                crate::models::AlertDirection::Below => "below",
+            };
+            self.push_alert_toast(format!(
+                "{} crossed {dir} {:.2} → {price:.2}",
+                alert.ticker, alert.threshold
+            ));
+            self.spawn_mark_alert_triggered(alert.id, now);
         }
     }
 
@@ -1503,6 +1547,60 @@ mod tests {
         app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(2, "TSLA")]));
         assert_eq!(app.alerts.len(), 1);
         assert_eq!(app.alerts[0].ticker, "TSLA");
+    }
+
+    fn price_tick(ticker: &str, price: Option<f64>) -> crate::models::QuoteTick {
+        crate::models::QuoteTick {
+            ticker: Some(ticker.to_string()),
+            price,
+            previous_close: None,
+            day_volume: None,
+            as_of: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_crossing_tick_fires_and_removes_only_matching_alert() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::AlertsLoaded(vec![
+            alert_for(1, "AAPL"),
+            alert_for(2, "TSLA"),
+        ]));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("AAPL", Some(150.0))));
+
+        assert_eq!(app.alerts.len(), 1, "the crossed alert should be removed");
+        assert_eq!(app.alerts[0].ticker, "TSLA", "unrelated alert stays");
+    }
+
+    #[tokio::test]
+    async fn test_non_crossing_tick_leaves_alert() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(1, "AAPL")]));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("AAPL", Some(99.0))));
+
+        assert_eq!(app.alerts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_priceless_tick_is_noop() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(1, "AAPL")]));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("AAPL", None)));
+
+        assert_eq!(app.alerts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_tick_for_other_ticker_does_not_fire() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(1, "AAPL")]));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("TSLA", Some(9_999.0))));
+
+        assert_eq!(app.alerts.len(), 1, "AAPL alert must not fire on a TSLA tick");
     }
 
     #[tokio::test]

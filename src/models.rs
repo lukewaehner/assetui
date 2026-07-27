@@ -87,6 +87,13 @@ pub enum AlertDirection {
     Below,
 }
 
+pub fn crosses(direction: AlertDirection, threshold: f64, price: f64) -> bool {
+    match direction {
+        AlertDirection::Above => price >= threshold,
+        AlertDirection::Below => price <= threshold,
+    }
+}
+
 /// A persisted price alert: fire once when `ticker` crosses `threshold` in `direction`.
 #[derive(Debug, Clone)]
 pub struct Alert {
@@ -292,6 +299,20 @@ mod tests {
             open_interest: None,
         };
         (contract, now)
+    }
+
+    #[test]
+    fn crosses_above_fires_at_or_past_threshold() {
+        assert!(crosses(AlertDirection::Above, 150.0, 151.0), "just above");
+        assert!(crosses(AlertDirection::Above, 150.0, 150.0), "exactly at");
+        assert!(!crosses(AlertDirection::Above, 150.0, 149.99), "just below");
+    }
+
+    #[test]
+    fn crosses_below_fires_at_or_past_threshold() {
+        assert!(crosses(AlertDirection::Below, 100.0, 99.0), "just below");
+        assert!(crosses(AlertDirection::Below, 100.0, 100.0), "exactly at");
+        assert!(!crosses(AlertDirection::Below, 100.0, 100.01), "just above");
     }
 
     #[test]

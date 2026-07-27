@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-use crate::db::alerts::list_alerts;
+use crate::db::alerts::{list_alerts, mark_alert_triggered};
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
     fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_news, fetch_option_chain,
@@ -245,6 +245,17 @@ impl App {
                 Err(e) => {
                     let _ = tx.send(AppEvent::Error(format!("Failed to load alerts: {e}")));
                 }
+            }
+        });
+    }
+
+    /// Spawns a task to persist an alert's `triggered_at`, reporting a failure via [`AppEvent::Error`].
+    pub(crate) fn spawn_mark_alert_triggered(&self, id: i32, triggered_at: DateTime<Utc>) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = mark_alert_triggered(&pool, id, triggered_at).await {
+                let _ = tx.send(AppEvent::Error(format!("Failed to persist alert {id}: {e}")));
             }
         });
     }
