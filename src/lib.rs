@@ -1,5 +1,6 @@
 //! A library for fetching, storing, and querying Yahoo Finance stock quotes.
 
+pub mod black_scholes;
 pub mod cli;
 pub mod db;
 pub mod fetch;
