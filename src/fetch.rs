@@ -4,7 +4,13 @@ use tokio::try_join;
 use tracing::{debug, instrument};
 use yfinance_rs::{AnalysisBuilder, Candle, HistoryBuilder, Interval, Range, Ticker, YfClient};
 
-use crate::models::{NewsItem, QuoteRecordAnalysis, QuoteRecordStatistics, StockNews};
+use chrono::{DateTime, Utc};
+use yfinance_rs::{OptionContract as YfOptionContract, OptionSide};
+
+use crate::black_scholes::OptionKind;
+use crate::models::{
+    NewsItem, OptionChain, OptionContract, QuoteRecordAnalysis, QuoteRecordStatistics, StockNews,
+};
 use crate::sort::{SortMode, SortOrder};
 use crate::{AppError, db, models::QuoteRecord};
 
@@ -144,6 +150,63 @@ pub async fn fetch_news(client: &YfClient, symbol: &str) -> Result<StockNews, Ap
     })
 }
 
+#[instrument(skip(client), fields(symbol = %symbol))]
+pub async fn fetch_option_chain(client: &YfClient, symbol: &str) -> Result<OptionChain, AppError> {
+    fetch_option_chain_inner(client, symbol, None).await
+}
+
+#[instrument(skip(client), fields(symbol = %symbol))]
+pub async fn fetch_option_chain_for_expiry(
+    client: &YfClient,
+    symbol: &str,
+    expiry: DateTime<Utc>,
+) -> Result<OptionChain, AppError> {
+    fetch_option_chain_inner(client, symbol, Some(expiry)).await
+}
+
+async fn fetch_option_chain_inner(
+    client: &YfClient,
+    symbol: &str,
+    expiry: Option<DateTime<Utc>>,
+) -> Result<OptionChain, AppError> {
+    let ticker = Ticker::new(client, symbol);
+    let expirations = ticker
+        .options()
+        .await?
+        .into_iter()
+        .filter_map(|ts| DateTime::from_timestamp(ts, 0))
+        .collect();
+    let upstream = ticker.option_chain(expiry.map(|e| e.timestamp())).await?;
+    let contracts = upstream.contracts.iter().map(map_option_contract).collect();
+    Ok(OptionChain {
+        underlying: symbol.to_string(),
+        underlying_price: None,
+        expirations,
+        contracts,
+    })
+}
+
+fn map_option_contract(c: &YfOptionContract) -> OptionContract {
+    let kind = match c.key.side {
+        OptionSide::Call => OptionKind::Call,
+        OptionSide::Put => OptionKind::Put,
+    };
+    let expiry = c
+        .expiration_at
+        .unwrap_or_else(|| c.key.expiration_date.and_hms_opt(0, 0, 0).unwrap().and_utc());
+    OptionContract {
+        kind,
+        expiry,
+        strike: c.key.strike.amount().as_f64(),
+        bid: c.bid.as_ref().map(|p| p.as_decimal().as_f64()),
+        ask: c.ask.as_ref().map(|p| p.as_decimal().as_f64()),
+        last: c.price.as_ref().map(|p| p.as_decimal().as_f64()),
+        implied_volatility: c.implied_volatility.as_ref().map(|iv| iv.as_decimal().as_f64()),
+        volume: c.volume,
+        open_interest: c.open_interest,
+    }
+}
+
 /// Fetches YTD ticker history at a one-day interval.
 #[instrument(skip(client), fields(symbol = %symbol))]
 pub async fn fetch_chart_data(client: &YfClient, symbol: &str) -> Result<Vec<Candle>, AppError> {
@@ -157,8 +220,75 @@ pub async fn fetch_chart_data(client: &YfClient, symbol: &str) -> Result<Vec<Can
 
 #[cfg(test)]
 mod tests {
-    use super::prepare_tickers;
-    use yfinance_rs::YfClient;
+    use super::{map_option_contract, prepare_tickers};
+    use crate::black_scholes::OptionKind;
+    use chrono::NaiveDate;
+    use std::str::FromStr;
+    use yfinance_rs::{
+        AssetKind, Currency, Decimal, Instrument, NonNegativeDecimal, OptionContract,
+        OptionContractKey, OptionSide, Price, PriceAmount, YfClient,
+    };
+
+    fn upstream_call_contract() -> OptionContract {
+        let usd = Currency::try_from_str("USD").unwrap();
+        let underlying = Instrument::from_symbol("AAPL", AssetKind::Equity).unwrap();
+        let strike = Price::from_canonical_str("150.00", usd.clone()).unwrap();
+        let expiry = NaiveDate::from_ymd_opt(2026, 1, 16).unwrap();
+        let key = OptionContractKey::new(underlying, OptionSide::Call, strike, expiry);
+
+        let mut c = OptionContract::new(key, usd.clone());
+        c.price = Some(PriceAmount::new(Decimal::from_str("5.25").unwrap()));
+        c.bid = Some(PriceAmount::new(Decimal::from_str("5.20").unwrap()));
+        c.ask = Some(PriceAmount::new(Decimal::from_str("5.30").unwrap()));
+        c.implied_volatility = Some(NonNegativeDecimal::new(Decimal::from_str("0.25").unwrap()).unwrap());
+        c.volume = Some(1_000);
+        c.open_interest = Some(500);
+        c
+    }
+
+    #[test]
+    fn map_option_contract_translates_all_fields() {
+        // arrange
+        let upstream = upstream_call_contract();
+
+        // act
+        let mapped = map_option_contract(&upstream);
+
+        // assert
+        assert_eq!(mapped.kind, OptionKind::Call);
+        assert_eq!(mapped.strike, 150.00);
+        assert_eq!(mapped.last, Some(5.25));
+        assert_eq!(mapped.bid, Some(5.20));
+        assert_eq!(mapped.ask, Some(5.30));
+        assert_eq!(mapped.implied_volatility, Some(0.25));
+        assert_eq!(mapped.volume, Some(1_000));
+        assert_eq!(mapped.open_interest, Some(500));
+        assert_eq!(mapped.expiry.date_naive(), NaiveDate::from_ymd_opt(2026, 1, 16).unwrap());
+    }
+
+    #[test]
+    fn map_option_contract_maps_put_side_and_absent_quotes() {
+        // arrange
+        let usd = Currency::try_from_str("USD").unwrap();
+        let underlying = Instrument::from_symbol("AAPL", AssetKind::Equity).unwrap();
+        let strike = Price::from_canonical_str("140.00", usd.clone()).unwrap();
+        let expiry = NaiveDate::from_ymd_opt(2026, 1, 16).unwrap();
+        let key = OptionContractKey::new(underlying, OptionSide::Put, strike, expiry);
+        let upstream = OptionContract::new(key, usd);
+
+        // act
+        let mapped = map_option_contract(&upstream);
+
+        // assert
+        assert_eq!(mapped.kind, OptionKind::Put);
+        assert_eq!(mapped.strike, 140.00);
+        assert_eq!(mapped.bid, None);
+        assert_eq!(mapped.ask, None);
+        assert_eq!(mapped.last, None);
+        assert_eq!(mapped.implied_volatility, None);
+        assert_eq!(mapped.volume, None);
+        assert_eq!(mapped.open_interest, None);
+    }
 
     #[test]
     fn test_prepare_tickers_empty() {

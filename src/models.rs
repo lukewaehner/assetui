@@ -6,6 +6,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use yfinance_rs::{PriceTarget, QuoteUpdate, RecommendationSummary};
 
+use crate::black_scholes::OptionKind;
+
 /// A single stock quote snapshot, shared across the fetch layer, database operations, and CSV exports.
 #[derive(sqlx::FromRow, serde::Serialize, Clone, Default, Debug)]
 pub struct QuoteRecord {
@@ -71,6 +73,35 @@ pub struct StockNews {
     pub ticker: Option<String>,
     /// Recent articles, most-recent first (as returned by the provider).
     pub items: Vec<NewsItem>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OptionContract {
+    /// Call or put.
+    pub kind: OptionKind,
+    pub expiry: DateTime<Utc>,
+    pub strike: f64,
+    /// Best bid premium.
+    pub bid: Option<f64>,
+    /// Best ask premium.
+    pub ask: Option<f64>,
+    /// Last traded premium.
+    pub last: Option<f64>,
+    /// Provider's implied volatility as a fraction (`0.25` = 25%).
+    pub implied_volatility: Option<f64>,
+    pub volume: Option<u64>,
+    pub open_interest: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OptionChain {
+    /// The underlying ticker symbol.
+    pub underlying: String,
+    pub underlying_price: Option<f64>,
+    /// All expirations offered for this underlying, most-recent-first as the provider returns them.
+    pub expirations: Vec<DateTime<Utc>>,
+    /// Contracts (calls and puts) for the currently-fetched expiry.
+    pub contracts: Vec<OptionContract>,
 }
 
 impl QuoteRecord {
