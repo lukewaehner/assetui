@@ -5,7 +5,7 @@ use tracing::{debug, instrument};
 use yfinance_rs::{AnalysisBuilder, Candle, HistoryBuilder, Interval, Range, Ticker, YfClient};
 
 use chrono::{DateTime, Utc};
-use yfinance_rs::{OptionContract as YfOptionContract, OptionSide};
+use yfinance_rs::{CacheMode, OptionContract as YfOptionContract, OptionSide};
 
 use crate::black_scholes::OptionKind;
 use crate::models::{
@@ -134,7 +134,10 @@ pub async fn fetch_key_statistics(
 
 #[instrument(skip(client), fields(symbol = %symbol))]
 pub async fn fetch_news(client: &YfClient, symbol: &str) -> Result<StockNews, AppError> {
-    let articles = Ticker::new(client, symbol).news().await?;
+    let articles = Ticker::new(client, symbol)
+        .cache_mode(CacheMode::Use)
+        .news()
+        .await?;
     let items = articles
         .into_iter()
         .map(|a| NewsItem {
@@ -169,7 +172,7 @@ async fn fetch_option_chain_inner(
     symbol: &str,
     expiry: Option<DateTime<Utc>>,
 ) -> Result<OptionChain, AppError> {
-    let ticker = Ticker::new(client, symbol);
+    let ticker = Ticker::new(client, symbol).cache_mode(CacheMode::Use);
     let expirations = ticker
         .options()
         .await?

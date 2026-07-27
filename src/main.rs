@@ -9,7 +9,8 @@ use assetui::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
 use assetui::db::quotes::dump_table_to_csv;
 use assetui::run::fetch_and_store;
 use tracing_subscriber::EnvFilter;
-use yfinance_rs::YfClient;
+use std::time::Duration;
+use yfinance_rs::{CacheEndpoint, YfClient};
 
 #[derive(Parser)]
 struct Args {
@@ -41,6 +42,17 @@ fn init_tracing() {
         .init();
 }
 
+/// Builds the Yahoo Finance client with per-endpoint response caching enabled.
+fn build_yf_client() -> Result<YfClient, AppError> {
+    Ok(YfClient::builder()
+        .cache_ttl_for(CacheEndpoint::QuoteSummary, Duration::from_secs(30 * 60))
+        .cache_ttl_for(CacheEndpoint::Fundamentals, Duration::from_secs(30 * 60))
+        .cache_ttl_for(CacheEndpoint::Chart, Duration::from_secs(10 * 60))
+        .cache_ttl_for(CacheEndpoint::News, Duration::from_secs(5 * 60))
+        .cache_ttl_for(CacheEndpoint::Options, Duration::from_secs(20))
+        .build()?)
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), AppError> {
     let args = Args::parse();
@@ -51,7 +63,7 @@ async fn main() -> Result<(), AppError> {
 
     let database_url = dotenvy::var("DATABASE_URL")?;
     let pool = setup_pool(&database_url, DEFAULT_MAX_CONNECTIONS).await?;
-    let client = YfClient::default();
+    let client = build_yf_client()?;
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     match &args.command {
