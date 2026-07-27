@@ -18,7 +18,7 @@ use ratatui::{
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
-use crate::black_scholes::OptionKind;
+use crate::black_scholes::{DEFAULT_RISK_FREE_RATE, OptionKind};
 use crate::models::{
     FLASH_TTL, OptionChain, OptionContract, QuoteRecord, QuoteRecordAnalysis,
     QuoteRecordStatistics, StockNews, day_change_pct,
@@ -1115,8 +1115,10 @@ fn draw_options_modal(f: &mut Frame, app: &mut App) {
             .areas(tables_area);
     let calls = contracts_for_expiry(chain, idx, OptionKind::Call);
     let puts = contracts_for_expiry(chain, idx, OptionKind::Put);
-    draw_option_table(f, calls_area, "CALLS", &calls, &t);
-    draw_option_table(f, puts_area, "PUTS", &puts, &t);
+    let spot = chain.underlying_price;
+    let now = chrono::Utc::now();
+    draw_option_table(f, calls_area, "CALLS", &calls, spot, now, &t);
+    draw_option_table(f, puts_area, "PUTS", &puts, spot, now, &t);
 
     let key_sty = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(t.dim);
@@ -1130,21 +1132,26 @@ fn draw_options_modal(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(footer), footer_area);
 }
 
-/// Renders one side of the options modal (calls or puts) as a strike-sorted table.
 fn draw_option_table(
     f: &mut Frame,
     area: Rect,
     title: &'static str,
     contracts: &[&OptionContract],
+    spot: Option<f64>,
+    now: chrono::DateTime<chrono::Utc>,
     t: &Theme,
 ) {
     let wide = area.width >= 46;
+    let greeks = area.width >= 96;
 
     let head_sty = Style::default().fg(t.dim).add_modifier(Modifier::BOLD);
     let mut headers = vec!["Strike", "Bid", "Ask", "Last", "IV"];
     if wide {
         headers.push("Vol");
         headers.push("OI");
+    }
+    if greeks {
+        headers.extend(["Theo", "Δ", "Γ", "Θ/d", "Vega", "ρ"]);
     }
     let header = Row::new(
         headers
@@ -1167,28 +1174,38 @@ fn draw_option_table(
             cells.push(opt_cell(c.volume, |v| fmt_volume(v as f64)));
             cells.push(opt_cell(c.open_interest, |v| fmt_volume(v as f64)));
         }
+        if greeks {
+            let a = c.analytics(spot, DEFAULT_RISK_FREE_RATE, 0.0, now);
+            cells.push(opt_cell(a.map(|a| a.theo_price), |v| format!("{v:.2}")));
+            cells.push(opt_cell(a.map(|a| a.greeks.delta), |v| format!("{v:.3}")));
+            cells.push(opt_cell(a.map(|a| a.greeks.gamma), |v| format!("{v:.4}")));
+            cells.push(opt_cell(a.map(|a| a.greeks.theta / 365.0), |v| format!("{v:.3}")));
+            cells.push(opt_cell(a.map(|a| a.greeks.vega / 100.0), |v| format!("{v:.3}")));
+            cells.push(opt_cell(a.map(|a| a.greeks.rho / 100.0), |v| format!("{v:.3}")));
+        }
         Row::new(cells)
     });
 
-    let widths: &[Constraint] = if wide {
-        &[
-            Constraint::Length(8),
+    let mut widths: Vec<Constraint> = vec![
+        Constraint::Length(8),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+        Constraint::Length(7),
+    ];
+    if wide {
+        widths.extend([Constraint::Length(6), Constraint::Length(6)]);
+    }
+    if greeks {
+        widths.extend([
             Constraint::Length(7),
             Constraint::Length(7),
             Constraint::Length(7),
             Constraint::Length(7),
-            Constraint::Length(6),
-            Constraint::Length(6),
-        ]
-    } else {
-        &[
-            Constraint::Length(8),
             Constraint::Length(7),
             Constraint::Length(7),
-            Constraint::Length(7),
-            Constraint::Length(7),
-        ]
-    };
+        ]);
+    }
 
     let block = Block::default()
         .title(section_heading(title, Some(format!("{}", contracts.len())), t))
