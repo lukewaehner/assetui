@@ -15,7 +15,7 @@ use super::theme::{Appearance, Theme};
 use crate::{
     cli::parse_tickers,
     models::{
-        FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics,
+        Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics,
         QuoteTick, StockNews,
     },
     sort::{SortMode, SortOrder},
@@ -56,6 +56,8 @@ pub enum AppEvent {
     ChartDataReady(Vec<Candle>),
     /// Options chain (expirations + contracts) loaded for the selected stock.
     OptionChainReady(OptionChain),
+    /// Active price alerts loaded from the database at startup.
+    AlertsLoaded(Vec<Alert>),
     /// Informational message for the log panel.
     LogLine(String),
     /// A quote update is returned from the stream.
@@ -94,6 +96,8 @@ pub struct App {
     pub stream_handle: Option<StreamHandle>,
     /// Subscribed symbols - starts as an empty vec, fills when subscribed.
     pub subscribed_symbols: Vec<String>,
+    /// Active price alerts (`triggered_at IS NULL`), the source of truth for tick evaluation and rendering.
+    pub alerts: Vec<Alert>,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -285,6 +289,7 @@ impl App {
             theme: Theme::for_appearance(appearance),
             stream_handle: None,
             subscribed_symbols: Vec::new(),
+            alerts: Vec::new(),
         }
     }
 
@@ -339,6 +344,9 @@ impl App {
             }
             AppEvent::WatchlistLoaded(tickers) => {
                 self.db_display.watchlist = tickers.into_iter().collect();
+            }
+            AppEvent::AlertsLoaded(alerts) => {
+                self.alerts = alerts;
             }
             AppEvent::Error(e) => self.push_error(e),
             AppEvent::StockAnalysisReady(analysis) => {
@@ -1465,6 +1473,36 @@ mod tests {
         app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
         app.handle_event(AppEvent::WatchlistLoaded(vec![]));
         assert!(app.db_display.watchlist.is_empty());
+    }
+
+    fn alert_for(id: i32, ticker: &str) -> crate::models::Alert {
+        crate::models::Alert {
+            id,
+            ticker: ticker.to_string(),
+            direction: crate::models::AlertDirection::Above,
+            threshold: 100.0,
+            created_at: chrono::Utc::now(),
+            triggered_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_alerts_loaded_populates() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::AlertsLoaded(vec![
+            alert_for(1, "AAPL"),
+            alert_for(2, "TSLA"),
+        ]));
+        assert_eq!(app.alerts.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_alerts_loaded_replaces_previous() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(1, "AAPL")]));
+        app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(2, "TSLA")]));
+        assert_eq!(app.alerts.len(), 1);
+        assert_eq!(app.alerts[0].ticker, "TSLA");
     }
 
     #[tokio::test]
