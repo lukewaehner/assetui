@@ -36,6 +36,43 @@ pub struct QuoteRecordAnalysis {
     pub price_target: Option<PriceTarget>,
 }
 
+/// Slow-moving key statistics for a single ticker, fetched separately from the real-time quote.
+#[derive(Default, Debug)]
+pub struct QuoteRecordStatistics {
+    /// Ticker these statistics belong to.
+    pub ticker: Option<String>,
+    /// Market capitalisation (price × shares outstanding).
+    pub market_cap: Option<f64>,
+    /// Price-to-earnings ratio against trailing-twelve-month EPS.
+    pub pe_ratio: Option<f64>,
+    /// Earnings per share over the trailing twelve months.
+    pub eps: Option<f64>,
+    pub dividend_yield: Option<f64>,
+    pub fifty_two_week_high: Option<f64>,
+    pub fifty_two_week_low: Option<f64>,
+    /// Market beta (period/frequency vary by provider).
+    pub beta: Option<f64>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct NewsItem {
+    /// The headline text.
+    pub title: String,
+    /// Publisher name (e.g. `"Reuters"`).
+    pub publisher: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
+    /// Direct link to the article.
+    pub link: Option<String>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct StockNews {
+    /// Ticker these headlines belong to.
+    pub ticker: Option<String>,
+    /// Recent articles, most-recent first (as returned by the provider).
+    pub items: Vec<NewsItem>,
+}
+
 impl QuoteRecord {
     pub fn matches_query(&self, query: &str) -> bool {
         let query = query.trim();
@@ -47,6 +84,14 @@ impl QuoteRecord {
             .flatten()
             .any(|field| crate::search::subseq_match_ci(field, query).is_some())
     }
+}
+
+pub fn day_change_pct(price: Option<f64>, previous_close: Option<f64>) -> Option<f64> {
+    let (price, previous_close) = (price?, previous_close?);
+    if previous_close == 0.0 {
+        return None;
+    }
+    Some((price - previous_close) / previous_close * 100.0)
 }
 
 /// How long a price-tick flash stays coloured before reverting to the default day-change styling.
@@ -248,6 +293,36 @@ mod tests {
         let record = QuoteRecord::default();
         assert!(record.matches_query(""));
         assert!(!record.matches_query("a"));
+    }
+
+    #[test]
+    fn test_day_change_pct_positive() {
+        assert_eq!(day_change_pct(Some(110.0), Some(100.0)), Some(10.0));
+    }
+
+    #[test]
+    fn test_day_change_pct_negative() {
+        assert_eq!(day_change_pct(Some(90.0), Some(100.0)), Some(-10.0));
+    }
+
+    #[test]
+    fn test_day_change_pct_unchanged_is_zero() {
+        assert_eq!(day_change_pct(Some(100.0), Some(100.0)), Some(0.0));
+    }
+
+    #[test]
+    fn test_day_change_pct_zero_previous_close_is_none() {
+        assert_eq!(day_change_pct(Some(100.0), Some(0.0)), None);
+    }
+
+    #[test]
+    fn test_day_change_pct_missing_price_is_none() {
+        assert_eq!(day_change_pct(None, Some(100.0)), None);
+    }
+
+    #[test]
+    fn test_day_change_pct_missing_previous_close_is_none() {
+        assert_eq!(day_change_pct(Some(100.0), None), None);
     }
 
     #[test]

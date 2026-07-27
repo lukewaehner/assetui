@@ -3,7 +3,10 @@
 use std::time::Duration;
 
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
-use crate::fetch::{fetch_analysis, fetch_chart_data, fetch_quote_and_store, fetch_sorted};
+use crate::fetch::{
+    fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_news, fetch_quote_and_store,
+    fetch_sorted,
+};
 use crate::models::QuoteTick;
 use crate::tui::stream::start_quote_stream;
 use crate::tui::theme::{Appearance, parse_appearance};
@@ -61,6 +64,38 @@ impl App {
                 }
                 Err(e) => {
                     let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
+                }
+            }
+        });
+    }
+
+    pub(crate) fn spawn_statistics(&self, symbol: &str) {
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
+        let symbol = symbol.to_owned();
+        tokio::spawn(async move {
+            match fetch_key_statistics(&client, &symbol).await {
+                Ok(s) => {
+                    let _ = tx.send(AppEvent::StockStatisticsReady(s));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("statistics {symbol}: {e}")));
+                }
+            }
+        });
+    }
+
+    pub(crate) fn spawn_news(&self, symbol: &str) {
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
+        let symbol = symbol.to_owned();
+        tokio::spawn(async move {
+            match fetch_news(&client, &symbol).await {
+                Ok(n) => {
+                    let _ = tx.send(AppEvent::StockNewsReady(n));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("news {symbol}: {e}")));
                 }
             }
         });

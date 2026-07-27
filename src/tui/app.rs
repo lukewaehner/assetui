@@ -14,7 +14,9 @@ use tokio::sync::mpsc;
 use super::theme::{Appearance, Theme};
 use crate::{
     cli::parse_tickers,
-    models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis, QuoteTick},
+    models::{
+        FLASH_TTL, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics, QuoteTick, StockNews,
+    },
     sort::{SortMode, SortOrder},
 };
 use yfinance_rs::{Candle, StreamHandle, YfClient};
@@ -45,6 +47,10 @@ pub enum AppEvent {
     WatchlistLoaded(Vec<String>),
     /// Analyst consensus and price targets loaded for the selected stock.
     StockAnalysisReady(QuoteRecordAnalysis),
+    /// Key statistics (valuation, dividend, risk metrics) loaded for the selected stock.
+    StockStatisticsReady(QuoteRecordStatistics),
+    /// Recent news headlines loaded for the selected stock.
+    StockNewsReady(StockNews),
     /// Stock price history loaded for the selected stock.
     ChartDataReady(Vec<Candle>),
     /// Informational message for the log panel.
@@ -193,6 +199,10 @@ pub struct StockInfoModal {
     pub stock: QuoteRecord,
     /// Analyst data fetched in the background.
     pub analysis: Option<QuoteRecordAnalysis>,
+    /// Key statistics fetched in the background.
+    pub statistics: Option<QuoteRecordStatistics>,
+    /// Recent news headlines fetched in the background.
+    pub news: Option<StockNews>,
     pub info_visible: bool,
     pub chart_visible: bool,
     /// Stock price history fetched in the bg, None while loading.
@@ -253,6 +263,8 @@ impl App {
             stock_modal: StockInfoModal {
                 stock: QuoteRecord::default(),
                 analysis: None,
+                statistics: None,
+                news: None,
                 info_visible: false,
                 chart_visible: false,
                 chart_data: None,
@@ -321,6 +333,12 @@ impl App {
             AppEvent::Error(e) => self.push_error(e),
             AppEvent::StockAnalysisReady(analysis) => {
                 self.stock_modal.analysis = Some(analysis);
+            }
+            AppEvent::StockStatisticsReady(stats) => {
+                self.stock_modal.statistics = Some(stats);
+            }
+            AppEvent::StockNewsReady(news) => {
+                self.stock_modal.news = Some(news);
             }
             AppEvent::ChartDataReady(data) => {
                 self.stock_modal.chart_data = Some(data);
@@ -637,6 +655,28 @@ impl App {
             self.stock_modal.analysis = None;
             self.spawn_analysis(t);
         }
+
+        let has_statistics = self
+            .stock_modal
+            .statistics
+            .as_ref()
+            .is_some_and(|s| s.ticker == ticker);
+
+        if !has_statistics && let Some(t) = ticker.as_deref() {
+            self.stock_modal.statistics = None;
+            self.spawn_statistics(t);
+        }
+
+        let has_news = self
+            .stock_modal
+            .news
+            .as_ref()
+            .is_some_and(|n| n.ticker == ticker);
+
+        if !has_news && let Some(t) = ticker.as_deref() {
+            self.stock_modal.news = None;
+            self.spawn_news(t);
+        }
     }
 
     fn open_chart_modal(&mut self) {
@@ -810,6 +850,114 @@ mod tests {
         app.stock_modal.analysis = Some(analysis_for("TSLA"));
         app.open_info_modal();
         assert!(app.stock_modal.analysis.is_none());
+    }
+
+    fn statistics_for(ticker: &str) -> QuoteRecordStatistics {
+        QuoteRecordStatistics {
+            ticker: Some(ticker.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_info_reuses_matching_statistics() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.statistics = Some(statistics_for("AAPL"));
+        app.open_info_modal();
+        assert!(app.stock_modal.statistics.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_open_info_refetches_statistics_on_ticker_mismatch() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.statistics = Some(statistics_for("TSLA"));
+        app.open_info_modal();
+        assert!(app.stock_modal.statistics.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_statistics_survive_chart_visit_for_same_ticker() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.statistics = Some(statistics_for("AAPL"));
+        app.open_chart_modal();
+        app.open_info_modal();
+        assert!(app.stock_modal.statistics.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_statistics_ready_event_sets_modal_statistics() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::StockStatisticsReady(statistics_for("AAPL")));
+        assert_eq!(
+            app.stock_modal.statistics.and_then(|s| s.ticker).as_deref(),
+            Some("AAPL")
+        );
+    }
+
+    fn news_for(ticker: &str) -> StockNews {
+        StockNews {
+            ticker: Some(ticker.to_string()),
+            items: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_open_info_reuses_matching_news() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.news = Some(news_for("AAPL"));
+        app.open_info_modal();
+        assert!(app.stock_modal.news.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_open_info_refetches_news_on_ticker_mismatch() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.news = Some(news_for("TSLA"));
+        app.open_info_modal();
+        assert!(app.stock_modal.news.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_news_survive_chart_visit_for_same_ticker() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            ..Default::default()
+        }]));
+        app.stock_modal.news = Some(news_for("AAPL"));
+        app.open_chart_modal();
+        app.open_info_modal();
+        assert!(app.stock_modal.news.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_news_ready_event_sets_modal_news() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::StockNewsReady(news_for("AAPL")));
+        assert_eq!(
+            app.stock_modal.news.and_then(|n| n.ticker).as_deref(),
+            Some("AAPL")
+        );
     }
 
     #[tokio::test]

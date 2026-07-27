@@ -18,7 +18,9 @@ use ratatui::{
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
-use crate::models::{FLASH_TTL, QuoteRecord, QuoteRecordAnalysis};
+use crate::models::{
+    FLASH_TTL, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics, StockNews, day_change_pct,
+};
 use crate::search::subseq_match_ci;
 
 use super::app::App;
@@ -209,6 +211,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         hcell("Ticker ", "(t)"),
         hcell("Name", "(n)"),
         hcell("Price ", "(p)"),
+        hcell("Chg%", ""),
         hcell("Prev Close ", "(c)"),
         hcell("Volume ", "(v)"),
         hcell("As Of ", "(a)"),
@@ -245,6 +248,10 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             opt_cell(q.price, |p| format!("{p:.2}")).style(
                 Style::default().fg(price_change_color(q, &app.animations.row_flash_map, &t)),
             ),
+            opt_cell(day_change_pct(q.price, q.previous_close), |pct| {
+                format!("{pct:+.2}%")
+            })
+            .style(Style::default().fg(price_change_color(q, &app.animations.row_flash_map, &t))),
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
             opt_cell(q.day_volume, fmt_volume),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
@@ -257,6 +264,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         Constraint::Length(10),
         Constraint::Length(24),
         Constraint::Length(11),
+        Constraint::Length(9),
         Constraint::Length(15),
         Constraint::Length(13),
         Constraint::Length(12),
@@ -510,10 +518,12 @@ fn money_opt(value: Option<f64>) -> String {
         .unwrap_or_else(|| "-".into())
 }
 
-/// Human-readable share volume: `55_000_000.0` → `"55.0M"`.
+/// Human-readable magnitude with a K/M/B/T suffix: `55_000_000.0` → `"55.0M"`, `3.5e12` → `"3.5T"`.
 fn fmt_volume(v: f64) -> String {
     let abs = v.abs();
-    if abs >= 1e9 {
+    if abs >= 1e12 {
+        format!("{:.1}T", v / 1e12)
+    } else if abs >= 1e9 {
         format!("{:.1}B", v / 1e9)
     } else if abs >= 1e6 {
         format!("{:.1}M", v / 1e6)
@@ -522,6 +532,47 @@ fn fmt_volume(v: f64) -> String {
     } else {
         format!("{v:.0}")
     }
+}
+
+fn fmt_market_cap(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("${}", fmt_volume(v)))
+        .unwrap_or_else(|| "-".into())
+}
+
+/// Formats a fractional rate as a percentage (`Some(0.025)` → `"2.50%"`).
+fn fmt_pct_opt(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{:.2}%", v * 100.0))
+        .unwrap_or_else(|| "-".into())
+}
+
+/// Formats an optional unitless ratio to two decimals (P/E, beta).
+fn fmt_ratio_opt(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{v:.2}"))
+        .unwrap_or_else(|| "-".into())
+}
+
+fn fmt_news_meta(
+    publisher: Option<&str>,
+    published_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> String {
+    let date = published_at.map(|d| d.format("%Y-%m-%d").to_string());
+    match (publisher, date) {
+        (Some(p), Some(d)) => format!("{p} · {d}"),
+        (Some(p), None) => p.to_string(),
+        (None, Some(d)) => d,
+        (None, None) => String::new(),
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{kept}…")
 }
 
 /// Renders the stock-detail overlay modal at 65 × 55% of the terminal area.
@@ -574,6 +625,19 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
         Line::raw(""),
     ];
 
+    match &app.stock_modal.statistics {
+        None => {
+            lines.push(section_heading("KEY STATISTICS", None, &t));
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                "loading statistics…",
+                Style::default().fg(t.dim),
+            ));
+        }
+        Some(stats) => push_statistics_lines(&mut lines, stats, &t),
+    }
+    lines.push(Line::raw(""));
+
     match &app.stock_modal.analysis {
         None => {
             lines.push(section_heading("ANALYST CONSENSUS", None, &t));
@@ -592,6 +656,16 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
                 &t,
             );
         }
+    }
+    lines.push(Line::raw(""));
+
+    match &app.stock_modal.news {
+        None => {
+            lines.push(section_heading("NEWS", None, &t));
+            lines.push(Line::raw(""));
+            lines.push(Line::styled("loading news…", Style::default().fg(t.dim)));
+        }
+        Some(news) => push_news_lines(&mut lines, news, content.width as usize, &t),
     }
 
     f.render_widget(Paragraph::new(lines), content);
@@ -620,10 +694,9 @@ fn price_line(
             .add_modifier(Modifier::BOLD),
     )];
     if let (Some(price), Some(prev)) = (stock.price, stock.previous_close)
-        && prev != 0.0
+        && let Some(pct) = day_change_pct(stock.price, stock.previous_close)
     {
         let diff = price - prev;
-        let pct = diff / prev * 100.0;
         let (arrow, color) = if diff > 0.001 {
             ("▲", t.up)
         } else if diff < -0.001 {
@@ -676,6 +749,67 @@ fn push_analysis_lines(
             "no price target data",
             Style::default().fg(t.dim),
         )),
+    }
+}
+
+fn push_statistics_lines(
+    lines: &mut Vec<Line<'static>>,
+    stats: &QuoteRecordStatistics,
+    t: &Theme,
+) {
+    lines.push(section_heading("KEY STATISTICS", None, t));
+    lines.push(Line::raw(""));
+
+    let value = |s: String| Span::styled(s, Style::default().fg(t.fg));
+
+    lines.push(Line::from(vec![
+        label("market cap  ", t),
+        value(fmt_market_cap(stats.market_cap)),
+        Span::raw("    "),
+        label("p/e  ", t),
+        value(fmt_ratio_opt(stats.pe_ratio)),
+    ]));
+    lines.push(Line::from(vec![
+        label("eps         ", t),
+        value(money_opt(stats.eps)),
+        Span::raw("    "),
+        label("beta ", t),
+        value(fmt_ratio_opt(stats.beta)),
+    ]));
+    lines.push(Line::from(vec![
+        label("div yield   ", t),
+        value(fmt_pct_opt(stats.dividend_yield)),
+    ]));
+    lines.push(Line::from(vec![
+        label("52w low     ", t),
+        value(money_opt(stats.fifty_two_week_low)),
+        Span::raw("    "),
+        label("52w high ", t),
+        value(money_opt(stats.fifty_two_week_high)),
+    ]));
+}
+
+fn push_news_lines(lines: &mut Vec<Line<'static>>, news: &StockNews, width: usize, t: &Theme) {
+    /// How many headlines to show before the section would crowd the modal.
+    const MAX_HEADLINES: usize = 4;
+
+    lines.push(section_heading("NEWS", None, t));
+    lines.push(Line::raw(""));
+
+    if news.items.is_empty() {
+        lines.push(Line::styled("no recent news", Style::default().fg(t.dim)));
+        return;
+    }
+
+    for item in news.items.iter().take(MAX_HEADLINES) {
+        lines.push(Line::styled(
+            truncate(&item.title, width.saturating_sub(2)),
+            Style::default().fg(t.fg),
+        ));
+        let meta = fmt_news_meta(item.publisher.as_deref(), item.published_at);
+        if !meta.is_empty() {
+            lines.push(Line::styled(format!("  {meta}"), Style::default().fg(t.dim)));
+        }
     }
 }
 
@@ -1047,5 +1181,68 @@ mod tests {
     fn missing_ticker_is_not_starred() {
         let wl = watchlist(&["AAPL"]);
         assert!(!is_watchlisted(None, &wl));
+    }
+
+    #[test]
+    fn fmt_volume_shortens_trillions() {
+        assert_eq!(fmt_volume(3.5e12), "3.5T");
+    }
+
+    #[test]
+    fn fmt_market_cap_prefixes_dollar_and_shortens() {
+        assert_eq!(fmt_market_cap(Some(3.5e12)), "$3.5T");
+    }
+
+    #[test]
+    fn fmt_market_cap_absent_is_dash() {
+        assert_eq!(fmt_market_cap(None), "-");
+    }
+
+    #[test]
+    fn fmt_pct_opt_scales_fraction_to_percent() {
+        assert_eq!(fmt_pct_opt(Some(0.025)), "2.50%");
+    }
+
+    #[test]
+    fn fmt_pct_opt_absent_is_dash() {
+        assert_eq!(fmt_pct_opt(None), "-");
+    }
+
+    #[test]
+    fn fmt_ratio_opt_two_decimals() {
+        assert_eq!(fmt_ratio_opt(Some(28.5)), "28.50");
+    }
+
+    #[test]
+    fn fmt_ratio_opt_absent_is_dash() {
+        assert_eq!(fmt_ratio_opt(None), "-");
+    }
+
+    fn dt(y: i32, m: u32, d: u32) -> chrono::DateTime<chrono::Utc> {
+        use chrono::TimeZone;
+        chrono::Utc.with_ymd_and_hms(y, m, d, 0, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn fmt_news_meta_joins_publisher_and_date() {
+        assert_eq!(
+            fmt_news_meta(Some("Reuters"), Some(dt(2026, 7, 24))),
+            "Reuters · 2026-07-24"
+        );
+    }
+
+    #[test]
+    fn fmt_news_meta_date_only_when_publisher_absent() {
+        assert_eq!(fmt_news_meta(None, Some(dt(2026, 7, 24))), "2026-07-24");
+    }
+
+    #[test]
+    fn fmt_news_meta_publisher_only_when_date_absent() {
+        assert_eq!(fmt_news_meta(Some("Reuters"), None), "Reuters");
+    }
+
+    #[test]
+    fn fmt_news_meta_empty_when_both_absent() {
+        assert_eq!(fmt_news_meta(None, None), "");
     }
 }

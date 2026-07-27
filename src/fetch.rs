@@ -4,7 +4,7 @@ use tokio::try_join;
 use tracing::{debug, instrument};
 use yfinance_rs::{AnalysisBuilder, Candle, HistoryBuilder, Interval, Range, Ticker, YfClient};
 
-use crate::models::QuoteRecordAnalysis;
+use crate::models::{NewsItem, QuoteRecordAnalysis, QuoteRecordStatistics, StockNews};
 use crate::sort::{SortMode, SortOrder};
 use crate::{AppError, db, models::QuoteRecord};
 
@@ -105,6 +105,42 @@ pub async fn fetch_analysis(
         ticker: Some(symbol.to_string()),
         recommendation_summary: Some(rec),
         price_target: Some(pt),
+    })
+}
+
+#[instrument(skip(client), fields(symbol = %symbol))]
+pub async fn fetch_key_statistics(
+    client: &YfClient,
+    symbol: &str,
+) -> Result<QuoteRecordStatistics, AppError> {
+    let stats = Ticker::new(client, symbol).key_statistics().await?;
+    Ok(QuoteRecordStatistics {
+        ticker: Some(symbol.to_string()),
+        market_cap: stats.market_cap.map(|m| m.amount().as_f64()),
+        pe_ratio: stats.pe_trailing_twelve_months.map(|d| d.as_f64()),
+        eps: stats.eps_trailing_twelve_months.map(|p| p.amount().as_f64()),
+        dividend_yield: stats.dividend_yield_trailing.map(|d| d.as_f64()),
+        fifty_two_week_high: stats.fifty_two_week_high.map(|p| p.amount().as_f64()),
+        fifty_two_week_low: stats.fifty_two_week_low.map(|p| p.amount().as_f64()),
+        beta: stats.beta.map(|d| d.as_f64()),
+    })
+}
+
+#[instrument(skip(client), fields(symbol = %symbol))]
+pub async fn fetch_news(client: &YfClient, symbol: &str) -> Result<StockNews, AppError> {
+    let articles = Ticker::new(client, symbol).news().await?;
+    let items = articles
+        .into_iter()
+        .map(|a| NewsItem {
+            title: a.title,
+            publisher: a.publisher,
+            published_at: Some(a.published_at),
+            link: a.link,
+        })
+        .collect();
+    Ok(StockNews {
+        ticker: Some(symbol.to_string()),
+        items,
     })
 }
 
