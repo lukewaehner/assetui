@@ -355,8 +355,9 @@ impl App {
             }
             AppEvent::OptionChainReady(mut chain) => {
                 chain.underlying_price = self.stock_modal.stock.price;
+                let last = chain.expirations.len().saturating_sub(1);
+                self.stock_modal.selected_expiry = self.stock_modal.selected_expiry.min(last);
                 self.stock_modal.option_chain = Some(chain);
-                self.stock_modal.selected_expiry = 0;
             }
             AppEvent::QuoteTick(tick) => {
                 tick.apply(&mut self.db_display.all_rows, &mut HashMap::new());
@@ -443,6 +444,11 @@ impl App {
             return;
         }
         if self.stock_modal.options_visible {
+            match key {
+                'h' => self.cycle_expiry(-1),
+                'l' => self.cycle_expiry(1),
+                _ => {}
+            }
             return;
         }
         if self.stock_modal.info_visible || self.stock_modal.chart_visible {
@@ -756,6 +762,27 @@ impl App {
         }
     }
 
+    fn cycle_expiry(&mut self, delta: isize) {
+        let Some(chain) = self.stock_modal.option_chain.as_ref() else {
+            return;
+        };
+        if chain.expirations.is_empty() {
+            return;
+        }
+        let last = (chain.expirations.len() - 1) as isize;
+        let current = self.stock_modal.selected_expiry as isize;
+        let next = (current + delta).clamp(0, last);
+        if next == current {
+            return;
+        }
+        let next = next as usize;
+        let symbol = chain.underlying.clone();
+        let expiry = chain.expirations[next];
+        self.stock_modal.selected_expiry = next;
+        self.stock_modal.option_chain = None;
+        self.spawn_option_chain_for_expiry(&symbol, expiry);
+    }
+
     /// Opens the keybinding help overlay, closing any stock modal so the two never stack.
     fn open_help_modal(&mut self) {
         self.stock_modal.info_visible = false;
@@ -1024,10 +1051,20 @@ mod tests {
         }
     }
 
+    fn chain_with_expirations(ticker: &str, n: usize) -> OptionChain {
+        let base = chrono::DateTime::from_timestamp(1_768_521_600, 0).unwrap();
+        OptionChain {
+            underlying: ticker.to_string(),
+            expirations: (0..n)
+                .map(|i| base + chrono::Duration::days(i as i64))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
-    async fn test_option_chain_ready_stores_chain_and_resets_expiry() {
+    async fn test_option_chain_ready_stores_chain() {
         let (mut app, _rx) = make_test_app();
-        app.stock_modal.selected_expiry = 3;
 
         app.handle_event(AppEvent::OptionChainReady(chain_for("AAPL")));
 
@@ -1035,7 +1072,26 @@ mod tests {
             app.stock_modal.option_chain.as_ref().map(|c| c.underlying.as_str()),
             Some("AAPL")
         );
-        assert_eq!(app.stock_modal.selected_expiry, 0);
+    }
+
+    #[tokio::test]
+    async fn test_option_chain_ready_preserves_in_range_selection() {
+        let (mut app, _rx) = make_test_app();
+        app.stock_modal.selected_expiry = 2;
+
+        app.handle_event(AppEvent::OptionChainReady(chain_with_expirations("AAPL", 5)));
+
+        assert_eq!(app.stock_modal.selected_expiry, 2);
+    }
+
+    #[tokio::test]
+    async fn test_option_chain_ready_clamps_out_of_range_selection() {
+        let (mut app, _rx) = make_test_app();
+        app.stock_modal.selected_expiry = 9;
+
+        app.handle_event(AppEvent::OptionChainReady(chain_with_expirations("AAPL", 3)));
+
+        assert_eq!(app.stock_modal.selected_expiry, 2);
     }
 
     #[tokio::test]
@@ -1117,6 +1173,43 @@ mod tests {
         app.open_options_modal();
 
         assert!(app.stock_modal.option_chain.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cycle_expiry_advances_and_refetches() {
+        let mut app = app_with_three_stocks();
+        app.stock_modal.options_visible = true;
+        app.stock_modal.option_chain = Some(chain_with_expirations("AAPL", 5));
+
+        app.handle_command_key('l');
+
+        assert_eq!(app.stock_modal.selected_expiry, 1);
+        assert!(app.stock_modal.option_chain.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cycle_expiry_clamps_at_first() {
+        let mut app = app_with_three_stocks();
+        app.stock_modal.options_visible = true;
+        app.stock_modal.option_chain = Some(chain_with_expirations("AAPL", 5));
+
+        app.handle_command_key('h');
+
+        assert_eq!(app.stock_modal.selected_expiry, 0);
+        assert!(app.stock_modal.option_chain.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_cycle_expiry_clamps_at_last() {
+        let mut app = app_with_three_stocks();
+        app.stock_modal.options_visible = true;
+        app.stock_modal.selected_expiry = 4;
+        app.stock_modal.option_chain = Some(chain_with_expirations("AAPL", 5));
+
+        app.handle_command_key('l');
+
+        assert_eq!(app.stock_modal.selected_expiry, 4);
+        assert!(app.stock_modal.option_chain.is_some());
     }
 
     #[tokio::test]

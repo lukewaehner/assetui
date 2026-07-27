@@ -18,8 +18,10 @@ use ratatui::{
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
+use crate::black_scholes::OptionKind;
 use crate::models::{
-    FLASH_TTL, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics, StockNews, day_change_pct,
+    FLASH_TTL, OptionChain, OptionContract, QuoteRecord, QuoteRecordAnalysis,
+    QuoteRecordStatistics, StockNews, day_change_pct,
 };
 use crate::search::subseq_match_ci;
 
@@ -58,6 +60,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.stock_modal.chart_visible {
         draw_chart_modal(f, app);
+    }
+
+    if app.stock_modal.options_visible {
+        draw_options_modal(f, app);
     }
 
     if app.help_visible {
@@ -324,6 +330,8 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
     let (mode, hint) = if app.help_visible {
         ("HELP", "esc close")
+    } else if app.stock_modal.options_visible {
+        ("VIEW", "h/l expiry · esc close")
     } else if app.stock_modal.info_visible || app.stock_modal.chart_visible {
         ("VIEW", "s info · enter chart · esc close")
     } else if app.input_mode.toggled && app.input_mode.fuzzy_search {
@@ -338,7 +346,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     } else {
         (
             "NORMAL",
-            "j/k move · h/l page · s info · enter chart · w ★ · i query · / search · o order · ? help · q quit",
+            "j/k move · h/l page · s info · enter chart · x options · w ★ · i query · / search · o order · ? help · q quit",
         )
     };
 
@@ -1024,6 +1032,180 @@ fn rating_color(rating: &str, t: &Theme) -> Color {
     }
 }
 
+/// Returns the chain's contracts of `kind` on the expiry at `expiry_index`, sorted ascending by strike.
+fn contracts_for_expiry(
+    chain: &OptionChain,
+    expiry_index: usize,
+    kind: OptionKind,
+) -> Vec<&OptionContract> {
+    let Some(&expiry) = chain.expirations.get(expiry_index) else {
+        return Vec::new();
+    };
+    let target = expiry.date_naive();
+    let mut out: Vec<&OptionContract> = chain
+        .contracts
+        .iter()
+        .filter(|c| c.kind == kind && c.expiry.date_naive() == target)
+        .collect();
+    out.sort_by(|a, b| {
+        a.strike
+            .partial_cmp(&b.strike)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+fn draw_options_modal(f: &mut Frame, app: &mut App) {
+    let t = app.theme;
+    let area = centered_rect(85, 72, f.area());
+    f.render_widget(Clear, area);
+    let ticker = app.stock_modal.stock.ticker.as_deref().unwrap_or("-");
+    let modal = modal_block(modal_title(ticker, "options", &t), &t);
+    let inner = modal.inner(area);
+    f.render_widget(modal, area);
+
+    let Some(chain) = &app.stock_modal.option_chain else {
+        f.render_widget(placeholder("Loading options…", &t), inner);
+        return;
+    };
+    if chain.expirations.is_empty() {
+        f.render_widget(placeholder("No options for this ticker.", &t), inner);
+        return;
+    }
+    if inner.width < 44 {
+        f.render_widget(placeholder("Terminal too narrow for options.", &t), inner);
+        return;
+    }
+
+    let [selector_area, tables_area, footer_area] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let idx = app
+        .stock_modal
+        .selected_expiry
+        .min(chain.expirations.len() - 1);
+    let expiry = chain.expirations[idx];
+    let mut selector_spans = vec![
+        label("Expiry  ", &t),
+        Span::styled("‹ ", Style::default().fg(t.accent)),
+        Span::styled(
+            expiry.format("%Y-%m-%d").to_string(),
+            Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ›", Style::default().fg(t.accent)),
+        Span::styled(
+            format!("   {}/{}", idx + 1, chain.expirations.len()),
+            Style::default().fg(t.dim),
+        ),
+    ];
+    if let Some(spot) = chain.underlying_price {
+        selector_spans.push(Span::styled(
+            format!("      spot ${spot:.2}"),
+            Style::default().fg(t.dim),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(selector_spans)), selector_area);
+
+    let [calls_area, puts_area] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .areas(tables_area);
+    let calls = contracts_for_expiry(chain, idx, OptionKind::Call);
+    let puts = contracts_for_expiry(chain, idx, OptionKind::Put);
+    draw_option_table(f, calls_area, "CALLS", &calls, &t);
+    draw_option_table(f, puts_area, "PUTS", &puts, &t);
+
+    let key_sty = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(t.dim);
+    let footer = Line::from(vec![
+        Span::styled("h/l", key_sty),
+        Span::styled(" expiry · ", dim),
+        Span::styled("esc", key_sty),
+        Span::styled(" close", dim),
+    ])
+    .alignment(Alignment::Right);
+    f.render_widget(Paragraph::new(footer), footer_area);
+}
+
+/// Renders one side of the options modal (calls or puts) as a strike-sorted table.
+fn draw_option_table(
+    f: &mut Frame,
+    area: Rect,
+    title: &'static str,
+    contracts: &[&OptionContract],
+    t: &Theme,
+) {
+    let wide = area.width >= 46;
+
+    let head_sty = Style::default().fg(t.dim).add_modifier(Modifier::BOLD);
+    let mut headers = vec!["Strike", "Bid", "Ask", "Last", "IV"];
+    if wide {
+        headers.push("Vol");
+        headers.push("OI");
+    }
+    let header = Row::new(
+        headers
+            .into_iter()
+            .map(|h| Cell::from(Span::styled(h, head_sty)))
+            .collect::<Vec<_>>(),
+    )
+    .bottom_margin(1);
+
+    let rows = contracts.iter().map(|c| {
+        let mut cells = vec![
+            Cell::from(format!("{:.2}", c.strike))
+                .style(Style::default().fg(t.fg).add_modifier(Modifier::BOLD)),
+            opt_cell(c.bid, |v| format!("{v:.2}")),
+            opt_cell(c.ask, |v| format!("{v:.2}")),
+            opt_cell(c.last, |v| format!("{v:.2}")),
+            opt_cell(c.implied_volatility, |iv| format!("{:.1}%", iv * 100.0)),
+        ];
+        if wide {
+            cells.push(opt_cell(c.volume, |v| fmt_volume(v as f64)));
+            cells.push(opt_cell(c.open_interest, |v| fmt_volume(v as f64)));
+        }
+        Row::new(cells)
+    });
+
+    let widths: &[Constraint] = if wide {
+        &[
+            Constraint::Length(8),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(6),
+            Constraint::Length(6),
+        ]
+    } else {
+        &[
+            Constraint::Length(8),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(7),
+        ]
+    };
+
+    let block = Block::default()
+        .title(section_heading(title, Some(format!("{}", contracts.len())), t))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.border));
+
+    if contracts.is_empty() {
+        let empty = Paragraph::new(Span::styled("no contracts", Style::default().fg(t.dim)))
+            .block(block);
+        f.render_widget(empty, area);
+        return;
+    }
+
+    let table = Table::new(rows, widths).header(header).block(block);
+    f.render_widget(table, area);
+}
+
 fn draw_chart_modal(f: &mut Frame, app: &mut App) {
     let t = app.theme;
     let area = centered_rect(65, 55, f.area());
@@ -1206,6 +1388,70 @@ mod tests {
     #[test]
     fn fmt_pct_opt_absent_is_dash() {
         assert_eq!(fmt_pct_opt(None), "-");
+    }
+
+    fn opt_contract(kind: OptionKind, strike: f64, expiry: chrono::DateTime<chrono::Utc>) -> OptionContract {
+        OptionContract {
+            kind,
+            expiry,
+            strike,
+            bid: None,
+            ask: None,
+            last: None,
+            implied_volatility: None,
+            volume: None,
+            open_interest: None,
+        }
+    }
+
+    #[test]
+    fn contracts_for_expiry_filters_by_kind_and_sorts_by_strike() {
+        // arrange
+        let exp = chrono::DateTime::from_timestamp(1_768_521_600, 0).unwrap();
+        let chain = OptionChain {
+            underlying: "AAPL".into(),
+            expirations: vec![exp],
+            contracts: vec![
+                opt_contract(OptionKind::Call, 160.0, exp),
+                opt_contract(OptionKind::Put, 150.0, exp),
+                opt_contract(OptionKind::Call, 140.0, exp),
+                opt_contract(OptionKind::Call, 150.0, exp),
+            ],
+            ..Default::default()
+        };
+
+        // act
+        let calls = contracts_for_expiry(&chain, 0, OptionKind::Call);
+
+        // assert
+        let strikes: Vec<f64> = calls.iter().map(|c| c.strike).collect();
+        assert_eq!(strikes, vec![140.0, 150.0, 160.0]);
+    }
+
+    #[test]
+    fn contracts_for_expiry_excludes_other_expiries() {
+        let jan = chrono::DateTime::from_timestamp(1_768_521_600, 0).unwrap();
+        let feb = chrono::DateTime::from_timestamp(1_771_200_000, 0).unwrap();
+        let chain = OptionChain {
+            underlying: "AAPL".into(),
+            expirations: vec![jan, feb],
+            contracts: vec![
+                opt_contract(OptionKind::Call, 150.0, jan),
+                opt_contract(OptionKind::Call, 155.0, feb),
+            ],
+            ..Default::default()
+        };
+
+        let calls = contracts_for_expiry(&chain, 1, OptionKind::Call);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].strike, 155.0);
+    }
+
+    #[test]
+    fn contracts_for_expiry_out_of_range_index_is_empty() {
+        let chain = OptionChain::default();
+        assert!(contracts_for_expiry(&chain, 5, OptionKind::Call).is_empty());
     }
 
     #[test]

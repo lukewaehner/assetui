@@ -2,10 +2,12 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
     fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_news, fetch_option_chain,
-    fetch_quote_and_store, fetch_sorted,
+    fetch_option_chain_for_expiry, fetch_quote_and_store, fetch_sorted,
 };
 use crate::models::QuoteTick;
 use crate::tui::stream::start_quote_stream;
@@ -123,6 +125,22 @@ impl App {
         let symbol = symbol.to_owned();
         tokio::spawn(async move {
             match fetch_option_chain(&client, &symbol).await {
+                Ok(chain) => {
+                    let _ = tx.send(AppEvent::OptionChainReady(chain));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("options {symbol}: {e}")));
+                }
+            }
+        });
+    }
+
+    pub(crate) fn spawn_option_chain_for_expiry(&self, symbol: &str, expiry: DateTime<Utc>) {
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
+        let symbol = symbol.to_owned();
+        tokio::spawn(async move {
+            match fetch_option_chain_for_expiry(&client, &symbol, expiry).await {
                 Ok(chain) => {
                     let _ = tx.send(AppEvent::OptionChainReady(chain));
                 }
