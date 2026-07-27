@@ -18,6 +18,7 @@ use crate::{
         Alert, AlertDirection, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
         QuoteRecordStatistics, QuoteTick, StockNews, crosses, parse_alert_input,
     },
+    portfolio::Holding,
     sort::{SortMode, SortOrder},
 };
 use yfinance_rs::{Candle, StreamHandle, YfClient};
@@ -58,6 +59,8 @@ pub enum AppEvent {
     OptionChainReady(OptionChain),
     /// Active price alerts loaded from the database at startup.
     AlertsLoaded(Vec<Alert>),
+    /// Portfolio holdings loaded from the database at startup.
+    PortfolioLoaded(Vec<Holding>),
     /// Informational message for the log panel.
     LogLine(String),
     /// A quote update is returned from the stream.
@@ -98,6 +101,7 @@ pub struct App {
     pub subscribed_symbols: Vec<String>,
     /// Active price alerts (`triggered_at IS NULL`), the source of truth for tick evaluation and rendering.
     pub alerts: Vec<Alert>,
+    pub holdings: Vec<Holding>,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -292,6 +296,7 @@ impl App {
             stream_handle: None,
             subscribed_symbols: Vec::new(),
             alerts: Vec::new(),
+            holdings: Vec::new(),
         }
     }
 
@@ -349,6 +354,9 @@ impl App {
             }
             AppEvent::AlertsLoaded(alerts) => {
                 self.alerts = alerts;
+            }
+            AppEvent::PortfolioLoaded(holdings) => {
+                self.holdings = holdings;
             }
             AppEvent::Error(e) => self.push_error(e),
             AppEvent::StockAnalysisReady(analysis) => {
@@ -1604,6 +1612,41 @@ mod tests {
         app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(2, "TSLA")]));
         assert_eq!(app.alerts.len(), 1);
         assert_eq!(app.alerts[0].ticker, "TSLA");
+    }
+
+    fn holding_for(ticker: &str) -> Holding {
+        Holding {
+            ticker: ticker.to_string(),
+            shares: 10.0,
+            avg_cost: 100.0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_portfolio_loaded_populates() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PortfolioLoaded(vec![
+            holding_for("AAPL"),
+            holding_for("TSLA"),
+        ]));
+        assert_eq!(app.holdings.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_portfolio_loaded_replaces_previous() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("AAPL")]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("TSLA")]));
+        assert_eq!(app.holdings.len(), 1);
+        assert_eq!(app.holdings[0].ticker, "TSLA");
+    }
+
+    #[tokio::test]
+    async fn test_portfolio_loaded_empty_clears() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("AAPL")]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![]));
+        assert!(app.holdings.is_empty());
     }
 
     fn price_tick(ticker: &str, price: Option<f64>) -> crate::models::QuoteTick {

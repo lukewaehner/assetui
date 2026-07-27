@@ -5,6 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered};
+use crate::db::portfolio::list_holdings;
 use crate::models::AlertDirection;
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
@@ -280,6 +281,21 @@ impl App {
         tokio::spawn(async move {
             if let Err(e) = mark_alert_triggered(&pool, id, triggered_at).await {
                 let _ = tx.send(AppEvent::Error(format!("Failed to persist alert {id}: {e}")));
+            }
+        });
+    }
+
+    pub(crate) fn spawn_load_portfolio(&self) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            match list_holdings(&pool).await {
+                Ok(holdings) => {
+                    let _ = tx.send(AppEvent::PortfolioLoaded(holdings));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("Failed to load portfolio: {e}")));
+                }
             }
         });
     }
