@@ -25,4 +25,6 @@ pub enum AppError {
     Csv(#[from] csv::Error),
     #[error("environment error: {0}")]
     Env(#[from] dotenvy::Error),
+    #[error("data error: {0}")]
+    Data(String),
 }

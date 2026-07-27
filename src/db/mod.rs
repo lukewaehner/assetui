@@ -1,5 +1,6 @@
 //! Database layer for the quotes table.
 
+pub mod alerts;
 pub mod connection;
 pub mod quotes;
 pub mod watchlist;

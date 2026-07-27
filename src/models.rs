@@ -78,6 +78,31 @@ pub struct StockNews {
     pub items: Vec<NewsItem>,
 }
 
+/// Which side of the threshold a price alert fires on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertDirection {
+    /// Fire when the price rises to or above the threshold.
+    Above,
+    /// Fire when the price falls to or below the threshold.
+    Below,
+}
+
+/// A persisted price alert: fire once when `ticker` crosses `threshold` in `direction`.
+#[derive(Debug, Clone)]
+pub struct Alert {
+    /// Database-assigned row id.
+    pub id: i32,
+    /// Ticker the alert watches (stored uppercased).
+    pub ticker: String,
+    /// Which side of `threshold` triggers the alert.
+    pub direction: AlertDirection,
+    /// Absolute price threshold.
+    pub threshold: f64,
+    pub created_at: DateTime<Utc>,
+    /// When the alert fired.
+    pub triggered_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OptionContract {
     /// Call or put.
