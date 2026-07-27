@@ -87,6 +87,52 @@ pub enum AlertDirection {
     Below,
 }
 
+/// Why a user's alert spec (`>150` / `<100`) could not be parsed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AlertParseError {
+    /// No leading `>` or `<`, so the direction is ambiguous.
+    MissingOperator,
+    /// The text after the operator wasn't a number.
+    InvalidNumber(String),
+    /// The threshold parsed but wasn't a finite, strictly-positive price.
+    NonPositive(f64),
+}
+
+impl std::fmt::Display for AlertParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlertParseError::MissingOperator => {
+                write!(f, "start with > (above) or < (below), e.g. >150")
+            }
+            AlertParseError::InvalidNumber(s) => write!(f, "not a number: {s}"),
+            AlertParseError::NonPositive(v) => write!(f, "threshold must be positive (got {v})"),
+        }
+    }
+}
+
+impl std::error::Error for AlertParseError {}
+
+/// Parses a compact alert spec into a direction and threshold.
+pub fn parse_alert_input(input: &str) -> Result<(AlertDirection, f64), AlertParseError> {
+    let s = input.trim();
+    let (direction, rest) = if let Some(rest) = s.strip_prefix('>') {
+        (AlertDirection::Above, rest)
+    } else if let Some(rest) = s.strip_prefix('<') {
+        (AlertDirection::Below, rest)
+    } else {
+        return Err(AlertParseError::MissingOperator);
+    };
+
+    let rest = rest.trim();
+    let value: f64 = rest
+        .parse()
+        .map_err(|_| AlertParseError::InvalidNumber(rest.to_string()))?;
+    if !value.is_finite() || value <= 0.0 {
+        return Err(AlertParseError::NonPositive(value));
+    }
+    Ok((direction, value))
+}
+
 pub fn crosses(direction: AlertDirection, threshold: f64, price: f64) -> bool {
     match direction {
         AlertDirection::Above => price >= threshold,
@@ -299,6 +345,49 @@ mod tests {
             open_interest: None,
         };
         (contract, now)
+    }
+
+    #[test]
+    fn parse_alert_input_above() {
+        assert_eq!(parse_alert_input(">150"), Ok((AlertDirection::Above, 150.0)));
+    }
+
+    #[test]
+    fn parse_alert_input_below() {
+        assert_eq!(parse_alert_input("<100"), Ok((AlertDirection::Below, 100.0)));
+    }
+
+    #[test]
+    fn parse_alert_input_tolerates_whitespace() {
+        assert_eq!(parse_alert_input("  > 150.5 "), Ok((AlertDirection::Above, 150.5)));
+    }
+
+    #[test]
+    fn parse_alert_input_missing_operator_is_error() {
+        assert_eq!(parse_alert_input("150"), Err(AlertParseError::MissingOperator));
+    }
+
+    #[test]
+    fn parse_alert_input_empty_is_error() {
+        assert_eq!(parse_alert_input("   "), Err(AlertParseError::MissingOperator));
+    }
+
+    #[test]
+    fn parse_alert_input_non_numeric_is_error() {
+        assert_eq!(
+            parse_alert_input(">abc"),
+            Err(AlertParseError::InvalidNumber("abc".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_alert_input_negative_is_error() {
+        assert_eq!(parse_alert_input(">-5"), Err(AlertParseError::NonPositive(-5.0)));
+    }
+
+    #[test]
+    fn parse_alert_input_zero_is_error() {
+        assert_eq!(parse_alert_input("<0"), Err(AlertParseError::NonPositive(0.0)));
     }
 
     #[test]

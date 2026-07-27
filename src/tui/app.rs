@@ -15,8 +15,8 @@ use super::theme::{Appearance, Theme};
 use crate::{
     cli::parse_tickers,
     models::{
-        Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics,
-        QuoteTick, StockNews, crosses,
+        Alert, AlertDirection, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
+        QuoteRecordStatistics, QuoteTick, StockNews, crosses, parse_alert_input,
     },
     sort::{SortMode, SortOrder},
 };
@@ -127,6 +127,7 @@ pub struct InputMode {
     pub toggled: bool,
     /// Whether the input box is currently in fuzzy search mode.
     pub fuzzy_search: bool,
+    pub alert_ticker: Option<String>,
 }
 
 /// State for the quotes table on the right side of the layout.
@@ -243,6 +244,7 @@ impl App {
         let appearance = super::theme::detect_appearance();
         Self {
             input_mode: InputMode {
+                alert_ticker: None,
                 input: String::new(),
                 toggled: false,
                 fuzzy_search: false,
@@ -461,6 +463,8 @@ impl App {
                     self.help_visible = false;
                 } else if self.input_mode.fuzzy_search {
                     self.cancel_fuzzy_search();
+                } else if self.input_mode.alert_ticker.is_some() {
+                    self.cancel_alert_input();
                 } else {
                     self.input_mode.toggled = false;
                 }
@@ -479,7 +483,9 @@ impl App {
                 }
             }
             KeyCode::Enter if self.input_mode.toggled => {
-                if self.input_mode.fuzzy_search {
+                if self.input_mode.alert_ticker.is_some() {
+                    self.submit_alert_input();
+                } else if self.input_mode.fuzzy_search {
                     self.accept_fuzzy_search();
                 } else {
                     self.submit_input();
@@ -520,6 +526,7 @@ impl App {
             '?' => self.open_help_modal(),
             'w' => self.toggle_watchlist(),
             'x' => self.open_options_modal(),
+            'A' => self.start_alert_input(),
             'W' => {
                 self.db_display.watchlist_only = !self.db_display.watchlist_only;
                 self.apply_filter();
@@ -545,6 +552,56 @@ impl App {
         self.input_mode.input.clear();
         for symbol in symbols {
             self.spawn_fetch(symbol);
+        }
+    }
+
+    /// Enters price-alert input mode for the selected row's ticker.
+    fn start_alert_input(&mut self) {
+        let Some(ticker) = self.selected_ticker() else {
+            self.db_display.status = "No stock selected for an alert".into();
+            return;
+        };
+        if self.input_mode.fuzzy_search {
+            self.cancel_fuzzy_search();
+        }
+        self.input_mode.toggled = true;
+        self.input_mode.fuzzy_search = false;
+        self.input_mode.alert_ticker = Some(ticker);
+        self.input_mode.input.clear();
+    }
+
+    /// Leaves alert-input mode, discarding any half-typed spec.
+    fn cancel_alert_input(&mut self) {
+        self.input_mode.toggled = false;
+        self.input_mode.alert_ticker = None;
+        self.input_mode.input.clear();
+    }
+
+    fn submit_alert_input(&mut self) {
+        let Some(ticker) = self.input_mode.alert_ticker.clone() else {
+            return;
+        };
+        match parse_alert_input(&self.input_mode.input) {
+            Ok((direction, threshold)) => {
+                self.alerts.push(Alert {
+                    id: 0,
+                    ticker: ticker.clone(),
+                    direction,
+                    threshold,
+                    created_at: chrono::Utc::now(),
+                    triggered_at: None,
+                });
+                let dir = match direction {
+                    AlertDirection::Above => "above",
+                    AlertDirection::Below => "below",
+                };
+                self.push_alert_toast(format!("Alert: {ticker} {dir} {threshold:.2}"));
+                self.spawn_add_alert(ticker, direction, threshold);
+                self.cancel_alert_input();
+            }
+            Err(e) => {
+                self.push_error(format!("alert: {e}"));
+            }
         }
     }
 
@@ -1601,6 +1658,71 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("TSLA", Some(9_999.0))));
 
         assert_eq!(app.alerts.len(), 1, "AAPL alert must not fire on a TSLA tick");
+    }
+
+    #[tokio::test]
+    async fn test_a_key_enters_alert_input_for_selected_ticker() {
+        let mut app = app_with_three_stocks();
+
+        app.handle_command_key('A');
+
+        assert_eq!(app.input_mode.alert_ticker.as_deref(), Some("AAPL"));
+        assert!(app.input_mode.toggled, "input box should be focused");
+    }
+
+    #[tokio::test]
+    async fn test_a_key_with_no_selection_is_noop() {
+        let (mut app, _rx) = make_test_app();
+
+        app.handle_command_key('A');
+
+        assert!(app.input_mode.alert_ticker.is_none());
+        assert!(app.db_display.status.contains("No stock"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_valid_alert_pushes_optimistically_and_exits_mode() {
+        let mut app = app_with_three_stocks();
+        app.handle_command_key('A');
+        type_str(&mut app, ">150");
+
+        app.handle_key(KeyCode::Enter);
+
+        assert_eq!(app.alerts.len(), 1, "the new alert should be pushed optimistically");
+        assert_eq!(app.alerts[0].ticker, "AAPL");
+        assert_eq!(app.alerts[0].direction, AlertDirection::Above);
+        assert_eq!(app.alerts[0].threshold, 150.0);
+        assert!(app.input_mode.alert_ticker.is_none(), "alert mode should exit on success");
+    }
+
+    #[tokio::test]
+    async fn test_submit_invalid_alert_keeps_input_open() {
+        let mut app = app_with_three_stocks();
+        app.handle_command_key('A');
+        type_str(&mut app, "garbage");
+
+        app.handle_key(KeyCode::Enter);
+
+        assert!(app.alerts.is_empty(), "a bad spec must not create an alert");
+        assert_eq!(
+            app.input_mode.alert_ticker.as_deref(),
+            Some("AAPL"),
+            "the input stays open for correction"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_esc_cancels_alert_input() {
+        let mut app = app_with_three_stocks();
+        app.handle_command_key('A');
+        type_str(&mut app, ">1");
+
+        app.handle_key(KeyCode::Esc);
+
+        assert!(app.input_mode.alert_ticker.is_none());
+        assert!(!app.input_mode.toggled);
+        assert!(app.input_mode.input.is_empty(), "half-typed spec is discarded");
+        assert!(app.alerts.is_empty());
     }
 
     #[tokio::test]
