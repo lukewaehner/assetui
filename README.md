@@ -49,6 +49,7 @@ cargo run
 | `h` / `l` | Previous / next page |
 | `s` | Open the info modal |
 | `x` | Open the options modal (chain, IV, and Greeks) for the selected row |
+| `A` | Arm a price alert on the selected row (type `>150` or `<100`, Enter to arm) |
 | `?` | Open the help modal |
 | `Enter` | Open the chart modal (price history) for the selected row |
 | `Esc` | Close modal, cancel search, or exit input mode |
@@ -58,6 +59,12 @@ cargo run
 | `q` | Quit |
 
 `?` and `Enter` work whether or not a modal is already open, so you can flip straight between the info and chart views without closing first. `Esc` closes whichever modal is showing.
+
+### Price alerts
+
+Press `A` on a row and type a threshold spec - `>150` fires when the price rises to or above 150, `<100` when it falls to or below 100 - then Enter to arm it. Armed tickers show a `!` in the gutter next to the watchlist star, and alerts persist in Postgres across restarts. When a live tick crosses the threshold, a toast fires and the alert clears itself (one-shot - it won't fire again).
+
+Two limitations worth knowing: alerts are evaluated only against the **live stream, which covers the tickers on the current page**, so an alert on an off-screen ticker won't fire until that ticker is visible and streaming; and ticks only flow while the market is open, so alerts are dormant nights and weekends.
 
 ### Fuzzy search
 

@@ -20,7 +20,7 @@ use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
 use crate::black_scholes::{DEFAULT_RISK_FREE_RATE, OptionKind};
 use crate::models::{
-    FLASH_TTL, OptionChain, OptionContract, QuoteRecord, QuoteRecordAnalysis,
+    Alert, FLASH_TTL, OptionChain, OptionContract, QuoteRecord, QuoteRecordAnalysis,
     QuoteRecordStatistics, StockNews, day_change_pct,
 };
 use crate::search::subseq_match_ci;
@@ -217,6 +217,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
 
     let header = Row::new(vec![
         Cell::from(""),
+        Cell::from(""),
         hcell("ID ", "(d)"),
         hcell("Ticker ", "(t)"),
         hcell("Name", "(n)"),
@@ -250,8 +251,14 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         } else {
             Cell::from("")
         };
+        let bell = if has_active_alert(q.ticker.as_deref(), &app.alerts) {
+            Cell::from(Span::styled("!", Style::default().fg(t.accent).add_modifier(Modifier::BOLD)))
+        } else {
+            Cell::from("")
+        };
         Row::new(vec![
             star,
+            bell,
             opt_cell(q.id, |id| id.to_string()),
             fuzzy_cell(q.ticker.as_deref(), query, searching, &t),
             fuzzy_cell(q.name.as_deref(), query, searching, &t),
@@ -269,6 +276,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     });
 
     let widths = [
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(6),
         Constraint::Length(10),
@@ -323,6 +331,10 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
 
 fn is_watchlisted(ticker: Option<&str>, watchlist: &HashSet<String>) -> bool {
     ticker.is_some_and(|t| watchlist.contains(&t.to_ascii_uppercase()))
+}
+
+fn has_active_alert(ticker: Option<&str>, alerts: &[Alert]) -> bool {
+    ticker.is_some_and(|t| alerts.iter().any(|a| a.ticker.eq_ignore_ascii_case(t)))
 }
 
 fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
@@ -444,6 +456,13 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         Line::raw(""),
         section_heading("WATCHLIST", None, &t),
         help_row("w / r", "add / remove favourite (★)", &t),
+        Line::raw(""),
+        section_heading("ALERTS", None, &t),
+        help_row("A", "arm price alert (>150 / <100)", &t),
+        Line::from(Span::styled(
+            "  fires once for on-screen tickers only",
+            Style::default().fg(t.dim),
+        )),
         Line::raw(""),
         section_heading("QUERY & SEARCH", None, &t),
         help_row("i", "fetch tickers (input box)", &t),
@@ -1387,6 +1406,41 @@ mod tests {
     fn missing_ticker_is_not_starred() {
         let wl = watchlist(&["AAPL"]);
         assert!(!is_watchlisted(None, &wl));
+    }
+
+    fn alert_on(ticker: &str) -> Alert {
+        Alert {
+            id: 1,
+            ticker: ticker.to_string(),
+            direction: crate::models::AlertDirection::Above,
+            threshold: 100.0,
+            created_at: chrono::Utc::now(),
+            triggered_at: None,
+        }
+    }
+
+    #[test]
+    fn ticker_with_active_alert_is_flagged() {
+        let alerts = vec![alert_on("AAPL")];
+        assert!(has_active_alert(Some("AAPL"), &alerts));
+    }
+
+    #[test]
+    fn alert_match_is_case_insensitive() {
+        let alerts = vec![alert_on("AAPL")];
+        assert!(has_active_alert(Some("aapl"), &alerts));
+    }
+
+    #[test]
+    fn ticker_without_alert_is_not_flagged() {
+        let alerts = vec![alert_on("AAPL")];
+        assert!(!has_active_alert(Some("TSLA"), &alerts));
+    }
+
+    #[test]
+    fn missing_ticker_has_no_alert() {
+        let alerts = vec![alert_on("AAPL")];
+        assert!(!has_active_alert(None, &alerts));
     }
 
     #[test]
