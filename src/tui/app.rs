@@ -2007,6 +2007,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_tick_updates_held_position_pnl() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(120.0),
+            previous_close: Some(118.0),
+            ..Default::default()
+        }]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![Holding {
+            ticker: "AAPL".to_string(),
+            shares: 10.0,
+            avg_cost: 100.0,
+        }]));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("AAPL", Some(150.0))));
+
+        let positions =
+            crate::tui::draw::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+        assert_eq!(positions[0].market_value, Some(1500.0));
+        assert_eq!(positions[0].unrealized_pnl, Some(500.0));
+    }
+
+    #[tokio::test]
+    async fn test_tick_for_unheld_ticker_does_not_change_portfolio() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(120.0),
+            previous_close: Some(118.0),
+            ..Default::default()
+        }]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![Holding {
+            ticker: "AAPL".to_string(),
+            shares: 10.0,
+            avg_cost: 100.0,
+        }]));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("TSLA", Some(999.0))));
+
+        let positions =
+            crate::tui::draw::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+        assert_eq!(positions[0].market_value, Some(1200.0), "AAPL still valued at its own price");
+    }
+
+    #[tokio::test]
     async fn test_portfolio_modal_renders_without_panicking() {
         use ratatui::{Terminal, backend::TestBackend};
 

@@ -23,7 +23,7 @@ use crate::models::{
     Alert, FLASH_TTL, OptionChain, OptionContract, QuoteRecord, QuoteRecordAnalysis,
     QuoteRecordStatistics, StockNews, day_change_pct,
 };
-use crate::portfolio::{Position, summarize, value_position};
+use crate::portfolio::{Holding, Position, summarize, value_position};
 use crate::search::subseq_match_ci;
 
 use super::app::App;
@@ -1272,6 +1272,16 @@ fn resolve_price(ticker: &str, rows: &[QuoteRecord]) -> (Option<f64>, Option<f64
         .map_or((None, None), |r| (r.price, r.previous_close))
 }
 
+pub(crate) fn portfolio_positions(holdings: &[Holding], rows: &[QuoteRecord]) -> Vec<Position> {
+    holdings
+        .iter()
+        .map(|h| {
+            let (price, previous_close) = resolve_price(&h.ticker, rows);
+            value_position(h.clone(), price, previous_close)
+        })
+        .collect()
+}
+
 fn pnl_color(value: Option<f64>, t: &Theme) -> Color {
     match value {
         Some(v) if v > f64::EPSILON => t.up,
@@ -1302,14 +1312,7 @@ fn draw_portfolio_modal(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    let positions: Vec<Position> = app
-        .holdings
-        .iter()
-        .map(|h| {
-            let (price, previous_close) = resolve_price(&h.ticker, &app.db_display.all_rows);
-            value_position(h.clone(), price, previous_close)
-        })
-        .collect();
+    let positions = portfolio_positions(&app.holdings, &app.db_display.all_rows);
     let summary = summarize(&positions);
 
     let [table_area, totals_area] =

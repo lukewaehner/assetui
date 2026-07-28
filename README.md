@@ -50,6 +50,9 @@ cargo run
 | `s` | Open the info modal |
 | `x` | Open the options modal (chain, IV, and Greeks) for the selected row |
 | `A` | Arm a price alert on the selected row (type `>150` or `<100`, Enter to arm) |
+| `P` | Toggle the portfolio view |
+| `H` | Add or edit a holding for the selected row (type `shares avg_cost`, Enter to save) |
+| `R` | Remove the selected row's holding |
 | `?` | Open the help modal |
 | `Enter` | Open the chart modal (price history) for the selected row |
 | `Esc` | Close modal, cancel search, or exit input mode |
@@ -65,6 +68,12 @@ cargo run
 Press `A` on a row and type a threshold spec - `>150` fires when the price rises to or above 150, `<100` when it falls to or below 100 - then Enter to arm it. Armed tickers show a `!` in the gutter next to the watchlist star, and alerts persist in Postgres across restarts. When a live tick crosses the threshold, a toast fires and the alert clears itself (one-shot - it won't fire again).
 
 Two limitations worth knowing: alerts are evaluated only against the **live stream, which covers the tickers on the current page**, so an alert on an off-screen ticker won't fire until that ticker is visible and streaming; and ticks only flow while the market is open, so alerts are dormant nights and weekends.
+
+### Portfolio
+
+Record what you hold by hand: press `H` on a row and type `shares avg_cost` (e.g. `10 150.50`), Enter to save; `R` removes a holding; `P` toggles the portfolio view. The view shows one row per position — shares, average cost, current price, market value, unrealized P&L (\$ and %), and day-change — with a totals line, coloured green/red by gain/loss. P&L updates live in place as ticks land while the view is open.
+
+Prices come from the quotes already in memory, so a holding whose ticker isn't currently loaded shows `-` for its price-derived columns rather than a misleading `$0`. This is deliberately a manual, display-only tracker — no brokerage connection, no order routing, and unrealized P&L only (there's no transaction ledger). Values are single-currency and summed as-is.
 
 ### Fuzzy search
 
