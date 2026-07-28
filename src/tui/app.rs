@@ -125,16 +125,61 @@ pub struct Animations {
     pub row_flash_map: HashMap<String, (f64, Instant)>,
 }
 
-/// State for the ticker input box.
+/// What the input box is currently doing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum InputActivity {
+    /// Box unfocused.
+    #[default]
+    Idle,
+    /// Typing comma-separated tickers to fetch.
+    Ticker,
+    /// Typing a fuzzy-filter query, box focused.
+    Fuzzy,
+    FuzzyApplied,
+    /// Typing a price-alert spec (`>150`/`<100`) for `ticker`.
+    Alert { ticker: String },
+    /// Typing an add/edit-holding spec (`shares avg_cost`) for `ticker`.
+    Holding { ticker: String },
+}
+
+/// State for the ticker input box: the typed text plus what it currently means.
 pub struct InputMode {
     /// Text the user has typed so far.
     pub input: String,
-    /// Whether the input box is currently focused (i.e. typing goes here).
-    pub toggled: bool,
-    /// Whether the input box is currently in fuzzy search mode.
-    pub fuzzy_search: bool,
-    pub alert_ticker: Option<String>,
-    pub holding_ticker: Option<String>,
+    /// The box's current activity.
+    pub activity: InputActivity,
+}
+
+impl InputMode {
+    /// Whether the box is focused (printable keys edit [`Self::input`]).
+    pub fn is_focused(&self) -> bool {
+        matches!(
+            self.activity,
+            InputActivity::Ticker
+                | InputActivity::Fuzzy
+                | InputActivity::Alert { .. }
+                | InputActivity::Holding { .. }
+        )
+    }
+
+    /// Whether a fuzzy filter is active (being typed or already applied).
+    pub fn is_fuzzy(&self) -> bool {
+        matches!(self.activity, InputActivity::Fuzzy | InputActivity::FuzzyApplied)
+    }
+
+    pub fn alert_ticker(&self) -> Option<&str> {
+        match &self.activity {
+            InputActivity::Alert { ticker } => Some(ticker),
+            _ => None,
+        }
+    }
+
+    pub fn holding_ticker(&self) -> Option<&str> {
+        match &self.activity {
+            InputActivity::Holding { ticker } => Some(ticker),
+            _ => None,
+        }
+    }
 }
 
 /// State for the quotes table on the right side of the layout.
@@ -251,11 +296,8 @@ impl App {
         let appearance = super::theme::detect_appearance();
         Self {
             input_mode: InputMode {
-                alert_ticker: None,
-                holding_ticker: None,
                 input: String::new(),
-                toggled: false,
-                fuzzy_search: false,
+                activity: InputActivity::Idle,
             },
             should_quit: false,
             db_display: DbDisplay {
@@ -320,7 +362,9 @@ impl App {
             .row_flash_map
             .retain(|_, (_, ts)| ts.elapsed() < FLASH_TTL);
 
-        (blinked && self.input_mode.toggled) || self.notifications.has_notification() || had_flashes
+        (blinked && self.input_mode.is_focused())
+            || self.notifications.has_notification()
+            || had_flashes
     }
 
     /// Appends a line to the log panel, dropping the oldest line once the [`MAX_LOG_LINES`] cap is reached.
@@ -492,35 +536,35 @@ impl App {
                     self.stock_modal.options_visible = false;
                     self.portfolio_visible = false;
                     self.help_visible = false;
-                } else if self.input_mode.fuzzy_search {
+                } else if self.input_mode.is_fuzzy() {
                     self.cancel_fuzzy_search();
-                } else if self.input_mode.alert_ticker.is_some() {
+                } else if self.input_mode.alert_ticker().is_some() {
                     self.cancel_alert_input();
-                } else if self.input_mode.holding_ticker.is_some() {
+                } else if self.input_mode.holding_ticker().is_some() {
                     self.cancel_holding_input();
                 } else {
-                    self.input_mode.toggled = false;
+                    self.input_mode.activity = InputActivity::Idle;
                 }
             }
-            KeyCode::Char(c) if self.input_mode.toggled => {
+            KeyCode::Char(c) if self.input_mode.is_focused() => {
                 self.input_mode.input.push(c);
-                if self.input_mode.fuzzy_search {
+                if self.input_mode.is_fuzzy() {
                     self.apply_filter();
                 }
             }
             KeyCode::Char(c) => self.handle_command_key(c),
-            KeyCode::Backspace if self.input_mode.toggled => {
+            KeyCode::Backspace if self.input_mode.is_focused() => {
                 self.input_mode.input.pop();
-                if self.input_mode.fuzzy_search {
+                if self.input_mode.is_fuzzy() {
                     self.apply_filter();
                 }
             }
-            KeyCode::Enter if self.input_mode.toggled => {
-                if self.input_mode.alert_ticker.is_some() {
+            KeyCode::Enter if self.input_mode.is_focused() => {
+                if self.input_mode.alert_ticker().is_some() {
                     self.submit_alert_input();
-                } else if self.input_mode.holding_ticker.is_some() {
+                } else if self.input_mode.holding_ticker().is_some() {
                     self.submit_holding_input();
-                } else if self.input_mode.fuzzy_search {
+                } else if self.input_mode.is_fuzzy() {
                     self.accept_fuzzy_search();
                 } else {
                     self.submit_input();
@@ -577,10 +621,14 @@ impl App {
                 self.resubscribe_stream();
             }
             'i' => {
-                if self.input_mode.fuzzy_search {
-                    self.cancel_fuzzy_search();
+                if self.input_mode.is_focused() {
+                    self.input_mode.activity = InputActivity::Idle;
+                } else {
+                    if self.input_mode.is_fuzzy() {
+                        self.cancel_fuzzy_search();
+                    }
+                    self.input_mode.activity = InputActivity::Ticker;
                 }
-                self.input_mode.toggled = !self.input_mode.toggled;
             }
             '/' => self.start_fuzzy_search(),
             'j' => self.move_selection(1),
@@ -605,24 +653,21 @@ impl App {
             self.db_display.status = "No stock selected for an alert".into();
             return;
         };
-        if self.input_mode.fuzzy_search {
+        if self.input_mode.is_fuzzy() {
             self.cancel_fuzzy_search();
         }
-        self.input_mode.toggled = true;
-        self.input_mode.fuzzy_search = false;
-        self.input_mode.alert_ticker = Some(ticker);
+        self.input_mode.activity = InputActivity::Alert { ticker };
         self.input_mode.input.clear();
     }
 
     /// Leaves alert-input mode, discarding any half-typed spec.
     fn cancel_alert_input(&mut self) {
-        self.input_mode.toggled = false;
-        self.input_mode.alert_ticker = None;
+        self.input_mode.activity = InputActivity::Idle;
         self.input_mode.input.clear();
     }
 
     fn submit_alert_input(&mut self) {
-        let Some(ticker) = self.input_mode.alert_ticker.clone() else {
+        let Some(ticker) = self.input_mode.alert_ticker().map(str::to_owned) else {
             return;
         };
         match parse_alert_input(&self.input_mode.input) {
@@ -655,24 +700,21 @@ impl App {
             self.db_display.status = "No stock selected for a holding".into();
             return;
         };
-        if self.input_mode.fuzzy_search {
+        if self.input_mode.is_fuzzy() {
             self.cancel_fuzzy_search();
         }
-        self.input_mode.toggled = true;
-        self.input_mode.fuzzy_search = false;
-        self.input_mode.holding_ticker = Some(ticker);
+        self.input_mode.activity = InputActivity::Holding { ticker };
         self.input_mode.input.clear();
     }
 
     /// Leaves holding-input mode, discarding any half-typed spec.
     fn cancel_holding_input(&mut self) {
-        self.input_mode.toggled = false;
-        self.input_mode.holding_ticker = None;
+        self.input_mode.activity = InputActivity::Idle;
         self.input_mode.input.clear();
     }
 
     fn submit_holding_input(&mut self) {
-        let Some(ticker) = self.input_mode.holding_ticker.clone() else {
+        let Some(ticker) = self.input_mode.holding_ticker().map(str::to_owned) else {
             return;
         };
         match parse_holding_input(&self.input_mode.input) {
@@ -808,8 +850,7 @@ impl App {
     }
 
     fn start_fuzzy_search(&mut self) {
-        self.input_mode.toggled = true;
-        self.input_mode.fuzzy_search = true;
+        self.input_mode.activity = InputActivity::Fuzzy;
         self.input_mode.input.clear();
         self.apply_filter();
     }
@@ -819,14 +860,13 @@ impl App {
             self.cancel_fuzzy_search();
             return;
         }
-        self.input_mode.toggled = false;
+        self.input_mode.activity = InputActivity::FuzzyApplied;
         self.resubscribe_stream();
     }
 
     /// Cancels fuzzy search (Esc): clears the query and restores the full table.
     fn cancel_fuzzy_search(&mut self) {
-        self.input_mode.fuzzy_search = false;
-        self.input_mode.toggled = false;
+        self.input_mode.activity = InputActivity::Idle;
         self.input_mode.input.clear();
         self.apply_filter();
         self.resubscribe_stream();
@@ -834,7 +874,7 @@ impl App {
 
     fn apply_filter(&mut self) {
         let query = &self.input_mode.input;
-        let mut rows: Vec<QuoteRecord> = if self.input_mode.fuzzy_search {
+        let mut rows: Vec<QuoteRecord> = if self.input_mode.is_fuzzy() {
             self.db_display
                 .all_rows
                 .iter()
@@ -1078,7 +1118,7 @@ mod tests {
     async fn test_app_new_default_state() {
         let (app, _rx) = make_test_app();
         assert!(!app.should_quit);
-        assert!(!app.input_mode.toggled);
+        assert!(!app.input_mode.is_focused());
         assert!(app.db_display.rows.is_empty());
         assert!(app.logs.is_empty());
         assert!(!app.stock_modal.info_visible);
@@ -1464,9 +1504,9 @@ mod tests {
     async fn test_command_key_i_toggles_input() {
         let (mut app, _rx) = make_test_app();
         app.handle_command_key('i');
-        assert!(app.input_mode.toggled);
+        assert!(app.input_mode.is_focused());
         app.handle_command_key('i');
-        assert!(!app.input_mode.toggled);
+        assert!(!app.input_mode.is_focused());
     }
 
     #[tokio::test]
@@ -1535,7 +1575,7 @@ mod tests {
     async fn test_fuzzy_search_filters_live() {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('/'));
-        assert!(app.input_mode.toggled && app.input_mode.fuzzy_search);
+        assert!(app.input_mode.is_focused() && app.input_mode.is_fuzzy());
         assert_eq!(app.db_display.rows.len(), 3, "empty query shows all");
 
         type_str(&mut app, "apl");
@@ -1566,8 +1606,8 @@ mod tests {
         assert_eq!(app.db_display.rows.len(), 2, "Apple Inc. + Tesla Inc.");
 
         app.handle_key(KeyCode::Enter);
-        assert!(!app.input_mode.toggled, "input box loses focus");
-        assert!(app.input_mode.fuzzy_search, "filter stays active");
+        assert!(!app.input_mode.is_focused(), "input box loses focus");
+        assert!(app.input_mode.is_fuzzy(), "filter stays active");
         assert_eq!(app.db_display.rows.len(), 2);
 
         app.handle_key(KeyCode::Char('j'));
@@ -1581,7 +1621,7 @@ mod tests {
         type_str(&mut app, "aapl");
         assert_eq!(app.db_display.rows.len(), 1);
         app.handle_key(KeyCode::Esc);
-        assert!(!app.input_mode.fuzzy_search);
+        assert!(!app.input_mode.is_fuzzy());
         assert!(app.input_mode.input.is_empty());
         assert_eq!(app.db_display.rows.len(), 3);
 
@@ -1589,7 +1629,7 @@ mod tests {
         type_str(&mut app, "aapl");
         app.handle_key(KeyCode::Enter);
         app.handle_key(KeyCode::Esc);
-        assert!(!app.input_mode.fuzzy_search);
+        assert!(!app.input_mode.is_fuzzy());
         assert_eq!(app.db_display.rows.len(), 3);
     }
 
@@ -1598,8 +1638,8 @@ mod tests {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('/'));
         app.handle_key(KeyCode::Enter);
-        assert!(!app.input_mode.fuzzy_search);
-        assert!(!app.input_mode.toggled);
+        assert!(!app.input_mode.is_fuzzy());
+        assert!(!app.input_mode.is_focused());
         assert_eq!(app.db_display.rows.len(), 3);
     }
 
@@ -1611,8 +1651,8 @@ mod tests {
         app.handle_key(KeyCode::Enter);
 
         app.handle_key(KeyCode::Char('i'));
-        assert!(app.input_mode.toggled, "input box focused for a fetch");
-        assert!(!app.input_mode.fuzzy_search);
+        assert!(app.input_mode.is_focused(), "input box focused for a fetch");
+        assert!(!app.input_mode.is_fuzzy());
         assert!(app.input_mode.input.is_empty());
         assert_eq!(app.db_display.rows.len(), 3, "filter cleared");
     }
@@ -1833,8 +1873,8 @@ mod tests {
 
         app.handle_command_key('A');
 
-        assert_eq!(app.input_mode.alert_ticker.as_deref(), Some("AAPL"));
-        assert!(app.input_mode.toggled, "input box should be focused");
+        assert_eq!(app.input_mode.alert_ticker(), Some("AAPL"));
+        assert!(app.input_mode.is_focused(), "input box should be focused");
     }
 
     #[tokio::test]
@@ -1843,7 +1883,7 @@ mod tests {
 
         app.handle_command_key('A');
 
-        assert!(app.input_mode.alert_ticker.is_none());
+        assert!(app.input_mode.alert_ticker().is_none());
         assert!(app.db_display.status.contains("No stock"));
     }
 
@@ -1859,7 +1899,7 @@ mod tests {
         assert_eq!(app.alerts[0].ticker, "AAPL");
         assert_eq!(app.alerts[0].direction, AlertDirection::Above);
         assert_eq!(app.alerts[0].threshold, 150.0);
-        assert!(app.input_mode.alert_ticker.is_none(), "alert mode should exit on success");
+        assert!(app.input_mode.alert_ticker().is_none(), "alert mode should exit on success");
     }
 
     #[tokio::test]
@@ -1872,7 +1912,7 @@ mod tests {
 
         assert!(app.alerts.is_empty(), "a bad spec must not create an alert");
         assert_eq!(
-            app.input_mode.alert_ticker.as_deref(),
+            app.input_mode.alert_ticker(),
             Some("AAPL"),
             "the input stays open for correction"
         );
@@ -1886,8 +1926,8 @@ mod tests {
 
         app.handle_key(KeyCode::Esc);
 
-        assert!(app.input_mode.alert_ticker.is_none());
-        assert!(!app.input_mode.toggled);
+        assert!(app.input_mode.alert_ticker().is_none());
+        assert!(!app.input_mode.is_focused());
         assert!(app.input_mode.input.is_empty(), "half-typed spec is discarded");
         assert!(app.alerts.is_empty());
     }
@@ -1898,8 +1938,8 @@ mod tests {
 
         app.handle_command_key('H');
 
-        assert_eq!(app.input_mode.holding_ticker.as_deref(), Some("AAPL"));
-        assert!(app.input_mode.toggled);
+        assert_eq!(app.input_mode.holding_ticker(), Some("AAPL"));
+        assert!(app.input_mode.is_focused());
     }
 
     #[tokio::test]
@@ -1914,7 +1954,7 @@ mod tests {
         assert_eq!(app.holdings[0].ticker, "AAPL");
         assert_eq!(app.holdings[0].shares, 10.0);
         assert_eq!(app.holdings[0].avg_cost, 150.0);
-        assert!(app.input_mode.holding_ticker.is_none(), "holding mode exits on success");
+        assert!(app.input_mode.holding_ticker().is_none(), "holding mode exits on success");
     }
 
     #[tokio::test]
@@ -1944,7 +1984,7 @@ mod tests {
         app.handle_key(KeyCode::Enter);
 
         assert!(app.holdings.is_empty(), "a bad spec must not create a holding");
-        assert_eq!(app.input_mode.holding_ticker.as_deref(), Some("AAPL"));
+        assert_eq!(app.input_mode.holding_ticker(), Some("AAPL"));
     }
 
     #[tokio::test]
@@ -1955,8 +1995,8 @@ mod tests {
 
         app.handle_key(KeyCode::Esc);
 
-        assert!(app.input_mode.holding_ticker.is_none());
-        assert!(!app.input_mode.toggled);
+        assert!(app.input_mode.holding_ticker().is_none());
+        assert!(!app.input_mode.is_focused());
         assert!(app.holdings.is_empty());
     }
 

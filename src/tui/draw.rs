@@ -44,7 +44,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let [input_area, log_area] =
         Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(left);
 
-    let (input_border, db_border) = if app.input_mode.toggled {
+    let (input_border, db_border) = if app.input_mode.is_focused() {
         (t.accent, t.border)
     } else {
         (t.border, t.accent)
@@ -90,16 +90,16 @@ fn block_title(text: String, t: &Theme) -> Line<'static> {
 /// Renders the ticker input box with a blinking cursor while focused.
 fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     let t = app.theme;
-    let cursor = if app.input_mode.toggled && app.animations.blink_state {
+    let cursor = if app.input_mode.is_focused() && app.animations.blink_state {
         "▌"
     } else {
         " "
     };
-    let title = if let Some(ticker) = &app.input_mode.alert_ticker {
+    let title = if let Some(ticker) = app.input_mode.alert_ticker() {
         format!("assetui · alert {ticker}")
-    } else if let Some(ticker) = &app.input_mode.holding_ticker {
+    } else if let Some(ticker) = app.input_mode.holding_ticker() {
         format!("assetui · holding {ticker}")
-    } else if app.input_mode.fuzzy_search {
+    } else if app.input_mode.is_fuzzy() {
         "assetui · search".to_string()
     } else {
         "assetui · query".to_string()
@@ -110,11 +110,11 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
         .border_style(Style::default().fg(border_color).bg(t.panel))
         .style(Style::default().bg(t.panel));
     let mut spans = Vec::with_capacity(3);
-    if app.input_mode.fuzzy_search {
+    if app.input_mode.is_fuzzy() {
         spans.push(Span::styled("/", Style::default().fg(t.dim)));
-    } else if app.input_mode.alert_ticker.is_some() && app.input_mode.input.is_empty() {
+    } else if app.input_mode.alert_ticker().is_some() && app.input_mode.input.is_empty() {
         spans.push(Span::styled(">150 / <100", Style::default().fg(t.dim)));
-    } else if app.input_mode.holding_ticker.is_some() && app.input_mode.input.is_empty() {
+    } else if app.input_mode.holding_ticker().is_some() && app.input_mode.input.is_empty() {
         spans.push(Span::styled("shares avg_cost", Style::default().fg(t.dim)));
     }
     spans.push(Span::styled(
@@ -240,7 +240,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
 
     let window = app.db_display.window_range();
     let query = &app.input_mode.input;
-    let searching = app.input_mode.fuzzy_search;
+    let searching = app.input_mode.is_fuzzy();
 
     if app.db_display.rows.is_empty() {
         let centered = centered_rect(40, 10, area);
@@ -361,15 +361,15 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         ("VIEW", "P/esc close")
     } else if app.stock_modal.info_visible || app.stock_modal.chart_visible {
         ("VIEW", "s info · enter chart · esc close")
-    } else if app.input_mode.alert_ticker.is_some() {
+    } else if app.input_mode.alert_ticker().is_some() {
         ("ALERT", "type >150 or <100 · enter arm · esc cancel")
-    } else if app.input_mode.holding_ticker.is_some() {
+    } else if app.input_mode.holding_ticker().is_some() {
         ("HOLDING", "type shares avg_cost · enter save · esc cancel")
-    } else if app.input_mode.toggled && app.input_mode.fuzzy_search {
+    } else if app.input_mode.is_focused() && app.input_mode.is_fuzzy() {
         ("SEARCH", "type to filter · enter apply · esc cancel")
-    } else if app.input_mode.toggled {
+    } else if app.input_mode.is_focused() {
         ("INPUT", "type ticker · enter fetch · esc done")
-    } else if app.input_mode.fuzzy_search {
+    } else if app.input_mode.is_fuzzy() {
         (
             "FILTER",
             "j/k move · s info · enter chart · w ★ · / new search · esc clear · ? help",
@@ -384,7 +384,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let chip = format!(" {mode} ");
     let page = app.db_display.page + 1;
     let total_pages = app.db_display.total_pages();
-    let count = if app.input_mode.fuzzy_search {
+    let count = if app.input_mode.is_fuzzy() {
         format!(
             "{}/{}",
             app.db_display.rows.len(),
