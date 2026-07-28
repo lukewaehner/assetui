@@ -5,8 +5,9 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered};
-use crate::db::portfolio::list_holdings;
+use crate::db::portfolio::{list_holdings, remove_holding, upsert_holding};
 use crate::models::AlertDirection;
+use crate::portfolio::Holding;
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
     fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_news, fetch_option_chain,
@@ -300,6 +301,31 @@ impl App {
         });
     }
 
+    pub(crate) fn spawn_upsert_holding(&self, holding: Holding) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = upsert_holding(&pool, &holding).await {
+                let _ = tx.send(AppEvent::Error(format!(
+                    "Failed to save holding {}: {e}",
+                    holding.ticker
+                )));
+            }
+            reload_portfolio(&pool, &tx).await;
+        });
+    }
+
+    pub(crate) fn spawn_remove_holding(&self, ticker: String) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = remove_holding(&pool, &ticker).await {
+                let _ = tx.send(AppEvent::Error(format!("Failed to remove holding {ticker}: {e}")));
+            }
+            reload_portfolio(&pool, &tx).await;
+        });
+    }
+
     pub(crate) fn spawn_save_to_watchlist(&self, ticker: String) {
         let pool = self.services.pool.clone();
         let tx = self.services.event_tx.clone();
@@ -324,6 +350,20 @@ impl App {
                     )));
                 });
         });
+    }
+}
+
+async fn reload_portfolio(
+    pool: &sqlx::PgPool,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+) {
+    match list_holdings(pool).await {
+        Ok(holdings) => {
+            let _ = tx.send(AppEvent::PortfolioLoaded(holdings));
+        }
+        Err(e) => {
+            let _ = tx.send(AppEvent::Error(format!("Failed to reload portfolio: {e}")));
+        }
     }
 }
 

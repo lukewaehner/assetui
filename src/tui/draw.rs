@@ -92,6 +92,8 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     };
     let title = if let Some(ticker) = &app.input_mode.alert_ticker {
         format!("assetui · alert {ticker}")
+    } else if let Some(ticker) = &app.input_mode.holding_ticker {
+        format!("assetui · holding {ticker}")
     } else if app.input_mode.fuzzy_search {
         "assetui · search".to_string()
     } else {
@@ -107,6 +109,8 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
         spans.push(Span::styled("/", Style::default().fg(t.dim)));
     } else if app.input_mode.alert_ticker.is_some() && app.input_mode.input.is_empty() {
         spans.push(Span::styled(">150 / <100", Style::default().fg(t.dim)));
+    } else if app.input_mode.holding_ticker.is_some() && app.input_mode.input.is_empty() {
+        spans.push(Span::styled("shares avg_cost", Style::default().fg(t.dim)));
     }
     spans.push(Span::styled(
         app.input_mode.input.clone(),
@@ -352,6 +356,8 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         ("VIEW", "s info · enter chart · esc close")
     } else if app.input_mode.alert_ticker.is_some() {
         ("ALERT", "type >150 or <100 · enter arm · esc cancel")
+    } else if app.input_mode.holding_ticker.is_some() {
+        ("HOLDING", "type shares avg_cost · enter save · esc cancel")
     } else if app.input_mode.toggled && app.input_mode.fuzzy_search {
         ("SEARCH", "type to filter · enter apply · esc cancel")
     } else if app.input_mode.toggled {

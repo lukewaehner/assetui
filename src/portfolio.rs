@@ -1,5 +1,53 @@
 //! Portfolio holdings and the pure P&L compute core.
 
+/// Why a user's holding spec (`shares avg_cost`, e.g. `10 150.5`) could not be parsed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HoldingParseError {
+    /// Not exactly two whitespace-separated fields.
+    WrongFieldCount,
+    /// A field wasn't a number.
+    InvalidNumber(String),
+    /// Share count wasn't finite and strictly positive.
+    NonPositiveShares(f64),
+    NegativeCost(f64),
+}
+
+impl std::fmt::Display for HoldingParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HoldingParseError::WrongFieldCount => {
+                write!(f, "enter shares and average cost, e.g. 10 150.50")
+            }
+            HoldingParseError::InvalidNumber(s) => write!(f, "not a number: {s}"),
+            HoldingParseError::NonPositiveShares(v) => write!(f, "shares must be positive (got {v})"),
+            HoldingParseError::NegativeCost(v) => write!(f, "cost can't be negative (got {v})"),
+        }
+    }
+}
+
+impl std::error::Error for HoldingParseError {}
+
+/// Parses a `"shares avg_cost"` spec (two whitespace-separated numbers) into validated values.
+pub fn parse_holding_input(input: &str) -> Result<(f64, f64), HoldingParseError> {
+    let parts: Vec<&str> = input.split_whitespace().collect();
+    if parts.len() != 2 {
+        return Err(HoldingParseError::WrongFieldCount);
+    }
+    let shares: f64 = parts[0]
+        .parse()
+        .map_err(|_| HoldingParseError::InvalidNumber(parts[0].to_string()))?;
+    let avg_cost: f64 = parts[1]
+        .parse()
+        .map_err(|_| HoldingParseError::InvalidNumber(parts[1].to_string()))?;
+    if !shares.is_finite() || shares <= 0.0 {
+        return Err(HoldingParseError::NonPositiveShares(shares));
+    }
+    if !avg_cost.is_finite() || avg_cost < 0.0 {
+        return Err(HoldingParseError::NegativeCost(avg_cost));
+    }
+    Ok((shares, avg_cost))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Holding {
     /// Ticker symbol (stored uppercased at the db boundary).
@@ -99,6 +147,41 @@ mod tests {
             shares,
             avg_cost,
         }
+    }
+
+    #[test]
+    fn parse_holding_input_valid() {
+        assert_eq!(parse_holding_input("10 150.5"), Ok((10.0, 150.5)));
+    }
+
+    #[test]
+    fn parse_holding_input_allows_zero_cost() {
+        assert_eq!(parse_holding_input("5 0"), Ok((5.0, 0.0)));
+    }
+
+    #[test]
+    fn parse_holding_input_wrong_field_count_is_error() {
+        assert_eq!(parse_holding_input("10"), Err(HoldingParseError::WrongFieldCount));
+        assert_eq!(parse_holding_input("10 150 3"), Err(HoldingParseError::WrongFieldCount));
+    }
+
+    #[test]
+    fn parse_holding_input_non_numeric_is_error() {
+        assert_eq!(
+            parse_holding_input("abc 150"),
+            Err(HoldingParseError::InvalidNumber("abc".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_holding_input_non_positive_shares_is_error() {
+        assert_eq!(parse_holding_input("0 150"), Err(HoldingParseError::NonPositiveShares(0.0)));
+        assert_eq!(parse_holding_input("-5 150"), Err(HoldingParseError::NonPositiveShares(-5.0)));
+    }
+
+    #[test]
+    fn parse_holding_input_negative_cost_is_error() {
+        assert_eq!(parse_holding_input("10 -3"), Err(HoldingParseError::NegativeCost(-3.0)));
     }
 
     #[test]
