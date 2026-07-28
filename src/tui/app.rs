@@ -102,6 +102,8 @@ pub struct App {
     /// Active price alerts (`triggered_at IS NULL`), the source of truth for tick evaluation and rendering.
     pub alerts: Vec<Alert>,
     pub holdings: Vec<Holding>,
+    /// Whether the portfolio modal is currently shown.
+    pub portfolio_visible: bool,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -299,6 +301,7 @@ impl App {
             subscribed_symbols: Vec::new(),
             alerts: Vec::new(),
             holdings: Vec::new(),
+            portfolio_visible: false,
         }
     }
 
@@ -481,11 +484,13 @@ impl App {
                 if self.stock_modal.info_visible
                     || self.stock_modal.chart_visible
                     || self.stock_modal.options_visible
+                    || self.portfolio_visible
                     || self.help_visible
                 {
                     self.stock_modal.info_visible = false;
                     self.stock_modal.chart_visible = false;
                     self.stock_modal.options_visible = false;
+                    self.portfolio_visible = false;
                     self.help_visible = false;
                 } else if self.input_mode.fuzzy_search {
                     self.cancel_fuzzy_search();
@@ -539,6 +544,12 @@ impl App {
             }
             return;
         }
+        if self.portfolio_visible {
+            if key == 'P' {
+                self.toggle_portfolio();
+            }
+            return;
+        }
         if self.stock_modal.info_visible || self.stock_modal.chart_visible {
             if key == 's' {
                 self.open_info_modal();
@@ -559,6 +570,7 @@ impl App {
             'A' => self.start_alert_input(),
             'H' => self.start_holding_input(),
             'R' => self.remove_selected_holding(),
+            'P' => self.toggle_portfolio(),
             'W' => {
                 self.db_display.watchlist_only = !self.db_display.watchlist_only;
                 self.apply_filter();
@@ -1000,6 +1012,16 @@ impl App {
         self.stock_modal.selected_expiry = next;
         self.stock_modal.option_chain = None;
         self.spawn_option_chain_for_expiry(&symbol, expiry);
+    }
+
+    fn toggle_portfolio(&mut self) {
+        self.portfolio_visible = !self.portfolio_visible;
+        if self.portfolio_visible {
+            self.stock_modal.info_visible = false;
+            self.stock_modal.chart_visible = false;
+            self.stock_modal.options_visible = false;
+            self.help_visible = false;
+        }
     }
 
     /// Opens the keybinding help overlay, closing any stock modal so the two never stack.
@@ -1960,6 +1982,49 @@ mod tests {
 
         assert!(app.holdings.is_empty());
         assert!(app.db_display.status.contains("No holding"));
+    }
+
+    #[tokio::test]
+    async fn test_p_key_toggles_portfolio_view() {
+        let mut app = app_with_three_stocks();
+
+        app.handle_command_key('P');
+        assert!(app.portfolio_visible, "P opens the portfolio");
+
+        app.handle_command_key('P');
+        assert!(!app.portfolio_visible, "P again closes it");
+    }
+
+    #[tokio::test]
+    async fn test_esc_closes_portfolio_view() {
+        let mut app = app_with_three_stocks();
+        app.handle_command_key('P');
+        assert!(app.portfolio_visible);
+
+        app.handle_key(KeyCode::Esc);
+
+        assert!(!app.portfolio_visible);
+    }
+
+    #[tokio::test]
+    async fn test_portfolio_modal_renders_without_panicking() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = app_with_three_stocks();
+        app.portfolio_visible = true;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+        terminal
+            .draw(|f| crate::tui::draw::draw(f, &mut app))
+            .expect("empty portfolio should render");
+
+        app.handle_event(AppEvent::PortfolioLoaded(vec![
+            Holding { ticker: "AAPL".to_string(), shares: 10.0, avg_cost: 100.0 },
+            Holding { ticker: "ZZZZ".to_string(), shares: 5.0, avg_cost: 50.0 },
+        ]));
+        terminal
+            .draw(|f| crate::tui::draw::draw(f, &mut app))
+            .expect("populated portfolio should render");
     }
 
     #[tokio::test]

@@ -23,6 +23,7 @@ use crate::models::{
     Alert, FLASH_TTL, OptionChain, OptionContract, QuoteRecord, QuoteRecordAnalysis,
     QuoteRecordStatistics, StockNews, day_change_pct,
 };
+use crate::portfolio::{Position, summarize, value_position};
 use crate::search::subseq_match_ci;
 
 use super::app::App;
@@ -64,6 +65,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.stock_modal.options_visible {
         draw_options_modal(f, app);
+    }
+
+    if app.portfolio_visible {
+        draw_portfolio_modal(f, app);
     }
 
     if app.help_visible {
@@ -352,6 +357,8 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         ("HELP", "esc close")
     } else if app.stock_modal.options_visible {
         ("VIEW", "h/l expiry · esc close")
+    } else if app.portfolio_visible {
+        ("VIEW", "P/esc close")
     } else if app.stock_modal.info_visible || app.stock_modal.chart_visible {
         ("VIEW", "s info · enter chart · esc close")
     } else if app.input_mode.alert_ticker.is_some() {
@@ -370,7 +377,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     } else {
         (
             "NORMAL",
-            "j/k move · h/l page · s info · enter chart · x options · A alert · w ★ · i query · / search · o order · ? help · q quit",
+            "j/k move · h/l page · s info · enter chart · x options · A alert · H/R/P holdings · w ★ · i query · / search · o order · ? help · q quit",
         )
     };
 
@@ -469,6 +476,10 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             "  fires once for on-screen tickers only",
             Style::default().fg(t.dim),
         )),
+        Line::raw(""),
+        section_heading("PORTFOLIO", None, &t),
+        help_row("P", "toggle portfolio view", &t),
+        help_row("H / R", "add-edit / remove holding (shares avg_cost)", &t),
         Line::raw(""),
         section_heading("QUERY & SEARCH", None, &t),
         help_row("i", "fetch tickers (input box)", &t),
@@ -1255,6 +1266,120 @@ fn draw_option_table(
     f.render_widget(table, area);
 }
 
+fn resolve_price(ticker: &str, rows: &[QuoteRecord]) -> (Option<f64>, Option<f64>) {
+    rows.iter()
+        .find(|r| r.ticker.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticker)))
+        .map_or((None, None), |r| (r.price, r.previous_close))
+}
+
+fn pnl_color(value: Option<f64>, t: &Theme) -> Color {
+    match value {
+        Some(v) if v > f64::EPSILON => t.up,
+        Some(v) if v < -f64::EPSILON => t.down,
+        Some(_) => t.neutral,
+        None => t.dim,
+    }
+}
+
+/// A right-aligned signed-money cell (`+1.20` / `-3.40` / `-` when absent), coloured by sign.
+fn pnl_cell(value: Option<f64>, t: &Theme) -> Cell<'static> {
+    opt_cell(value, |v| format!("{v:+.2}")).style(Style::default().fg(pnl_color(value, t)))
+}
+
+fn draw_portfolio_modal(f: &mut Frame, app: &mut App) {
+    let t = app.theme;
+    let area = centered_rect(80, 70, f.area());
+    f.render_widget(Clear, area);
+    let modal = modal_block(modal_title("PORTFOLIO", "holdings", &t), &t);
+    let inner = modal.inner(area);
+    f.render_widget(modal, area);
+
+    if app.holdings.is_empty() {
+        f.render_widget(
+            placeholder("No holdings — add one with H from a quote row.", &t),
+            inner,
+        );
+        return;
+    }
+
+    let positions: Vec<Position> = app
+        .holdings
+        .iter()
+        .map(|h| {
+            let (price, previous_close) = resolve_price(&h.ticker, &app.db_display.all_rows);
+            value_position(h.clone(), price, previous_close)
+        })
+        .collect();
+    let summary = summarize(&positions);
+
+    let [table_area, totals_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(inner);
+
+    let head_sty = Style::default().fg(t.dim).add_modifier(Modifier::BOLD);
+    let header = Row::new(
+        ["Ticker", "Shares", "Avg Cost", "Price", "Mkt Value", "P&L $", "P&L %", "Day $"]
+            .into_iter()
+            .map(|h| Cell::from(Span::styled(h, head_sty)))
+            .collect::<Vec<_>>(),
+    )
+    .bottom_margin(1);
+
+    let rows = positions.iter().map(|p| {
+        Row::new(vec![
+            Cell::from(Span::styled(
+                p.holding.ticker.clone(),
+                Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(format!("{}", p.holding.shares)),
+            Cell::from(format!("${:.2}", p.holding.avg_cost)),
+            opt_cell(p.price, |v| format!("${v:.2}")),
+            opt_cell(p.market_value, |v| format!("${v:.2}")),
+            pnl_cell(p.unrealized_pnl, &t),
+            opt_cell(p.unrealized_pnl_pct, |v| format!("{v:+.2}%"))
+                .style(Style::default().fg(pnl_color(p.unrealized_pnl_pct, &t))),
+            pnl_cell(p.day_change, &t),
+        ])
+    });
+
+    let widths = [
+        Constraint::Length(8),
+        Constraint::Length(10),
+        Constraint::Length(11),
+        Constraint::Length(11),
+        Constraint::Length(13),
+        Constraint::Length(12),
+        Constraint::Length(10),
+        Constraint::Length(12),
+    ];
+    f.render_widget(Table::new(rows, widths).header(header), table_area);
+
+    let pct = summary
+        .total_pnl_pct
+        .map_or_else(|| "-".to_string(), |v| format!("{v:+.2}%"));
+    let totals = Line::from(vec![
+        label("Cost ", &t),
+        Span::styled(format!("${:.2}   ", summary.total_cost), Style::default().fg(t.fg)),
+        label("Value ", &t),
+        Span::styled(format!("${:.2}   ", summary.total_market_value), Style::default().fg(t.fg)),
+        label("P&L ", &t),
+        Span::styled(
+            format!("{:+.2} ({pct})   ", summary.total_pnl),
+            Style::default()
+                .fg(pnl_color(Some(summary.total_pnl), &t))
+                .add_modifier(Modifier::BOLD),
+        ),
+        label("Day ", &t),
+        Span::styled(
+            format!("{:+.2}", summary.total_day_change),
+            Style::default().fg(pnl_color(Some(summary.total_day_change), &t)),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(totals).block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(t.border))),
+        totals_area,
+    );
+}
+
 fn draw_chart_modal(f: &mut Frame, app: &mut App) {
     let t = app.theme;
     let area = centered_rect(65, 55, f.area());
@@ -1536,6 +1661,36 @@ mod tests {
     fn contracts_for_expiry_out_of_range_index_is_empty() {
         let chain = OptionChain::default();
         assert!(contracts_for_expiry(&chain, 5, OptionKind::Call).is_empty());
+    }
+
+    fn quote(ticker: &str, price: Option<f64>, prev: Option<f64>) -> QuoteRecord {
+        QuoteRecord {
+            ticker: Some(ticker.to_string()),
+            price,
+            previous_close: prev,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolve_price_finds_row_case_insensitively() {
+        let rows = vec![quote("AAPL", Some(150.0), Some(148.0))];
+        assert_eq!(resolve_price("aapl", &rows), (Some(150.0), Some(148.0)));
+    }
+
+    #[test]
+    fn resolve_price_absent_ticker_is_none() {
+        let rows = vec![quote("AAPL", Some(150.0), Some(148.0))];
+        assert_eq!(resolve_price("TSLA", &rows), (None, None));
+    }
+
+    #[test]
+    fn pnl_color_is_up_for_gain_down_for_loss() {
+        let t = Theme::for_appearance(crate::tui::theme::Appearance::Dark);
+        assert_eq!(pnl_color(Some(5.0), &t), t.up);
+        assert_eq!(pnl_color(Some(-5.0), &t), t.down);
+        assert_eq!(pnl_color(Some(0.0), &t), t.neutral);
+        assert_eq!(pnl_color(None, &t), t.dim);
     }
 
     #[test]
