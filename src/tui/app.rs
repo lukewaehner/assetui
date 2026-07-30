@@ -18,7 +18,7 @@ use crate::{
         Alert, AlertDirection, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
         QuoteRecordStatistics, QuoteTick, StockNews, crosses, parse_alert_input,
     },
-    portfolio::{Holding, parse_holding_input},
+    portfolio::{Holding, parse_holding_entry, parse_holding_input},
     sort::{SortMode, SortOrder},
 };
 use yfinance_rs::{Candle, StreamHandle, YfClient};
@@ -91,6 +91,23 @@ pub enum ManageSection {
     Alerts,
 }
 
+/// Which kind of entry the Manage-page inline input is composing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManageInputKind {
+    /// A `TICKER SHARES COST` holding entry.
+    Holding,
+    /// A `TICKER >150` / `TICKER <100` alert entry.
+    Alert,
+}
+
+/// The Manage page's inline entry line, shown when adding or editing.
+pub struct ManageInput {
+    /// Whether the buffer is a holding or an alert spec.
+    pub kind: ManageInputKind,
+    /// The text typed so far.
+    pub buffer: String,
+}
+
 /// Top-level application state.
 pub struct App {
     /// Ticker input box state (current text and whether the box is focused).
@@ -129,6 +146,8 @@ pub struct App {
     pub manage_section: ManageSection,
     /// Selected row index within the focused Manage section.
     pub manage_selected: usize,
+    /// The Manage page's inline add/edit line, when active.
+    pub manage_input: Option<ManageInput>,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -372,6 +391,7 @@ impl App {
             page: Page::Market,
             manage_section: ManageSection::Holdings,
             manage_selected: 0,
+            manage_input: None,
         }
     }
 
@@ -551,7 +571,7 @@ impl App {
 
     /// Routes a raw terminal key press, dispatching by the current page.
     pub fn handle_key(&mut self, code: KeyCode) {
-        if matches!(code, KeyCode::Tab | KeyCode::BackTab) {
+        if matches!(code, KeyCode::Tab | KeyCode::BackTab) && self.manage_input.is_none() {
             self.cycle_page();
             return;
         }
@@ -598,15 +618,109 @@ impl App {
         }
     }
 
-    /// Manage-page key handling: navigation between and within the Holdings and Alerts sections.
     fn handle_manage_key(&mut self, code: KeyCode) {
+        if let Some(input) = self.manage_input.as_mut() {
+            match code {
+                KeyCode::Char(c) => input.buffer.push(c),
+                KeyCode::Backspace => {
+                    input.buffer.pop();
+                }
+                KeyCode::Enter => self.submit_manage_input(),
+                KeyCode::Esc => self.manage_input = None,
+                _ => {}
+            }
+            return;
+        }
         match code {
             KeyCode::Esc => self.page = Page::Market,
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('?') => self.open_help_modal(),
             KeyCode::Char('j') | KeyCode::Down => self.manage_move(1),
             KeyCode::Char('k') | KeyCode::Up => self.manage_move(-1),
+            KeyCode::Char('a') => self.start_manage_add(),
+            KeyCode::Char('e') => self.start_manage_edit(),
+            KeyCode::Char('d') => self.delete_selected_manage(),
             _ => {}
+        }
+    }
+
+    /// Opens an inline add line for the focused section (empty buffer).
+    fn start_manage_add(&mut self) {
+        let kind = match self.manage_section {
+            ManageSection::Holdings => ManageInputKind::Holding,
+            ManageSection::Alerts => ManageInputKind::Alert,
+        };
+        self.manage_input = Some(ManageInput {
+            kind,
+            buffer: String::new(),
+        });
+    }
+
+    /// Opens an inline edit line pre-filled from the selected holding (`TICKER SHARES COST`).
+    fn start_manage_edit(&mut self) {
+        if self.manage_section != ManageSection::Holdings {
+            return;
+        }
+        let Some(h) = self.holdings.get(self.manage_selected) else {
+            return;
+        };
+        self.manage_input = Some(ManageInput {
+            kind: ManageInputKind::Holding,
+            buffer: format!("{} {} {}", h.ticker, h.shares, h.avg_cost),
+        });
+    }
+
+    /// Cancels any active inline entry.
+    fn cancel_manage_input(&mut self) {
+        self.manage_input = None;
+    }
+
+    /// Parses and applies the inline entry.
+    fn submit_manage_input(&mut self) {
+        let Some(input) = self.manage_input.as_ref() else {
+            return;
+        };
+        match input.kind {
+            ManageInputKind::Holding => match parse_holding_entry(&input.buffer) {
+                Ok(holding) => {
+                    self.upsert_holding_in_memory(holding.clone());
+                    self.push_portfolio_toast(format!(
+                        "Saved {}: {} @ ${:.2}",
+                        holding.ticker, holding.shares, holding.avg_cost
+                    ));
+                    self.spawn_upsert_holding(holding);
+                    self.cancel_manage_input();
+                }
+                Err(e) => self.push_error(format!("holding: {e}")),
+            },
+            ManageInputKind::Alert => {
+            }
+        }
+    }
+
+    fn delete_selected_manage(&mut self) {
+        match self.manage_section {
+            ManageSection::Holdings => {
+                if self.manage_selected < self.holdings.len() {
+                    let removed = self.holdings.remove(self.manage_selected);
+                    self.push_portfolio_toast(format!("Removed {}", removed.ticker));
+                    self.spawn_remove_holding(removed.ticker);
+                    self.clamp_manage_selected();
+                }
+            }
+            ManageSection::Alerts => {
+            }
+        }
+    }
+
+    /// Clamps `manage_selected` to the focused section's bounds after a removal.
+    fn clamp_manage_selected(&mut self) {
+        let len = match self.manage_section {
+            ManageSection::Holdings => self.holdings.len(),
+            ManageSection::Alerts => self.alerts.len(),
+        };
+        if self.manage_selected >= len {
+            self.manage_selected = len.saturating_sub(1);
         }
     }
 
@@ -2233,6 +2347,98 @@ mod tests {
         app.handle_key(KeyCode::Char('k'));
         assert_eq!(app.manage_section, ManageSection::Holdings);
         assert_eq!(app.manage_selected, 1);
+    }
+
+    #[tokio::test]
+    async fn test_manage_add_holding_saves_and_closes_input() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+
+        app.handle_key(KeyCode::Char('a'));
+        assert!(app.manage_input.is_some(), "a opens the inline entry");
+        type_str(&mut app, "AAPL 10 150");
+        app.handle_key(KeyCode::Enter);
+
+        assert_eq!(app.holdings.len(), 1);
+        assert_eq!(app.holdings[0].ticker, "AAPL");
+        assert_eq!(app.holdings[0].shares, 10.0);
+        assert_eq!(app.holdings[0].avg_cost, 150.0);
+        assert!(app.manage_input.is_none(), "input closes on success");
+    }
+
+    #[tokio::test]
+    async fn test_manage_edit_prefills_selected_holding() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PortfolioLoaded(vec![Holding {
+            ticker: "AAPL".to_string(),
+            shares: 5.0,
+            avg_cost: 100.0,
+        }]));
+        app.page = Page::Manage;
+
+        app.handle_key(KeyCode::Char('e'));
+
+        assert_eq!(app.manage_input.as_ref().map(|i| i.buffer.as_str()), Some("AAPL 5 100"));
+    }
+
+    #[tokio::test]
+    async fn test_manage_edit_saves_in_place() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PortfolioLoaded(vec![Holding {
+            ticker: "AAPL".to_string(),
+            shares: 5.0,
+            avg_cost: 100.0,
+        }]));
+        app.page = Page::Manage;
+
+        app.handle_key(KeyCode::Char('e'));
+        app.manage_input.as_mut().unwrap().buffer = "AAPL 20 200".to_string();
+        app.handle_key(KeyCode::Enter);
+
+        assert_eq!(app.holdings.len(), 1, "edit replaces, not duplicates");
+        assert_eq!(app.holdings[0].shares, 20.0);
+        assert_eq!(app.holdings[0].avg_cost, 200.0);
+    }
+
+    #[tokio::test]
+    async fn test_manage_delete_holding() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PortfolioLoaded(vec![
+            holding_for("AAPL"),
+            holding_for("TSLA"),
+        ]));
+        app.page = Page::Manage;
+
+        app.handle_key(KeyCode::Char('d'));
+
+        assert_eq!(app.holdings.len(), 1);
+        assert_eq!(app.holdings[0].ticker, "TSLA", "the selected (first) holding is removed");
+    }
+
+    #[tokio::test]
+    async fn test_manage_invalid_holding_keeps_input_open() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+
+        app.handle_key(KeyCode::Char('a'));
+        type_str(&mut app, "garbage");
+        app.handle_key(KeyCode::Enter);
+
+        assert!(app.holdings.is_empty());
+        assert!(app.manage_input.is_some(), "a bad entry keeps the line open");
+    }
+
+    #[tokio::test]
+    async fn test_manage_esc_cancels_input() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+
+        app.handle_key(KeyCode::Char('a'));
+        type_str(&mut app, "AAP");
+        app.handle_key(KeyCode::Esc);
+
+        assert!(app.manage_input.is_none());
+        assert_eq!(app.page, Page::Manage, "esc cancels the input, not the page");
     }
 
     #[tokio::test]

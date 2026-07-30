@@ -26,7 +26,7 @@ use crate::models::{
 use crate::portfolio::{Holding, Position, summarize, value_position};
 use crate::search::subseq_match_ci;
 
-use super::app::{App, ManageSection, Page};
+use super::app::{App, ManageInput, ManageInputKind, ManageSection, Page};
 use super::theme::Theme;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -363,8 +363,10 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
     let (mode, hint) = if app.help_visible {
         ("HELP", "esc close")
+    } else if app.manage_input.is_some() {
+        ("MANAGE", "type entry · enter save · esc cancel")
     } else if app.page == Page::Manage {
-        ("MANAGE", "j/k move · tab market · q quit")
+        ("MANAGE", "j/k move · a add · e edit · d delete · tab market · q quit")
     } else if app.stock_modal.options_visible {
         ("VIEW", "h/l expiry · esc close")
     } else if app.portfolio_visible {
@@ -1324,6 +1326,23 @@ fn draw_manage_body(f: &mut Frame, body: Rect, app: &mut App) {
     );
 }
 
+fn manage_input_line(input: &ManageInput, blink: bool, t: &Theme) -> Line<'static> {
+    let cursor = if blink { "▌" } else { " " };
+    let mut spans = vec![Span::styled("› ", Style::default().fg(t.accent))];
+    if input.buffer.is_empty() {
+        spans.push(Span::styled(cursor, Style::default().fg(t.accent)));
+        let hint = match input.kind {
+            ManageInputKind::Holding => " TICKER SHARES COST",
+            ManageInputKind::Alert => " TICKER >150 (or <100)",
+        };
+        spans.push(Span::styled(hint, Style::default().fg(t.dim)));
+    } else {
+        spans.push(Span::styled(input.buffer.clone(), Style::default().fg(t.fg)));
+        spans.push(Span::styled(cursor, Style::default().fg(t.accent)));
+    }
+    Line::from(spans)
+}
+
 fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
     let t = app.theme;
     let border = if focused { t.accent } else { t.border };
@@ -1331,23 +1350,36 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
         .title(section_heading("HOLDINGS", None, &t))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let holding_input = app
+        .manage_input
+        .as_ref()
+        .filter(|i| i.kind == ManageInputKind::Holding);
+
+    let [content, bottom] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+
+    if let Some(input) = holding_input {
+        f.render_widget(
+            Paragraph::new(manage_input_line(input, app.animations.blink_state, &t)),
+            bottom,
+        );
+    }
 
     if app.holdings.is_empty() {
         f.render_widget(
-            Paragraph::new(Span::styled("no holdings — press a to add", Style::default().fg(t.dim)))
-                .block(block),
-            area,
+            Paragraph::new(Span::styled("no holdings — press a to add", Style::default().fg(t.dim))),
+            content,
         );
         return;
     }
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-    let [table_area, totals_area] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
-
     let positions = portfolio_positions(&app.holdings, &app.db_display.all_rows);
     let summary = summarize(&positions);
+    let table_area = content;
+    let totals_area = bottom;
 
     let head_sty = Style::default().fg(t.dim).add_modifier(Modifier::BOLD);
     let header = Row::new(
@@ -1392,21 +1424,23 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
     }
     f.render_stateful_widget(table, table_area, &mut state);
 
-    let pct = summary
-        .total_pnl_pct
-        .map_or_else(|| "-".to_string(), |v| format!("{v:+.2}%"));
-    let totals = Line::from(vec![
-        label("Value ", &t),
-        Span::styled(format!("${:.2}   ", summary.total_market_value), Style::default().fg(t.fg)),
-        label("P&L ", &t),
-        Span::styled(
-            format!("{:+.2} ({pct})", summary.total_pnl),
-            Style::default()
-                .fg(pnl_color(Some(summary.total_pnl), &t))
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    f.render_widget(Paragraph::new(totals), totals_area);
+    if holding_input.is_none() {
+        let pct = summary
+            .total_pnl_pct
+            .map_or_else(|| "-".to_string(), |v| format!("{v:+.2}%"));
+        let totals = Line::from(vec![
+            label("Value ", &t),
+            Span::styled(format!("${:.2}   ", summary.total_market_value), Style::default().fg(t.fg)),
+            label("P&L ", &t),
+            Span::styled(
+                format!("{:+.2} ({pct})", summary.total_pnl),
+                Style::default()
+                    .fg(pnl_color(Some(summary.total_pnl), &t))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        f.render_widget(Paragraph::new(totals), totals_area);
+    }
 }
 
 fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {

@@ -48,6 +48,19 @@ pub fn parse_holding_input(input: &str) -> Result<(f64, f64), HoldingParseError>
     Ok((shares, avg_cost))
 }
 
+pub fn parse_holding_entry(input: &str) -> Result<Holding, HoldingParseError> {
+    let (ticker, rest) = input
+        .trim()
+        .split_once(char::is_whitespace)
+        .ok_or(HoldingParseError::WrongFieldCount)?;
+    let (shares, avg_cost) = parse_holding_input(rest)?;
+    Ok(Holding {
+        ticker: ticker.to_uppercase(),
+        shares,
+        avg_cost,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Holding {
     /// Ticker symbol (stored uppercased at the db boundary).
@@ -182,6 +195,33 @@ mod tests {
     #[test]
     fn parse_holding_input_negative_cost_is_error() {
         assert_eq!(parse_holding_input("10 -3"), Err(HoldingParseError::NegativeCost(-3.0)));
+    }
+
+    #[test]
+    fn parse_holding_entry_valid() {
+        assert_eq!(
+            parse_holding_entry("aapl 10 150.5"),
+            Ok(Holding { ticker: "AAPL".to_string(), shares: 10.0, avg_cost: 150.5 })
+        );
+    }
+
+    #[test]
+    fn parse_holding_entry_missing_fields_is_error() {
+        assert_eq!(parse_holding_entry("AAPL"), Err(HoldingParseError::WrongFieldCount));
+        assert_eq!(parse_holding_entry("AAPL 10"), Err(HoldingParseError::WrongFieldCount));
+        assert_eq!(parse_holding_entry(""), Err(HoldingParseError::WrongFieldCount));
+    }
+
+    #[test]
+    fn parse_holding_entry_bad_numbers_propagate() {
+        assert_eq!(
+            parse_holding_entry("AAPL x 150"),
+            Err(HoldingParseError::InvalidNumber("x".to_string()))
+        );
+        assert_eq!(
+            parse_holding_entry("AAPL -1 150"),
+            Err(HoldingParseError::NonPositiveShares(-1.0))
+        );
     }
 
     #[test]
