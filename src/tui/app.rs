@@ -17,9 +17,8 @@ use crate::{
     models::{
         Alert, AlertDirection, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
         QuoteRecordStatistics, QuoteTick, StockNews, crosses, parse_alert_entry,
-        parse_alert_input,
     },
-    portfolio::{Holding, parse_holding_entry, parse_holding_input},
+    portfolio::{Holding, parse_holding_entry},
     sort::{SortMode, SortOrder},
 };
 use yfinance_rs::{Candle, StreamHandle, YfClient};
@@ -139,8 +138,6 @@ pub struct App {
     /// Active price alerts (`triggered_at IS NULL`), the source of truth for tick evaluation and rendering.
     pub alerts: Vec<Alert>,
     pub holdings: Vec<Holding>,
-    /// Whether the portfolio modal is currently shown.
-    pub portfolio_visible: bool,
     /// The top-level page currently displayed.
     pub page: Page,
     /// Which Manage-page section the `j`/`k` cursor is in.
@@ -181,10 +178,6 @@ pub enum InputActivity {
     /// Typing a fuzzy-filter query, box focused.
     Fuzzy,
     FuzzyApplied,
-    /// Typing a price-alert spec (`>150`/`<100`) for `ticker`.
-    Alert { ticker: String },
-    /// Typing an add/edit-holding spec (`shares avg_cost`) for `ticker`.
-    Holding { ticker: String },
 }
 
 /// State for the ticker input box: the typed text plus what it currently means.
@@ -198,32 +191,12 @@ pub struct InputMode {
 impl InputMode {
     /// Whether the box is focused (printable keys edit [`Self::input`]).
     pub fn is_focused(&self) -> bool {
-        matches!(
-            self.activity,
-            InputActivity::Ticker
-                | InputActivity::Fuzzy
-                | InputActivity::Alert { .. }
-                | InputActivity::Holding { .. }
-        )
+        matches!(self.activity, InputActivity::Ticker | InputActivity::Fuzzy)
     }
 
     /// Whether a fuzzy filter is active (being typed or already applied).
     pub fn is_fuzzy(&self) -> bool {
         matches!(self.activity, InputActivity::Fuzzy | InputActivity::FuzzyApplied)
-    }
-
-    pub fn alert_ticker(&self) -> Option<&str> {
-        match &self.activity {
-            InputActivity::Alert { ticker } => Some(ticker),
-            _ => None,
-        }
-    }
-
-    pub fn holding_ticker(&self) -> Option<&str> {
-        match &self.activity {
-            InputActivity::Holding { ticker } => Some(ticker),
-            _ => None,
-        }
     }
 }
 
@@ -388,7 +361,6 @@ impl App {
             subscribed_symbols: Vec::new(),
             alerts: Vec::new(),
             holdings: Vec::new(),
-            portfolio_visible: false,
             page: Page::Market,
             manage_section: ManageSection::Holdings,
             manage_selected: 0,
@@ -755,20 +727,14 @@ impl App {
                 if self.stock_modal.info_visible
                     || self.stock_modal.chart_visible
                     || self.stock_modal.options_visible
-                    || self.portfolio_visible
                     || self.help_visible
                 {
                     self.stock_modal.info_visible = false;
                     self.stock_modal.chart_visible = false;
                     self.stock_modal.options_visible = false;
-                    self.portfolio_visible = false;
                     self.help_visible = false;
                 } else if self.input_mode.is_fuzzy() {
                     self.cancel_fuzzy_search();
-                } else if self.input_mode.alert_ticker().is_some() {
-                    self.cancel_alert_input();
-                } else if self.input_mode.holding_ticker().is_some() {
-                    self.cancel_holding_input();
                 } else {
                     self.input_mode.activity = InputActivity::Idle;
                 }
@@ -787,11 +753,7 @@ impl App {
                 }
             }
             KeyCode::Enter if self.input_mode.is_focused() => {
-                if self.input_mode.alert_ticker().is_some() {
-                    self.submit_alert_input();
-                } else if self.input_mode.holding_ticker().is_some() {
-                    self.submit_holding_input();
-                } else if self.input_mode.is_fuzzy() {
+                if self.input_mode.is_fuzzy() {
                     self.accept_fuzzy_search();
                 } else {
                     self.submit_input();
@@ -815,12 +777,6 @@ impl App {
             }
             return;
         }
-        if self.portfolio_visible {
-            if key == 'P' {
-                self.toggle_portfolio();
-            }
-            return;
-        }
         if self.stock_modal.info_visible || self.stock_modal.chart_visible {
             if key == 's' {
                 self.open_info_modal();
@@ -838,10 +794,6 @@ impl App {
             '?' => self.open_help_modal(),
             'w' => self.toggle_watchlist(),
             'x' => self.open_options_modal(),
-            'A' => self.start_alert_input(),
-            'H' => self.start_holding_input(),
-            'R' => self.remove_selected_holding(),
-            'P' => self.toggle_portfolio(),
             'W' => {
                 self.db_display.watchlist_only = !self.db_display.watchlist_only;
                 self.apply_filter();
@@ -874,94 +826,6 @@ impl App {
         }
     }
 
-    /// Enters price-alert input mode for the selected row's ticker.
-    fn start_alert_input(&mut self) {
-        let Some(ticker) = self.selected_ticker() else {
-            self.db_display.status = "No stock selected for an alert".into();
-            return;
-        };
-        if self.input_mode.is_fuzzy() {
-            self.cancel_fuzzy_search();
-        }
-        self.input_mode.activity = InputActivity::Alert { ticker };
-        self.input_mode.input.clear();
-    }
-
-    /// Leaves alert-input mode, discarding any half-typed spec.
-    fn cancel_alert_input(&mut self) {
-        self.input_mode.activity = InputActivity::Idle;
-        self.input_mode.input.clear();
-    }
-
-    fn submit_alert_input(&mut self) {
-        let Some(ticker) = self.input_mode.alert_ticker().map(str::to_owned) else {
-            return;
-        };
-        match parse_alert_input(&self.input_mode.input) {
-            Ok((direction, threshold)) => {
-                self.alerts.push(Alert {
-                    id: 0,
-                    ticker: ticker.clone(),
-                    direction,
-                    threshold,
-                    created_at: chrono::Utc::now(),
-                    triggered_at: None,
-                });
-                let dir = match direction {
-                    AlertDirection::Above => "above",
-                    AlertDirection::Below => "below",
-                };
-                self.push_alert_toast(format!("Alert: {ticker} {dir} {threshold:.2}"));
-                self.spawn_add_alert(ticker, direction, threshold);
-                self.cancel_alert_input();
-            }
-            Err(e) => {
-                self.push_error(format!("alert: {e}"));
-            }
-        }
-    }
-
-    /// Enters add/edit-holding input mode for the selected row's ticker.
-    fn start_holding_input(&mut self) {
-        let Some(ticker) = self.selected_ticker() else {
-            self.db_display.status = "No stock selected for a holding".into();
-            return;
-        };
-        if self.input_mode.is_fuzzy() {
-            self.cancel_fuzzy_search();
-        }
-        self.input_mode.activity = InputActivity::Holding { ticker };
-        self.input_mode.input.clear();
-    }
-
-    /// Leaves holding-input mode, discarding any half-typed spec.
-    fn cancel_holding_input(&mut self) {
-        self.input_mode.activity = InputActivity::Idle;
-        self.input_mode.input.clear();
-    }
-
-    fn submit_holding_input(&mut self) {
-        let Some(ticker) = self.input_mode.holding_ticker().map(str::to_owned) else {
-            return;
-        };
-        match parse_holding_input(&self.input_mode.input) {
-            Ok((shares, avg_cost)) => {
-                let holding = Holding {
-                    ticker: ticker.clone(),
-                    shares,
-                    avg_cost,
-                };
-                self.upsert_holding_in_memory(holding.clone());
-                self.push_portfolio_toast(format!("Added {ticker}: {shares} @ ${avg_cost:.2}"));
-                self.spawn_upsert_holding(holding);
-                self.cancel_holding_input();
-            }
-            Err(e) => {
-                self.push_error(format!("holding: {e}"));
-            }
-        }
-    }
-
     fn upsert_holding_in_memory(&mut self, holding: Holding) {
         if let Some(existing) = self
             .holdings
@@ -971,28 +835,6 @@ impl App {
             *existing = holding;
         } else {
             self.holdings.push(holding);
-        }
-    }
-
-    /// Removes the selected row's holding optimistically and persists the removal in the background.
-    fn remove_selected_holding(&mut self) {
-        let Some(ticker) = self.selected_ticker() else {
-            self.db_display.status = "No stock selected".into();
-            return;
-        };
-        match self
-            .holdings
-            .iter()
-            .position(|h| h.ticker.eq_ignore_ascii_case(&ticker))
-        {
-            Some(idx) => {
-                let removed = self.holdings.remove(idx);
-                self.push_portfolio_toast(format!("Removed {}", removed.ticker));
-                self.spawn_remove_holding(removed.ticker);
-            }
-            None => {
-                self.db_display.status = format!("No holding for {ticker}");
-            }
         }
     }
 
@@ -1279,16 +1121,6 @@ impl App {
         self.stock_modal.selected_expiry = next;
         self.stock_modal.option_chain = None;
         self.spawn_option_chain_for_expiry(&symbol, expiry);
-    }
-
-    fn toggle_portfolio(&mut self) {
-        self.portfolio_visible = !self.portfolio_visible;
-        if self.portfolio_visible {
-            self.stock_modal.info_visible = false;
-            self.stock_modal.chart_visible = false;
-            self.stock_modal.options_visible = false;
-            self.help_visible = false;
-        }
     }
 
     /// Opens the keybinding help overlay, closing any stock modal so the two never stack.
@@ -2095,185 +1927,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_a_key_enters_alert_input_for_selected_ticker() {
-        let mut app = app_with_three_stocks();
-
-        app.handle_command_key('A');
-
-        assert_eq!(app.input_mode.alert_ticker(), Some("AAPL"));
-        assert!(app.input_mode.is_focused(), "input box should be focused");
-    }
-
-    #[tokio::test]
-    async fn test_a_key_with_no_selection_is_noop() {
-        let (mut app, _rx) = make_test_app();
-
-        app.handle_command_key('A');
-
-        assert!(app.input_mode.alert_ticker().is_none());
-        assert!(app.db_display.status.contains("No stock"));
-    }
-
-    #[tokio::test]
-    async fn test_submit_valid_alert_pushes_optimistically_and_exits_mode() {
-        let mut app = app_with_three_stocks();
-        app.handle_command_key('A');
-        type_str(&mut app, ">150");
-
-        app.handle_key(KeyCode::Enter);
-
-        assert_eq!(app.alerts.len(), 1, "the new alert should be pushed optimistically");
-        assert_eq!(app.alerts[0].ticker, "AAPL");
-        assert_eq!(app.alerts[0].direction, AlertDirection::Above);
-        assert_eq!(app.alerts[0].threshold, 150.0);
-        assert!(app.input_mode.alert_ticker().is_none(), "alert mode should exit on success");
-    }
-
-    #[tokio::test]
-    async fn test_submit_invalid_alert_keeps_input_open() {
-        let mut app = app_with_three_stocks();
-        app.handle_command_key('A');
-        type_str(&mut app, "garbage");
-
-        app.handle_key(KeyCode::Enter);
-
-        assert!(app.alerts.is_empty(), "a bad spec must not create an alert");
-        assert_eq!(
-            app.input_mode.alert_ticker(),
-            Some("AAPL"),
-            "the input stays open for correction"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_esc_cancels_alert_input() {
-        let mut app = app_with_three_stocks();
-        app.handle_command_key('A');
-        type_str(&mut app, ">1");
-
-        app.handle_key(KeyCode::Esc);
-
-        assert!(app.input_mode.alert_ticker().is_none());
-        assert!(!app.input_mode.is_focused());
-        assert!(app.input_mode.input.is_empty(), "half-typed spec is discarded");
-        assert!(app.alerts.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_h_key_enters_holding_input_for_selected_ticker() {
-        let mut app = app_with_three_stocks();
-
-        app.handle_command_key('H');
-
-        assert_eq!(app.input_mode.holding_ticker(), Some("AAPL"));
-        assert!(app.input_mode.is_focused());
-    }
-
-    #[tokio::test]
-    async fn test_submit_valid_holding_adds_optimistically() {
-        let mut app = app_with_three_stocks();
-        app.handle_command_key('H');
-        type_str(&mut app, "10 150");
-
-        app.handle_key(KeyCode::Enter);
-
-        assert_eq!(app.holdings.len(), 1);
-        assert_eq!(app.holdings[0].ticker, "AAPL");
-        assert_eq!(app.holdings[0].shares, 10.0);
-        assert_eq!(app.holdings[0].avg_cost, 150.0);
-        assert!(app.input_mode.holding_ticker().is_none(), "holding mode exits on success");
-    }
-
-    #[tokio::test]
-    async fn test_submit_holding_edits_in_place() {
-        let mut app = app_with_three_stocks();
-        app.handle_event(AppEvent::PortfolioLoaded(vec![Holding {
-            ticker: "AAPL".to_string(),
-            shares: 5.0,
-            avg_cost: 100.0,
-        }]));
-        app.handle_command_key('H');
-        type_str(&mut app, "20 200");
-
-        app.handle_key(KeyCode::Enter);
-
-        assert_eq!(app.holdings.len(), 1, "edit replaces, not duplicates");
-        assert_eq!(app.holdings[0].shares, 20.0);
-        assert_eq!(app.holdings[0].avg_cost, 200.0);
-    }
-
-    #[tokio::test]
-    async fn test_submit_invalid_holding_keeps_input_open() {
-        let mut app = app_with_three_stocks();
-        app.handle_command_key('H');
-        type_str(&mut app, "notanumber");
-
-        app.handle_key(KeyCode::Enter);
-
-        assert!(app.holdings.is_empty(), "a bad spec must not create a holding");
-        assert_eq!(app.input_mode.holding_ticker(), Some("AAPL"));
-    }
-
-    #[tokio::test]
-    async fn test_esc_cancels_holding_input() {
-        let mut app = app_with_three_stocks();
-        app.handle_command_key('H');
-        type_str(&mut app, "10");
-
-        app.handle_key(KeyCode::Esc);
-
-        assert!(app.input_mode.holding_ticker().is_none());
-        assert!(!app.input_mode.is_focused());
-        assert!(app.holdings.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_remove_selected_holding_drops_it() {
-        let mut app = app_with_three_stocks();
-        app.handle_event(AppEvent::PortfolioLoaded(vec![Holding {
-            ticker: "AAPL".to_string(),
-            shares: 5.0,
-            avg_cost: 100.0,
-        }]));
-
-        app.handle_command_key('R');
-
-        assert!(app.holdings.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_remove_holding_with_none_is_noop() {
-        let mut app = app_with_three_stocks();
-
-        app.handle_command_key('R');
-
-        assert!(app.holdings.is_empty());
-        assert!(app.db_display.status.contains("No holding"));
-    }
-
-    #[tokio::test]
-    async fn test_p_key_toggles_portfolio_view() {
-        let mut app = app_with_three_stocks();
-
-        app.handle_command_key('P');
-        assert!(app.portfolio_visible, "P opens the portfolio");
-
-        app.handle_command_key('P');
-        assert!(!app.portfolio_visible, "P again closes it");
-    }
-
-    #[tokio::test]
-    async fn test_esc_closes_portfolio_view() {
-        let mut app = app_with_three_stocks();
-        app.handle_command_key('P');
-        assert!(app.portfolio_visible);
-
-        app.handle_key(KeyCode::Esc);
-
-        assert!(!app.portfolio_visible);
-    }
-
-    #[tokio::test]
     async fn test_tick_updates_held_position_pnl() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
@@ -2316,27 +1969,6 @@ mod tests {
         let positions =
             crate::tui::draw::portfolio_positions(&app.holdings, &app.db_display.all_rows);
         assert_eq!(positions[0].market_value, Some(1200.0), "AAPL still valued at its own price");
-    }
-
-    #[tokio::test]
-    async fn test_portfolio_modal_renders_without_panicking() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let mut app = app_with_three_stocks();
-        app.portfolio_visible = true;
-        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-
-        terminal
-            .draw(|f| crate::tui::draw::draw(f, &mut app))
-            .expect("empty portfolio should render");
-
-        app.handle_event(AppEvent::PortfolioLoaded(vec![
-            Holding { ticker: "AAPL".to_string(), shares: 10.0, avg_cost: 100.0 },
-            Holding { ticker: "ZZZZ".to_string(), shares: 5.0, avg_cost: 50.0 },
-        ]));
-        terminal
-            .draw(|f| crate::tui::draw::draw(f, &mut app))
-            .expect("populated portfolio should render");
     }
 
     #[tokio::test]

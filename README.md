@@ -49,10 +49,7 @@ cargo run
 | `h` / `l` | Previous / next page |
 | `s` | Open the info modal |
 | `x` | Open the options modal (chain, IV, and Greeks) for the selected row |
-| `A` | Arm a price alert on the selected row (type `>150` or `<100`, Enter to arm) |
-| `P` | Toggle the portfolio view |
-| `H` | Add or edit a holding for the selected row (type `shares avg_cost`, Enter to save) |
-| `R` | Remove the selected row's holding |
+| `Tab` | Switch between the Market and Manage pages |
 | `?` | Open the help modal |
 | `Enter` | Open the chart modal (price history) for the selected row |
 | `Esc` | Close modal, cancel search, or exit input mode |
@@ -63,17 +60,13 @@ cargo run
 
 `?` and `Enter` work whether or not a modal is already open, so you can flip straight between the info and chart views without closing first. `Esc` closes whichever modal is showing.
 
-### Price alerts
+### The Manage page
 
-Press `A` on a row and type a threshold spec - `>150` fires when the price rises to or above 150, `<100` when it falls to or below 100 - then Enter to arm it. Armed tickers show a `!` in the gutter next to the watchlist star, and alerts persist in Postgres across restarts. When a live tick crosses the threshold, a toast fires and the alert clears itself (one-shot - it won't fire again).
+Press `Tab` to switch from the Market page (quotes) to the Manage page, where you keep your holdings and alerts. It has two sections — Holdings and Alerts — navigated together with `j`/`k`; the section your cursor is in is where actions apply. Press `a` to add (an inline line accepts the whole entry — `AAPL 10 150.50` for a holding, `AAPL >150` for an alert), `e` to edit the selected holding, and `d` to delete the selected row. `Tab` (or `Esc`) returns to the Market page.
 
-Two limitations worth knowing: alerts are evaluated only against the **live stream, which covers the tickers on the current page**, so an alert on an off-screen ticker won't fire until that ticker is visible and streaming; and ticks only flow while the market is open, so alerts are dormant nights and weekends.
+**Holdings** show one row per position — shares, average cost, current price, market value, unrealized P&L (\$ and %), and day-change — with a totals line, coloured green/red by gain/loss. Prices come from the quotes already in memory, so a holding whose ticker isn't loaded shows `-` rather than a misleading `$0`, and P&L updates live as ticks land. This is a manual, display-only tracker — no brokerage connection, unrealized P&L only, single-currency.
 
-### Portfolio
-
-Record what you hold by hand: press `H` on a row and type `shares avg_cost` (e.g. `10 150.50`), Enter to save; `R` removes a holding; `P` toggles the portfolio view. The view shows one row per position — shares, average cost, current price, market value, unrealized P&L (\$ and %), and day-change — with a totals line, coloured green/red by gain/loss. P&L updates live in place as ticks land while the view is open.
-
-Prices come from the quotes already in memory, so a holding whose ticker isn't currently loaded shows `-` for its price-derived columns rather than a misleading `$0`. This is deliberately a manual, display-only tracker — no brokerage connection, no order routing, and unrealized P&L only (there's no transaction ledger). Values are single-currency and summed as-is.
+**Alerts** fire once when a live tick crosses the threshold (`>150` / `<100`): a toast pops and the alert clears itself. Armed tickers show a `!` in the Market gutter. Two limitations: alerts are evaluated only against the live stream, which covers the tickers on the **current page**, so an off-screen ticker's alert won't fire until it's visible and streaming; and ticks only flow while the market is open.
 
 ### Fuzzy search
 

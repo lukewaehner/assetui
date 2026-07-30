@@ -56,9 +56,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if app.stock_modal.options_visible {
             draw_options_modal(f, app);
         }
-        if app.portfolio_visible {
-            draw_portfolio_modal(f, app);
-        }
     }
     if app.help_visible {
         draw_help_modal(f, app);
@@ -103,11 +100,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     } else {
         " "
     };
-    let title = if let Some(ticker) = app.input_mode.alert_ticker() {
-        format!("assetui · alert {ticker}")
-    } else if let Some(ticker) = app.input_mode.holding_ticker() {
-        format!("assetui · holding {ticker}")
-    } else if app.input_mode.is_fuzzy() {
+    let title = if app.input_mode.is_fuzzy() {
         "assetui · search".to_string()
     } else {
         "assetui · query".to_string()
@@ -120,10 +113,6 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     let mut spans = Vec::with_capacity(3);
     if app.input_mode.is_fuzzy() {
         spans.push(Span::styled("/", Style::default().fg(t.dim)));
-    } else if app.input_mode.alert_ticker().is_some() && app.input_mode.input.is_empty() {
-        spans.push(Span::styled(">150 / <100", Style::default().fg(t.dim)));
-    } else if app.input_mode.holding_ticker().is_some() && app.input_mode.input.is_empty() {
-        spans.push(Span::styled("shares avg_cost", Style::default().fg(t.dim)));
     }
     spans.push(Span::styled(
         app.input_mode.input.clone(),
@@ -369,14 +358,8 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         ("MANAGE", "j/k move · a add · e edit · d delete · tab market · q quit")
     } else if app.stock_modal.options_visible {
         ("VIEW", "h/l expiry · esc close")
-    } else if app.portfolio_visible {
-        ("VIEW", "P/esc close")
     } else if app.stock_modal.info_visible || app.stock_modal.chart_visible {
         ("VIEW", "s info · enter chart · esc close")
-    } else if app.input_mode.alert_ticker().is_some() {
-        ("ALERT", "type >150 or <100 · enter arm · esc cancel")
-    } else if app.input_mode.holding_ticker().is_some() {
-        ("HOLDING", "type shares avg_cost · enter save · esc cancel")
     } else if app.input_mode.is_focused() && app.input_mode.is_fuzzy() {
         ("SEARCH", "type to filter · enter apply · esc cancel")
     } else if app.input_mode.is_focused() {
@@ -482,16 +465,13 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         section_heading("WATCHLIST", None, &t),
         help_row("w / r", "add / remove favourite (★)", &t),
         Line::raw(""),
-        section_heading("ALERTS", None, &t),
-        help_row("A", "arm price alert (>150 / <100)", &t),
+        section_heading("MANAGE PAGE", None, &t),
+        help_row("tab", "switch between the Market and Manage pages", &t),
+        help_row("a / e / d", "add / edit / delete a holding or alert", &t),
         Line::from(Span::styled(
-            "  fires once for on-screen tickers only",
+            "  alerts fire once for on-screen tickers only",
             Style::default().fg(t.dim),
         )),
-        Line::raw(""),
-        section_heading("PORTFOLIO", None, &t),
-        help_row("P", "toggle portfolio view", &t),
-        help_row("H / R", "add-edit / remove holding (shares avg_cost)", &t),
         Line::raw(""),
         section_heading("QUERY & SEARCH", None, &t),
         help_row("i", "fetch tickers (input box)", &t),
@@ -1509,93 +1489,6 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
         state.select(Some(app.manage_selected.min(app.alerts.len().saturating_sub(1))));
     }
     f.render_stateful_widget(table, content, &mut state);
-}
-
-fn draw_portfolio_modal(f: &mut Frame, app: &mut App) {
-    let t = app.theme;
-    let area = centered_rect(80, 70, f.area());
-    f.render_widget(Clear, area);
-    let modal = modal_block(modal_title("PORTFOLIO", "holdings", &t), &t);
-    let inner = modal.inner(area);
-    f.render_widget(modal, area);
-
-    if app.holdings.is_empty() {
-        f.render_widget(
-            placeholder("No holdings — add one with H from a quote row.", &t),
-            inner,
-        );
-        return;
-    }
-
-    let positions = portfolio_positions(&app.holdings, &app.db_display.all_rows);
-    let summary = summarize(&positions);
-
-    let [table_area, totals_area] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(inner);
-
-    let head_sty = Style::default().fg(t.dim).add_modifier(Modifier::BOLD);
-    let header = Row::new(
-        ["Ticker", "Shares", "Avg Cost", "Price", "Mkt Value", "P&L $", "P&L %", "Day $"]
-            .into_iter()
-            .map(|h| Cell::from(Span::styled(h, head_sty)))
-            .collect::<Vec<_>>(),
-    )
-    .bottom_margin(1);
-
-    let rows = positions.iter().map(|p| {
-        Row::new(vec![
-            Cell::from(Span::styled(
-                p.holding.ticker.clone(),
-                Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
-            )),
-            Cell::from(format!("{}", p.holding.shares)),
-            Cell::from(format!("${:.2}", p.holding.avg_cost)),
-            opt_cell(p.price, |v| format!("${v:.2}")),
-            opt_cell(p.market_value, |v| format!("${v:.2}")),
-            pnl_cell(p.unrealized_pnl, &t),
-            opt_cell(p.unrealized_pnl_pct, |v| format!("{v:+.2}%"))
-                .style(Style::default().fg(pnl_color(p.unrealized_pnl_pct, &t))),
-            pnl_cell(p.day_change, &t),
-        ])
-    });
-
-    let widths = [
-        Constraint::Length(8),
-        Constraint::Length(10),
-        Constraint::Length(11),
-        Constraint::Length(11),
-        Constraint::Length(13),
-        Constraint::Length(12),
-        Constraint::Length(10),
-        Constraint::Length(12),
-    ];
-    f.render_widget(Table::new(rows, widths).header(header), table_area);
-
-    let pct = summary
-        .total_pnl_pct
-        .map_or_else(|| "-".to_string(), |v| format!("{v:+.2}%"));
-    let totals = Line::from(vec![
-        label("Cost ", &t),
-        Span::styled(format!("${:.2}   ", summary.total_cost), Style::default().fg(t.fg)),
-        label("Value ", &t),
-        Span::styled(format!("${:.2}   ", summary.total_market_value), Style::default().fg(t.fg)),
-        label("P&L ", &t),
-        Span::styled(
-            format!("{:+.2} ({pct})   ", summary.total_pnl),
-            Style::default()
-                .fg(pnl_color(Some(summary.total_pnl), &t))
-                .add_modifier(Modifier::BOLD),
-        ),
-        label("Day ", &t),
-        Span::styled(
-            format!("{:+.2}", summary.total_day_change),
-            Style::default().fg(pnl_color(Some(summary.total_day_change), &t)),
-        ),
-    ]);
-    f.render_widget(
-        Paragraph::new(totals).block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(t.border))),
-        totals_area,
-    );
 }
 
 fn draw_chart_modal(f: &mut Frame, app: &mut App) {
