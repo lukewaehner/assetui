@@ -72,6 +72,25 @@ pub enum AppEvent {
     Error(String),
 }
 
+/// The top-level page currently shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Page {
+    /// The quotes table, input box, logs, and detail modals.
+    #[default]
+    Market,
+    /// User-owned data management: holdings and alerts.
+    Manage,
+}
+
+/// Which section of the Manage page currently holds the `j`/`k` cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ManageSection {
+    #[default]
+    Holdings,
+    /// The active-alerts list.
+    Alerts,
+}
+
 /// Top-level application state.
 pub struct App {
     /// Ticker input box state (current text and whether the box is focused).
@@ -104,6 +123,12 @@ pub struct App {
     pub holdings: Vec<Holding>,
     /// Whether the portfolio modal is currently shown.
     pub portfolio_visible: bool,
+    /// The top-level page currently displayed.
+    pub page: Page,
+    /// Which Manage-page section the `j`/`k` cursor is in.
+    pub manage_section: ManageSection,
+    /// Selected row index within the focused Manage section.
+    pub manage_selected: usize,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -344,6 +369,9 @@ impl App {
             alerts: Vec::new(),
             holdings: Vec::new(),
             portfolio_visible: false,
+            page: Page::Market,
+            manage_section: ManageSection::Holdings,
+            manage_selected: 0,
         }
     }
 
@@ -521,8 +549,68 @@ impl App {
         }
     }
 
-    /// Routes a raw terminal key press to the appropriate state change.
+    /// Routes a raw terminal key press, dispatching by the current page.
     pub fn handle_key(&mut self, code: KeyCode) {
+        if matches!(code, KeyCode::Tab | KeyCode::BackTab) {
+            self.cycle_page();
+            return;
+        }
+        match self.page {
+            Page::Market => self.handle_market_key(code),
+            Page::Manage => self.handle_manage_key(code),
+        }
+    }
+
+    /// Toggles between the Market and Manage pages (two pages, so forward and back are the same).
+    fn cycle_page(&mut self) {
+        self.page = match self.page {
+            Page::Market => Page::Manage,
+            Page::Manage => Page::Market,
+        };
+    }
+
+    fn manage_move(&mut self, delta: isize) {
+        match self.manage_section {
+            ManageSection::Holdings => {
+                if delta > 0 {
+                    if self.manage_selected + 1 < self.holdings.len() {
+                        self.manage_selected += 1;
+                    } else {
+                        self.manage_section = ManageSection::Alerts;
+                        self.manage_selected = 0;
+                    }
+                } else if self.manage_selected > 0 {
+                    self.manage_selected -= 1;
+                }
+            }
+            ManageSection::Alerts => {
+                if delta > 0 {
+                    if self.manage_selected + 1 < self.alerts.len() {
+                        self.manage_selected += 1;
+                    }
+                } else if self.manage_selected > 0 {
+                    self.manage_selected -= 1;
+                } else {
+                    self.manage_section = ManageSection::Holdings;
+                    self.manage_selected = self.holdings.len().saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    /// Manage-page key handling: navigation between and within the Holdings and Alerts sections.
+    fn handle_manage_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => self.page = Page::Market,
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('?') => self.open_help_modal(),
+            KeyCode::Char('j') | KeyCode::Down => self.manage_move(1),
+            KeyCode::Char('k') | KeyCode::Up => self.manage_move(-1),
+            _ => {}
+        }
+    }
+
+    fn handle_market_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
                 if self.stock_modal.info_visible
@@ -2110,6 +2198,60 @@ mod tests {
         terminal
             .draw(|f| crate::tui::draw::draw(f, &mut app))
             .expect("populated portfolio should render");
+    }
+
+    #[tokio::test]
+    async fn test_tab_cycles_between_pages() {
+        let (mut app, _rx) = make_test_app();
+        assert_eq!(app.page, Page::Market, "starts on Market");
+
+        app.handle_key(KeyCode::Tab);
+        assert_eq!(app.page, Page::Manage);
+
+        app.handle_key(KeyCode::BackTab);
+        assert_eq!(app.page, Page::Market);
+    }
+
+    #[tokio::test]
+    async fn test_manage_nav_flows_across_sections() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PortfolioLoaded(vec![
+            holding_for("AAPL"),
+            holding_for("TSLA"),
+        ]));
+        app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(1, "NVDA")]));
+        app.page = Page::Manage;
+
+        app.handle_key(KeyCode::Char('j'));
+        assert_eq!(app.manage_section, ManageSection::Holdings);
+        assert_eq!(app.manage_selected, 1);
+
+        app.handle_key(KeyCode::Char('j'));
+        assert_eq!(app.manage_section, ManageSection::Alerts);
+        assert_eq!(app.manage_selected, 0);
+
+        app.handle_key(KeyCode::Char('k'));
+        assert_eq!(app.manage_section, ManageSection::Holdings);
+        assert_eq!(app.manage_selected, 1);
+    }
+
+    #[tokio::test]
+    async fn test_manage_page_renders_without_panicking() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = app_with_three_stocks();
+        app.page = Page::Manage;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+        terminal
+            .draw(|f| crate::tui::draw::draw(f, &mut app))
+            .expect("empty Manage page should render");
+
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("AAPL")]));
+        app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(1, "AAPL")]));
+        terminal
+            .draw(|f| crate::tui::draw::draw(f, &mut app))
+            .expect("populated Manage page should render");
     }
 
     #[tokio::test]

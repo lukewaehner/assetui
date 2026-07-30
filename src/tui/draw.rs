@@ -26,7 +26,7 @@ use crate::models::{
 use crate::portfolio::{Holding, Position, summarize, value_position};
 use crate::search::subseq_match_ci;
 
-use super::app::App;
+use super::app::{App, ManageSection, Page};
 use super::theme::Theme;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -39,6 +39,38 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let [body, status_area] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+
+    match app.page {
+        Page::Market => draw_market_body(f, body, app),
+        Page::Manage => draw_manage_body(f, body, app),
+    }
+    draw_status_bar(f, status_area, app);
+
+    if app.page == Page::Market {
+        if app.stock_modal.info_visible {
+            draw_stock_modal(f, app);
+        }
+        if app.stock_modal.chart_visible {
+            draw_chart_modal(f, app);
+        }
+        if app.stock_modal.options_visible {
+            draw_options_modal(f, app);
+        }
+        if app.portfolio_visible {
+            draw_portfolio_modal(f, app);
+        }
+    }
+    if app.help_visible {
+        draw_help_modal(f, app);
+    }
+
+    let area = f.area();
+    app.notifications.render(f, area);
+}
+
+/// Renders the Market page body: the ticker input box, the log panel, and the sortable quotes table.
+fn draw_market_body(f: &mut Frame, body: Rect, app: &mut App) {
+    let t = app.theme;
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(20), Constraint::Percentage(80)]).areas(body);
     let [input_area, log_area] =
@@ -53,30 +85,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_input(f, input_area, app, input_border);
     draw_logs(f, log_area, app);
     draw_quotes_table(f, right, app, db_border);
-    draw_status_bar(f, status_area, app);
-
-    if app.stock_modal.info_visible {
-        draw_stock_modal(f, app);
-    }
-
-    if app.stock_modal.chart_visible {
-        draw_chart_modal(f, app);
-    }
-
-    if app.stock_modal.options_visible {
-        draw_options_modal(f, app);
-    }
-
-    if app.portfolio_visible {
-        draw_portfolio_modal(f, app);
-    }
-
-    if app.help_visible {
-        draw_help_modal(f, app);
-    }
-
-    let area = f.area();
-    app.notifications.render(f, area);
 }
 
 /// Builds a ` app · section ` block title in the bold accent colour.
@@ -355,6 +363,8 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
     let (mode, hint) = if app.help_visible {
         ("HELP", "esc close")
+    } else if app.page == Page::Manage {
+        ("MANAGE", "j/k move · tab market · q quit")
     } else if app.stock_modal.options_visible {
         ("VIEW", "h/l expiry · esc close")
     } else if app.portfolio_visible {
@@ -377,7 +387,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     } else {
         (
             "NORMAL",
-            "j/k move · h/l page · s info · enter chart · x options · A alert · H/R/P holdings · w ★ · i query · / search · o order · ? help · q quit",
+            "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · q quit",
         )
     };
 
@@ -1294,6 +1304,164 @@ fn pnl_color(value: Option<f64>, t: &Theme) -> Color {
 /// A right-aligned signed-money cell (`+1.20` / `-3.40` / `-` when absent), coloured by sign.
 fn pnl_cell(value: Option<f64>, t: &Theme) -> Cell<'static> {
     opt_cell(value, |v| format!("{v:+.2}")).style(Style::default().fg(pnl_color(value, t)))
+}
+
+/// Renders the Manage page body: a Holdings section above an Alerts section.
+fn draw_manage_body(f: &mut Frame, body: Rect, app: &mut App) {
+    let [holdings_area, alerts_area] =
+        Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(body);
+    draw_holdings_section(
+        f,
+        holdings_area,
+        app,
+        app.manage_section == ManageSection::Holdings,
+    );
+    draw_alerts_section(
+        f,
+        alerts_area,
+        app,
+        app.manage_section == ManageSection::Alerts,
+    );
+}
+
+fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
+    let t = app.theme;
+    let border = if focused { t.accent } else { t.border };
+    let block = Block::default()
+        .title(section_heading("HOLDINGS", None, &t))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border));
+
+    if app.holdings.is_empty() {
+        f.render_widget(
+            Paragraph::new(Span::styled("no holdings — press a to add", Style::default().fg(t.dim)))
+                .block(block),
+            area,
+        );
+        return;
+    }
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let [table_area, totals_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+
+    let positions = portfolio_positions(&app.holdings, &app.db_display.all_rows);
+    let summary = summarize(&positions);
+
+    let head_sty = Style::default().fg(t.dim).add_modifier(Modifier::BOLD);
+    let header = Row::new(
+        ["Ticker", "Shares", "Avg Cost", "Price", "Mkt Value", "P&L $", "P&L %", "Day $"]
+            .into_iter()
+            .map(|h| Cell::from(Span::styled(h, head_sty)))
+            .collect::<Vec<_>>(),
+    );
+    let rows = positions.iter().map(|p| {
+        Row::new(vec![
+            Cell::from(Span::styled(
+                p.holding.ticker.clone(),
+                Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(format!("{}", p.holding.shares)),
+            Cell::from(format!("${:.2}", p.holding.avg_cost)),
+            opt_cell(p.price, |v| format!("${v:.2}")),
+            opt_cell(p.market_value, |v| format!("${v:.2}")),
+            pnl_cell(p.unrealized_pnl, &t),
+            opt_cell(p.unrealized_pnl_pct, |v| format!("{v:+.2}%"))
+                .style(Style::default().fg(pnl_color(p.unrealized_pnl_pct, &t))),
+            pnl_cell(p.day_change, &t),
+        ])
+    });
+    let widths = [
+        Constraint::Length(8),
+        Constraint::Length(10),
+        Constraint::Length(11),
+        Constraint::Length(11),
+        Constraint::Length(13),
+        Constraint::Length(12),
+        Constraint::Length(10),
+        Constraint::Length(12),
+    ];
+    let mut table = Table::new(rows, widths).header(header);
+    let mut state = ratatui::widgets::TableState::default();
+    if focused {
+        table = table
+            .row_highlight_style(Style::default().bg(t.cursor).add_modifier(Modifier::BOLD))
+            .highlight_symbol(Span::styled("▸ ", Style::default().fg(t.accent)));
+        state.select(Some(app.manage_selected.min(positions.len().saturating_sub(1))));
+    }
+    f.render_stateful_widget(table, table_area, &mut state);
+
+    let pct = summary
+        .total_pnl_pct
+        .map_or_else(|| "-".to_string(), |v| format!("{v:+.2}%"));
+    let totals = Line::from(vec![
+        label("Value ", &t),
+        Span::styled(format!("${:.2}   ", summary.total_market_value), Style::default().fg(t.fg)),
+        label("P&L ", &t),
+        Span::styled(
+            format!("{:+.2} ({pct})", summary.total_pnl),
+            Style::default()
+                .fg(pnl_color(Some(summary.total_pnl), &t))
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(totals), totals_area);
+}
+
+fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
+    let t = app.theme;
+    let border = if focused { t.accent } else { t.border };
+    let block = Block::default()
+        .title(section_heading("ALERTS", None, &t))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border));
+
+    if app.alerts.is_empty() {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "no alerts — press a to add (e.g. AAPL >150)",
+                Style::default().fg(t.dim),
+            ))
+            .block(block),
+            area,
+        );
+        return;
+    }
+
+    let head_sty = Style::default().fg(t.dim).add_modifier(Modifier::BOLD);
+    let header = Row::new(
+        ["Ticker", "Condition", "Threshold"]
+            .into_iter()
+            .map(|h| Cell::from(Span::styled(h, head_sty)))
+            .collect::<Vec<_>>(),
+    );
+    let rows = app.alerts.iter().map(|a| {
+        let dir = match a.direction {
+            crate::models::AlertDirection::Above => "above",
+            crate::models::AlertDirection::Below => "below",
+        };
+        Row::new(vec![
+            Cell::from(Span::styled(
+                a.ticker.clone(),
+                Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(dir),
+            Cell::from(format!("{:.2}", a.threshold)),
+        ])
+    });
+    let widths = [Constraint::Length(8), Constraint::Length(11), Constraint::Length(12)];
+    let mut table = Table::new(rows, widths)
+        .header(header)
+        .block(block);
+    let mut state = ratatui::widgets::TableState::default();
+    if focused {
+        table = table
+            .row_highlight_style(Style::default().bg(t.cursor).add_modifier(Modifier::BOLD))
+            .highlight_symbol(Span::styled("▸ ", Style::default().fg(t.accent)));
+        state.select(Some(app.manage_selected.min(app.alerts.len().saturating_sub(1))));
+    }
+    f.render_stateful_widget(table, area, &mut state);
 }
 
 fn draw_portfolio_modal(f: &mut Frame, app: &mut App) {
