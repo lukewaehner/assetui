@@ -682,6 +682,7 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
     lines.push(Line::raw(""));
 
     match &app.stock_modal.analysis {
+        Some(analysis) if analysis.coverage_not_applicable => {}
         None => {
             lines.push(section_heading("ANALYST CONSENSUS", None, &t));
             lines.push(Line::raw(""));
@@ -689,6 +690,7 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
                 "loading analysis…",
                 Style::default().fg(t.dim),
             ));
+            lines.push(Line::raw(""));
         }
         Some(analysis) => {
             push_analysis_lines(
@@ -698,9 +700,9 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
                 content.width as usize,
                 &t,
             );
+            lines.push(Line::raw(""));
         }
     }
-    lines.push(Line::raw(""));
 
     match &app.stock_modal.news {
         None => {

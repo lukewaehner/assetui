@@ -1236,6 +1236,7 @@ mod tests {
             ticker: Some(ticker.to_string()),
             recommendation_summary: None,
             price_target: None,
+            ..Default::default()
         }
     }
 

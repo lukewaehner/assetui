@@ -39,6 +39,7 @@ pub struct QuoteRecordAnalysis {
     pub recommendation_summary: Option<RecommendationSummary>,
     /// Analyst price-target consensus (mean, low, high).
     pub price_target: Option<PriceTarget>,
+    pub coverage_not_applicable: bool,
 }
 
 /// Slow-moving key statistics for a single ticker, fetched separately from the real-time quote.
@@ -550,6 +551,7 @@ mod tests {
         assert!(analysis.ticker.is_none());
         assert!(analysis.recommendation_summary.is_none());
         assert!(analysis.price_target.is_none());
+        assert!(!analysis.coverage_not_applicable);
     }
 
     #[test]

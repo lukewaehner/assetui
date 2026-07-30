@@ -2,7 +2,9 @@
 
 use tokio::try_join;
 use tracing::{debug, instrument};
-use yfinance_rs::{AnalysisBuilder, Candle, HistoryBuilder, Interval, Range, Ticker, YfClient};
+use yfinance_rs::{
+    AnalysisBuilder, AssetKind, Candle, HistoryBuilder, Interval, Range, Ticker, YfClient,
+};
 
 use chrono::{DateTime, Utc};
 use yfinance_rs::{CacheMode, OptionContract as YfOptionContract, OptionSide};
@@ -94,12 +96,26 @@ pub async fn fetch_sorted(
         .await
 }
 
+/// Whether an instrument's asset class carries sell-side analyst coverage.
+fn has_analyst_coverage(kind: &AssetKind) -> bool {
+    matches!(kind, AssetKind::Equity | AssetKind::REIT)
+}
+
 /// Fetches analyst consensus and price targets for `symbol` concurrently.
 #[instrument(skip(client), fields(symbol = %symbol))]
 pub async fn fetch_analysis(
     client: &YfClient,
     symbol: &str,
 ) -> Result<QuoteRecordAnalysis, AppError> {
+    let quote = Ticker::new(client, symbol).quote().await?;
+    if !has_analyst_coverage(&quote.instrument.kind) {
+        return Ok(QuoteRecordAnalysis {
+            ticker: Some(symbol.to_string()),
+            coverage_not_applicable: true,
+            ..Default::default()
+        });
+    }
+
     let analysis_builder = AnalysisBuilder::new(client, symbol);
 
     let (rec, pt) = try_join!(
@@ -111,6 +127,7 @@ pub async fn fetch_analysis(
         ticker: Some(symbol.to_string()),
         recommendation_summary: Some(rec),
         price_target: Some(pt),
+        coverage_not_applicable: false,
     })
 }
 
@@ -223,7 +240,7 @@ pub async fn fetch_chart_data(client: &YfClient, symbol: &str) -> Result<Vec<Can
 
 #[cfg(test)]
 mod tests {
-    use super::{map_option_contract, prepare_tickers};
+    use super::{has_analyst_coverage, map_option_contract, prepare_tickers};
     use crate::black_scholes::OptionKind;
     use chrono::NaiveDate;
     use std::str::FromStr;
@@ -315,5 +332,18 @@ mod tests {
         let result = prepare_tickers(&symbols, &client);
         assert_eq!(result[0].0, "AAPL");
         assert_eq!(result[1].0, "MSFT");
+    }
+
+    #[test]
+    fn has_analyst_coverage_true_for_companies() {
+        assert!(has_analyst_coverage(&AssetKind::Equity));
+        assert!(has_analyst_coverage(&AssetKind::REIT));
+    }
+
+    #[test]
+    fn has_analyst_coverage_false_for_funds_indexes_and_crypto() {
+        assert!(!has_analyst_coverage(&AssetKind::Fund));
+        assert!(!has_analyst_coverage(&AssetKind::Index));
+        assert!(!has_analyst_coverage(&AssetKind::Crypto));
     }
 }
