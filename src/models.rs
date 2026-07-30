@@ -133,6 +133,17 @@ pub fn parse_alert_input(input: &str) -> Result<(AlertDirection, f64), AlertPars
     Ok((direction, value))
 }
 
+pub fn parse_alert_entry(
+    input: &str,
+) -> Result<(String, AlertDirection, f64), AlertParseError> {
+    let (ticker, rest) = input
+        .trim()
+        .split_once(char::is_whitespace)
+        .ok_or(AlertParseError::MissingOperator)?;
+    let (direction, threshold) = parse_alert_input(rest)?;
+    Ok((ticker.to_uppercase(), direction, threshold))
+}
+
 pub fn crosses(direction: AlertDirection, threshold: f64, price: f64) -> bool {
     match direction {
         AlertDirection::Above => price >= threshold,
@@ -388,6 +399,23 @@ mod tests {
     #[test]
     fn parse_alert_input_zero_is_error() {
         assert_eq!(parse_alert_input("<0"), Err(AlertParseError::NonPositive(0.0)));
+    }
+
+    #[test]
+    fn parse_alert_entry_valid() {
+        assert_eq!(parse_alert_entry("aapl >150"), Ok(("AAPL".to_string(), AlertDirection::Above, 150.0)));
+        assert_eq!(parse_alert_entry("TSLA <100"), Ok(("TSLA".to_string(), AlertDirection::Below, 100.0)));
+    }
+
+    #[test]
+    fn parse_alert_entry_missing_spec_is_error() {
+        assert_eq!(parse_alert_entry("AAPL"), Err(AlertParseError::MissingOperator));
+    }
+
+    #[test]
+    fn parse_alert_entry_propagates_spec_errors() {
+        assert_eq!(parse_alert_entry("AAPL 150"), Err(AlertParseError::MissingOperator));
+        assert_eq!(parse_alert_entry("AAPL >-5"), Err(AlertParseError::NonPositive(-5.0)));
     }
 
     #[test]

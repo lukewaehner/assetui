@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered};
+use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered, remove_alert};
 use crate::db::portfolio::{list_holdings, remove_holding, upsert_holding};
 use crate::models::AlertDirection;
 use crate::portfolio::Holding;
@@ -263,6 +263,24 @@ impl App {
         tokio::spawn(async move {
             if let Err(e) = add_alert(&pool, &ticker, direction, threshold).await {
                 let _ = tx.send(AppEvent::Error(format!("Failed to save alert for {ticker}: {e}")));
+            }
+            match list_alerts(&pool).await {
+                Ok(alerts) => {
+                    let _ = tx.send(AppEvent::AlertsLoaded(alerts));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("Failed to reload alerts: {e}")));
+                }
+            }
+        });
+    }
+
+    pub(crate) fn spawn_remove_alert(&self, id: i32) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = remove_alert(&pool, id).await {
+                let _ = tx.send(AppEvent::Error(format!("Failed to remove alert {id}: {e}")));
             }
             match list_alerts(&pool).await {
                 Ok(alerts) => {

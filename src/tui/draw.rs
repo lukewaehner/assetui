@@ -1450,15 +1450,30 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
         .title(section_heading("ALERTS", None, &t))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let alert_input = app
+        .manage_input
+        .as_ref()
+        .filter(|i| i.kind == ManageInputKind::Alert);
+
+    let [content, bottom] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    if let Some(input) = alert_input {
+        f.render_widget(
+            Paragraph::new(manage_input_line(input, app.animations.blink_state, &t)),
+            bottom,
+        );
+    }
 
     if app.alerts.is_empty() {
         f.render_widget(
             Paragraph::new(Span::styled(
                 "no alerts — press a to add (e.g. AAPL >150)",
                 Style::default().fg(t.dim),
-            ))
-            .block(block),
-            area,
+            )),
+            content,
         );
         return;
     }
@@ -1485,9 +1500,7 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
         ])
     });
     let widths = [Constraint::Length(8), Constraint::Length(11), Constraint::Length(12)];
-    let mut table = Table::new(rows, widths)
-        .header(header)
-        .block(block);
+    let mut table = Table::new(rows, widths).header(header);
     let mut state = ratatui::widgets::TableState::default();
     if focused {
         table = table
@@ -1495,7 +1508,7 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
             .highlight_symbol(Span::styled("▸ ", Style::default().fg(t.accent)));
         state.select(Some(app.manage_selected.min(app.alerts.len().saturating_sub(1))));
     }
-    f.render_stateful_widget(table, area, &mut state);
+    f.render_stateful_widget(table, content, &mut state);
 }
 
 fn draw_portfolio_modal(f: &mut Frame, app: &mut App) {

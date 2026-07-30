@@ -16,7 +16,8 @@ use crate::{
     cli::parse_tickers,
     models::{
         Alert, AlertDirection, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
-        QuoteRecordStatistics, QuoteTick, StockNews, crosses, parse_alert_input,
+        QuoteRecordStatistics, QuoteTick, StockNews, crosses, parse_alert_entry,
+        parse_alert_input,
     },
     portfolio::{Holding, parse_holding_entry, parse_holding_input},
     sort::{SortMode, SortOrder},
@@ -693,8 +694,26 @@ impl App {
                 }
                 Err(e) => self.push_error(format!("holding: {e}")),
             },
-            ManageInputKind::Alert => {
-            }
+            ManageInputKind::Alert => match parse_alert_entry(&input.buffer) {
+                Ok((ticker, direction, threshold)) => {
+                    self.alerts.push(Alert {
+                        id: 0,
+                        ticker: ticker.clone(),
+                        direction,
+                        threshold,
+                        created_at: chrono::Utc::now(),
+                        triggered_at: None,
+                    });
+                    let dir = match direction {
+                        AlertDirection::Above => "above",
+                        AlertDirection::Below => "below",
+                    };
+                    self.push_alert_toast(format!("Alert: {ticker} {dir} {threshold:.2}"));
+                    self.spawn_add_alert(ticker, direction, threshold);
+                    self.cancel_manage_input();
+                }
+                Err(e) => self.push_error(format!("alert: {e}")),
+            },
         }
     }
 
@@ -709,6 +728,12 @@ impl App {
                 }
             }
             ManageSection::Alerts => {
+                if self.manage_selected < self.alerts.len() {
+                    let removed = self.alerts.remove(self.manage_selected);
+                    self.push_portfolio_toast(format!("Removed alert {}", removed.ticker));
+                    self.spawn_remove_alert(removed.id);
+                    self.clamp_manage_selected();
+                }
             }
         }
     }
@@ -2439,6 +2464,53 @@ mod tests {
 
         assert!(app.manage_input.is_none());
         assert_eq!(app.page, Page::Manage, "esc cancels the input, not the page");
+    }
+
+    #[tokio::test]
+    async fn test_manage_add_alert_saves_and_closes_input() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+        app.manage_section = ManageSection::Alerts;
+
+        app.handle_key(KeyCode::Char('a'));
+        type_str(&mut app, "AAPL >150");
+        app.handle_key(KeyCode::Enter);
+
+        assert_eq!(app.alerts.len(), 1);
+        assert_eq!(app.alerts[0].ticker, "AAPL");
+        assert_eq!(app.alerts[0].direction, AlertDirection::Above);
+        assert_eq!(app.alerts[0].threshold, 150.0);
+        assert!(app.manage_input.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_manage_delete_alert() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::AlertsLoaded(vec![
+            alert_for(1, "AAPL"),
+            alert_for(2, "TSLA"),
+        ]));
+        app.page = Page::Manage;
+        app.manage_section = ManageSection::Alerts;
+
+        app.handle_key(KeyCode::Char('d'));
+
+        assert_eq!(app.alerts.len(), 1);
+        assert_eq!(app.alerts[0].ticker, "TSLA");
+    }
+
+    #[tokio::test]
+    async fn test_manage_invalid_alert_keeps_input_open() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+        app.manage_section = ManageSection::Alerts;
+
+        app.handle_key(KeyCode::Char('a'));
+        type_str(&mut app, "nope");
+        app.handle_key(KeyCode::Enter);
+
+        assert!(app.alerts.is_empty());
+        assert!(app.manage_input.is_some());
     }
 
     #[tokio::test]
