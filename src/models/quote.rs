@@ -6,6 +6,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use yfinance_rs::{PriceTarget, QuoteUpdate, RecommendationSummary};
 
+use super::Ticker;
+
 /// A single stock quote snapshot, shared across the fetch layer, database operations, and CSV exports.
 #[derive(sqlx::FromRow, serde::Serialize, Clone, Default, Debug)]
 pub struct QuoteRecord {
@@ -131,7 +133,7 @@ impl QuoteTick {
     pub fn apply(
         &self,
         rows: &mut [QuoteRecord],
-        flash_map: &mut HashMap<String, (f64, Instant)>,
+        flash_map: &mut HashMap<Ticker, (f64, Instant)>,
     ) -> Option<usize> {
         let ticker = self.ticker.as_deref()?;
         let i = rows.iter().position(|r| {
@@ -148,14 +150,14 @@ impl QuoteTick {
         Some(i)
     }
 
-    pub fn record_flash(&self, map: &mut HashMap<String, (f64, Instant)>, record: &QuoteRecord) {
+    pub fn record_flash(&self, map: &mut HashMap<Ticker, (f64, Instant)>, record: &QuoteRecord) {
         map.retain(|_, (_, ts)| ts.elapsed() < FLASH_TTL);
 
         let (Some(new), Some(old)) = (self.price, record.price) else {
             return;
         };
         if let Some(ticker) = self.ticker.as_deref() {
-            map.insert(ticker.to_ascii_uppercase(), (new - old, Instant::now()));
+            map.insert(Ticker::new(ticker), (new - old, Instant::now()));
         }
     }
 }
@@ -248,7 +250,9 @@ mod tests {
         assert_eq!(rows[0].day_volume, Some(1_000.0));
         assert_eq!(rows[0].as_of, Some(now));
         assert_eq!(rows[1].price, Some(200.0));
-        let (diff, _) = flash_map.get("AAPL").expect("flash recorded by apply");
+        let (diff, _) = flash_map
+            .get(&Ticker::new("AAPL"))
+            .expect("flash recorded by apply");
         assert!((diff - 50.0).abs() < 1e-9);
     }
 
@@ -374,7 +378,9 @@ mod tests {
             as_of: None,
         };
         tick.record_flash(&mut map, &record);
-        let (diff, _) = map.get("AAPL").expect("flash keyed by uppercase ticker");
+        let (diff, _) = map
+            .get(&Ticker::new("AAPL"))
+            .expect("flash keyed by canonical ticker");
         assert!((diff - 2.5).abs() < 1e-9);
     }
 
@@ -403,7 +409,7 @@ mod tests {
         let expired = Instant::now()
             .checked_sub(FLASH_TTL + Duration::from_millis(100))
             .expect("test clock underflow");
-        map.insert("OLD".to_string(), (1.0, expired));
+        map.insert(Ticker::new("OLD"), (1.0, expired));
 
         let record = QuoteRecord {
             ticker: Some("AAPL".to_string()),
@@ -419,7 +425,10 @@ mod tests {
         };
         tick.record_flash(&mut map, &record);
 
-        assert!(!map.contains_key("OLD"), "expired entry should be evicted");
-        assert!(map.contains_key("AAPL"));
+        assert!(
+            !map.contains_key(&Ticker::new("OLD")),
+            "expired entry should be evicted"
+        );
+        assert!(map.contains_key(&Ticker::new("AAPL")));
     }
 }

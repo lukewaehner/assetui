@@ -21,7 +21,7 @@ use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 use crate::black_scholes::{DEFAULT_RISK_FREE_RATE, OptionKind};
 use crate::models::{
     Alert, AlertDirection, FLASH_TTL, OptionChain, OptionContract, QuoteRecord,
-    QuoteRecordAnalysis, QuoteRecordStatistics, StockNews, day_change_pct,
+    QuoteRecordAnalysis, QuoteRecordStatistics, StockNews, Ticker, day_change_pct,
 };
 use crate::portfolio::{portfolio_positions, resolve_price, summarize};
 use crate::search::subseq_match_ci;
@@ -413,13 +413,13 @@ fn direction_arrow(dir: Direction) -> &'static str {
 
 fn price_change_color(
     stock: &QuoteRecord,
-    flash_map: &HashMap<String, (f64, Instant)>,
+    flash_map: &HashMap<Ticker, (f64, Instant)>,
     t: &Theme,
 ) -> Color {
     let diff = stock
         .ticker
         .as_deref()
-        .and_then(|t| flash_map.get(&t.to_ascii_uppercase()))
+        .and_then(|t| flash_map.get(&Ticker::new(t)))
         .filter(|(_, ts)| ts.elapsed() < FLASH_TTL)
         .map(|(diff, _)| *diff)
         .or(match (stock.price, stock.previous_close) {
@@ -930,7 +930,7 @@ fn draw_stock_modal(f: &mut Frame, app: &mut App) {
 
 fn price_line(
     stock: &QuoteRecord,
-    flash_map: &HashMap<String, (f64, Instant)>,
+    flash_map: &HashMap<Ticker, (f64, Instant)>,
     t: &Theme,
 ) -> Line<'static> {
     let mut spans = vec![Span::styled(

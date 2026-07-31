@@ -16,7 +16,7 @@ use crate::{
     cli::parse_tickers,
     models::{
         Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
-        QuoteRecordStatistics, QuoteTick, StockNews, crosses, parse_alert_entry,
+        QuoteRecordStatistics, QuoteTick, StockNews, Ticker, crosses, parse_alert_entry,
     },
     portfolio::{Holding, parse_holding_entry},
     sort::{SortMode, SortOrder},
@@ -271,8 +271,8 @@ pub struct Animations {
     pub blink_state: bool,
     /// Timestamp of the last blink toggle, used to drive the blink interval.
     pub last_blink: Instant,
-    /// Per-ticker price-flash state (signed price delta + timestamp), keyed by uppercase ticker.
-    pub row_flash_map: HashMap<String, (f64, Instant)>,
+    /// Per-ticker price-flash state (signed price delta + timestamp), keyed by canonical [`Ticker`].
+    pub row_flash_map: HashMap<Ticker, (f64, Instant)>,
 }
 
 /// What the input box is currently doing.
