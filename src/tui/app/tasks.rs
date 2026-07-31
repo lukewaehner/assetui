@@ -17,7 +17,7 @@ use crate::models::QuoteTick;
 use crate::tui::stream::start_quote_stream;
 use crate::tui::theme::{Appearance, parse_appearance};
 
-use super::{App, AppEvent, PAGE_FETCH_LIMIT};
+use super::{App, AppEvent, FetchOrigin, PAGE_FETCH_LIMIT, fetch_failure_event};
 
 impl App {
     pub(crate) fn spawn_reload(&self) {
@@ -37,7 +37,7 @@ impl App {
         });
     }
 
-    pub(crate) fn spawn_fetch(&self, symbol: String) {
+    pub(crate) fn spawn_fetch(&self, symbol: String, origin: FetchOrigin) {
         let tx = self.services.event_tx.clone();
         let pool = self.services.pool.clone();
         let client = self.services.client.clone();
@@ -53,7 +53,7 @@ impl App {
                     )));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("{symbol}: {e}")));
+                    let _ = tx.send(fetch_failure_event(origin, &symbol, &e.to_string()));
                 }
             }
         });
@@ -188,9 +188,10 @@ impl App {
         });
     }
 
+    /// Restarts the quote stream when the target symbol set.
     // TODO(STREAM): debounce if pagination thrash causes reconnect spam.
     pub(crate) fn resubscribe_stream(&mut self) {
-        let tickers = self.db_display.window_tickers();
+        let tickers = self.stream_symbols();
         if self.subscribed_symbols == tickers {
             return;
         }

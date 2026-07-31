@@ -72,6 +72,24 @@ pub enum AppEvent {
     Error(String),
 }
 
+/// Why a quote fetch was requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchOrigin {
+    /// A ticker the user explicitly asked to fetch.
+    UserRequest,
+    /// A background top-up of a held ticker's price.
+    HoldingPrice,
+}
+
+fn fetch_failure_event(origin: FetchOrigin, symbol: &str, err: &str) -> AppEvent {
+    match origin {
+        FetchOrigin::UserRequest => AppEvent::Error(format!("{symbol}: {err}")),
+        FetchOrigin::HoldingPrice => {
+            AppEvent::LogLine(format!("[WARN] price for {symbol} unavailable: {err}"))
+        }
+    }
+}
+
 /// The top-level page currently shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Page {
@@ -146,6 +164,7 @@ pub struct App {
     pub manage_selected: usize,
     /// The Manage page's inline add/edit line, when active.
     pub manage_input: Option<ManageInput>,
+    pub show_logs: bool,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -365,6 +384,7 @@ impl App {
             manage_section: ManageSection::Holdings,
             manage_selected: 0,
             manage_input: None,
+            show_logs: false,
         }
     }
 
@@ -427,6 +447,8 @@ impl App {
             }
             AppEvent::PortfolioLoaded(holdings) => {
                 self.holdings = holdings;
+                self.fetch_unpriced_holdings();
+                self.resubscribe_stream();
             }
             AppEvent::Error(e) => self.push_error(e),
             AppEvent::StockAnalysisReady(analysis) => {
@@ -448,6 +470,7 @@ impl App {
                 self.stock_modal.option_chain = Some(chain);
             }
             AppEvent::QuoteTick(tick) => {
+                self.materialize_held_ticker_row(&tick);
                 tick.apply(&mut self.db_display.all_rows, &mut HashMap::new());
                 let range = self.db_display.window_range();
                 tick.apply(
@@ -661,7 +684,9 @@ impl App {
                         "Saved {}: {} @ ${:.2}",
                         holding.ticker, holding.shares, holding.avg_cost
                     ));
+                    self.fetch_holding_price(&holding.ticker);
                     self.spawn_upsert_holding(holding);
+                    self.resubscribe_stream();
                     self.cancel_manage_input();
                 }
                 Err(e) => self.push_error(format!("holding: {e}")),
@@ -794,6 +819,7 @@ impl App {
             '?' => self.open_help_modal(),
             'w' => self.toggle_watchlist(),
             'x' => self.open_options_modal(),
+            'L' => self.show_logs = !self.show_logs,
             'W' => {
                 self.db_display.watchlist_only = !self.db_display.watchlist_only;
                 self.apply_filter();
@@ -822,7 +848,7 @@ impl App {
         let symbols = parse_tickers(&self.input_mode.input);
         self.input_mode.input.clear();
         for symbol in symbols {
-            self.spawn_fetch(symbol);
+            self.spawn_fetch(symbol, FetchOrigin::UserRequest);
         }
     }
 
@@ -835,6 +861,79 @@ impl App {
             *existing = holding;
         } else {
             self.holdings.push(holding);
+        }
+    }
+
+    /// Whether `all_rows` holds a priced quote for `ticker` (case-insensitive).
+    fn has_priced_row(&self, ticker: &str) -> bool {
+        self.db_display.all_rows.iter().any(|r| {
+            r.ticker
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case(ticker))
+                && r.price.is_some()
+        })
+    }
+
+    /// Uppercased, deduped tickers of every current holding.
+    fn held_tickers(&self) -> Vec<String> {
+        let mut syms: Vec<String> = self
+            .holdings
+            .iter()
+            .map(|h| h.ticker.to_ascii_uppercase())
+            .collect();
+        syms.sort();
+        syms.dedup();
+        syms
+    }
+
+    /// The full symbol set the live stream must cover: the visible quotes window plus every held ticker.
+    fn stream_symbols(&self) -> Vec<String> {
+        let mut syms = self.db_display.window_tickers();
+        syms.extend(self.held_tickers());
+        syms.sort();
+        syms.dedup();
+        syms
+    }
+
+    /// Held tickers the portfolio can't value yet.
+    fn unpriced_holdings(&self) -> Vec<String> {
+        self.held_tickers()
+            .into_iter()
+            .filter(|t| !self.has_priced_row(t))
+            .collect()
+    }
+
+    fn fetch_unpriced_holdings(&self) {
+        for ticker in self.unpriced_holdings() {
+            self.spawn_fetch(ticker, FetchOrigin::HoldingPrice);
+        }
+    }
+
+    fn materialize_held_ticker_row(&mut self, tick: &QuoteTick) {
+        let Some(ticker) = tick.ticker.as_deref() else {
+            return;
+        };
+        let held = self
+            .holdings
+            .iter()
+            .any(|h| h.ticker.eq_ignore_ascii_case(ticker));
+        let already_present = self.db_display.all_rows.iter().any(|r| {
+            r.ticker
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case(ticker))
+        });
+        if !held || already_present {
+            return;
+        }
+        self.db_display.all_rows.push(QuoteRecord {
+            ticker: Some(ticker.to_ascii_uppercase()),
+            ..Default::default()
+        });
+    }
+
+    fn fetch_holding_price(&self, ticker: &str) {
+        if !self.has_priced_row(ticker) {
+            self.spawn_fetch(ticker.to_ascii_uppercase(), FetchOrigin::HoldingPrice);
         }
     }
 
@@ -1973,6 +2072,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_held_ticker_off_page_is_subscribed_on_load() {
+        let (mut app, _rx) = make_test_app();
+        // arrange
+        app.handle_event(AppEvent::PageLoaded(vec![named("AAPL", "Apple Inc.")]));
+
+        // act
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("MSFT")]));
+
+        // assert
+        assert!(
+            app.subscribed_symbols.contains(&"MSFT".to_string()),
+            "held ticker must be streamed even when off-page"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_live_tick_prices_held_ticker_with_no_row() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![named("AAPL", "Apple Inc.")]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("MSFT")]));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("MSFT", Some(200.0))));
+
+        let positions =
+            crate::tui::draw::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+        assert_eq!(positions[0].market_value, Some(2000.0));
+    }
+
+    #[tokio::test]
+    async fn test_live_tick_for_unheld_ticker_creates_no_row() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![named("AAPL", "Apple Inc.")]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("AAPL")]));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("MSFT", Some(200.0))));
+
+        assert!(
+            !app.db_display
+                .all_rows
+                .iter()
+                .any(|r| r.ticker.as_deref() == Some("MSFT")),
+            "an unheld ticker's tick must not conjure a row"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_added_holding_is_subscribed_to_the_live_stream() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+
+        app.handle_key(KeyCode::Char('a'));
+        type_str(&mut app, "AAPL 10 150");
+        app.handle_key(KeyCode::Enter);
+
+        assert!(
+            app.subscribed_symbols.contains(&"AAPL".to_string()),
+            "a newly added holding must be streamed for live P&L"
+        );
+    }
+
+    #[test]
+    fn test_user_fetch_failure_raises_an_error_notification() {
+        let ev = fetch_failure_event(FetchOrigin::UserRequest, "AAPL", "currency unresolved");
+
+        match ev {
+            AppEvent::Error(msg) => {
+                assert!(msg.contains("AAPL"));
+                assert!(msg.contains("currency unresolved"));
+            }
+            _ => panic!("user fetch failure must be an error notification"),
+        }
+    }
+
+    #[test]
+    fn test_holding_price_fetch_failure_is_logged_not_toasted() {
+        let ev = fetch_failure_event(FetchOrigin::HoldingPrice, "AAPL", "currency unresolved");
+
+        match ev {
+            AppEvent::LogLine(msg) => {
+                assert!(msg.contains("AAPL"));
+                assert!(msg.contains("currency unresolved"));
+            }
+            _ => panic!("holding-price fetch failure must be logged, not an error toast"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unpriced_holdings_lists_only_held_tickers_without_a_price() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(120.0),
+            ..Default::default()
+        }]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![
+            holding_for("AAPL"),
+            holding_for("MSFT"),
+        ]));
+
+        assert_eq!(app.unpriced_holdings(), vec!["MSFT".to_string()]);
+    }
+
+    #[tokio::test]
     async fn test_tab_cycles_between_pages() {
         let (mut app, _rx) = make_test_app();
         assert_eq!(app.page, Page::Market, "starts on Market");
@@ -2166,6 +2368,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_market_dashboard_renders_cubes_then_logs_on_toggle() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![
+            quote("AAPL", 110.0, 100.0),
+            quote("TSLA", 90.0, 100.0),
+        ]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("AAPL")]));
+        app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(1, "AAPL")]));
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+        terminal
+            .draw(|f| crate::tui::draw::draw(f, &mut app))
+            .expect("Market dashboard should render");
+        let dashboard = buffer_text(&terminal);
+        assert!(dashboard.contains("portfolio"), "portfolio cube is drawn");
+        assert!(dashboard.contains("movers"), "movers cube is drawn");
+        assert!(dashboard.contains("alerts"), "alerts cube is drawn");
+
+        app.handle_key(KeyCode::Char('L'));
+        terminal
+            .draw(|f| crate::tui::draw::draw(f, &mut app))
+            .expect("log panel should render after toggle");
+        assert!(buffer_text(&terminal).contains("logs"), "logs panel is drawn");
+    }
+
+    fn buffer_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    #[tokio::test]
     async fn test_question_mark_opens_help_modal() {
         let (mut app, _rx) = make_test_app();
         app.handle_key(KeyCode::Char('?'));
@@ -2206,5 +2446,120 @@ mod tests {
         app.handle_key(KeyCode::Char('s'));
         assert!(app.stock_modal.info_visible);
         assert!(!app.stock_modal.chart_visible);
+    }
+
+    /// Builds a priced quote for movers/alert-proximity tests.
+    fn quote(ticker: &str, price: f64, previous_close: f64) -> QuoteRecord {
+        QuoteRecord {
+            ticker: Some(ticker.to_string()),
+            price: Some(price),
+            previous_close: Some(previous_close),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_top_movers_picks_highest_gainer_and_lowest_loser() {
+        let rows = vec![
+            quote("MSFT", 105.0, 100.0),
+            quote("AAPL", 110.0, 100.0),
+            quote("TSLA", 90.0, 100.0),
+        ];
+
+        let (gainer, loser) = crate::tui::draw::top_movers(&rows);
+
+        assert_eq!(gainer.unwrap().ticker, "AAPL");
+        assert_eq!(loser.unwrap().ticker, "TSLA");
+    }
+
+    #[test]
+    fn test_top_movers_ignores_quotes_missing_price_data() {
+        let rows = vec![
+            quote("AAPL", 110.0, 100.0),
+            QuoteRecord {
+                ticker: Some("GOOG".to_string()),
+                price: Some(50.0),
+                previous_close: None,
+                ..Default::default()
+            },
+        ];
+
+        let (gainer, loser) = crate::tui::draw::top_movers(&rows);
+
+        assert_eq!(gainer.unwrap().ticker, "AAPL");
+        assert!(loser.is_none(), "a single rankable quote yields no loser");
+    }
+
+    #[test]
+    fn test_top_movers_is_empty_when_nothing_is_rankable() {
+        let rows = vec![named("AAPL", "Apple Inc.")];
+
+        assert_eq!(crate::tui::draw::top_movers(&rows), (None, None));
+    }
+
+    #[test]
+    fn test_nearest_alert_picks_closest_to_threshold() {
+        let rows = vec![quote("AAPL", 149.0, 148.0), quote("TSLA", 90.0, 92.0)];
+        let alerts = vec![
+            crate::models::Alert {
+                id: 1,
+                ticker: "AAPL".to_string(),
+                direction: crate::models::AlertDirection::Above,
+                threshold: 150.0,
+                created_at: chrono::Utc::now(),
+                triggered_at: None,
+            },
+            crate::models::Alert {
+                id: 2,
+                ticker: "TSLA".to_string(),
+                direction: crate::models::AlertDirection::Below,
+                threshold: 100.0,
+                created_at: chrono::Utc::now(),
+                triggered_at: None,
+            },
+        ];
+
+        let nearest = crate::tui::draw::nearest_alert(&alerts, &rows).unwrap();
+
+        assert_eq!(nearest.ticker, "AAPL");
+    }
+
+    #[test]
+    fn test_nearest_alert_skips_unpriced_tickers() {
+        let rows = vec![quote("TSLA", 90.0, 92.0)];
+        let alerts = vec![
+            alert_for(1, "AAPL"),
+            crate::models::Alert {
+                id: 2,
+                ticker: "TSLA".to_string(),
+                direction: crate::models::AlertDirection::Below,
+                threshold: 100.0,
+                created_at: chrono::Utc::now(),
+                triggered_at: None,
+            },
+        ];
+
+        let nearest = crate::tui::draw::nearest_alert(&alerts, &rows).unwrap();
+
+        assert_eq!(nearest.ticker, "TSLA", "only the priced alert is rankable");
+    }
+
+    #[test]
+    fn test_nearest_alert_is_none_when_no_alert_is_priced() {
+        let alerts = vec![alert_for(1, "AAPL")];
+
+        assert!(crate::tui::draw::nearest_alert(&alerts, &[]).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_l_toggles_logs_panel() {
+        let (mut app, _rx) = make_test_app();
+        assert!(!app.show_logs, "dashboard is the default view");
+
+        app.handle_key(KeyCode::Char('L'));
+        assert!(app.show_logs, "L shows the logs");
+
+        app.handle_key(KeyCode::Char('L'));
+        assert!(!app.show_logs, "L again returns to the dashboard");
     }
 }

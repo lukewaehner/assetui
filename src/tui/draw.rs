@@ -20,8 +20,8 @@ use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
 use crate::black_scholes::{DEFAULT_RISK_FREE_RATE, OptionKind};
 use crate::models::{
-    Alert, FLASH_TTL, OptionChain, OptionContract, QuoteRecord, QuoteRecordAnalysis,
-    QuoteRecordStatistics, StockNews, day_change_pct,
+    Alert, AlertDirection, FLASH_TTL, OptionChain, OptionContract, QuoteRecord,
+    QuoteRecordAnalysis, QuoteRecordStatistics, StockNews, day_change_pct,
 };
 use crate::portfolio::{Holding, Position, summarize, value_position};
 use crate::search::subseq_match_ci;
@@ -80,7 +80,11 @@ fn draw_market_body(f: &mut Frame, body: Rect, app: &mut App) {
     };
 
     draw_input(f, input_area, app, input_border);
-    draw_logs(f, log_area, app);
+    if app.show_logs {
+        draw_logs(f, log_area, app);
+    } else {
+        draw_dashboard(f, log_area, app);
+    }
     draw_quotes_table(f, right, app, db_border);
 }
 
@@ -144,6 +148,135 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+fn cube_block(title: &str, t: &Theme) -> Block<'static> {
+    Block::default()
+        .title(block_title(title.to_string(), t))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.border).bg(t.panel))
+        .style(Style::default().bg(t.panel))
+}
+
+fn dim_line(text: &str, t: &Theme) -> Line<'static> {
+    Line::from(Span::styled(text.to_string(), Style::default().fg(t.dim)))
+}
+
+/// `▲`/`▼`/`•` for a positive/negative/flat value: the direction marker shared by the dashboard cubes.
+fn move_arrow(value: f64) -> &'static str {
+    if value > f64::EPSILON {
+        "▲"
+    } else if value < -f64::EPSILON {
+        "▼"
+    } else {
+        "•"
+    }
+}
+
+fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
+    let [portfolio_area, movers_area, alerts_area, _rest] = Layout::vertical([
+        Constraint::Length(5),
+        Constraint::Length(4),
+        Constraint::Length(4),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    draw_portfolio_cube(f, portfolio_area, app);
+    draw_movers_cube(f, movers_area, app);
+    draw_alerts_cube(f, alerts_area, app);
+}
+
+fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let positions = portfolio_positions(&app.holdings, &app.db_display.all_rows);
+    let lines = if app.holdings.is_empty() {
+        vec![dim_line("no holdings", &t)]
+    } else if !positions.iter().any(|p| p.market_value.is_some()) {
+        vec![dim_line("awaiting prices", &t)]
+    } else {
+        let s = summarize(&positions);
+        let pnl_pct = s
+            .total_pnl_pct
+            .map(|v| format!("{v:+.1}%"))
+            .unwrap_or_else(|| "-".into());
+        vec![
+            Line::from(Span::styled(
+                format!("${:.2}", s.total_market_value),
+                Style::default().fg(t.fg).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!("{} {}", move_arrow(s.total_pnl), pnl_pct),
+                Style::default().fg(pnl_color(Some(s.total_pnl), &t)),
+            )),
+            Line::from(vec![
+                Span::styled("today ", Style::default().fg(t.dim)),
+                Span::styled(
+                    format!("{:+.2}", s.total_day_change),
+                    Style::default().fg(pnl_color(Some(s.total_day_change), &t)),
+                ),
+            ]),
+        ]
+    };
+    f.render_widget(Paragraph::new(lines).block(cube_block("portfolio", &t)), area);
+}
+
+/// Movers cube: the day's biggest gainer and biggest loser across tracked quotes.
+fn draw_movers_cube(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let (gainer, loser) = top_movers(&app.db_display.all_rows);
+    let lines = match gainer {
+        None => vec![dim_line("no quotes yet", &t)],
+        Some(g) => vec![
+            mover_line(&g, &t),
+            match &loser {
+                Some(l) => mover_line(l, &t),
+                None => dim_line("—", &t),
+            },
+        ],
+    };
+    f.render_widget(Paragraph::new(lines).block(cube_block("movers", &t)), area);
+}
+
+/// One `TICKER ▲ +x.x%` mover row, coloured by the sign of its day move.
+fn mover_line(m: &Mover, t: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{:<6}{} {:+.1}%", m.ticker, move_arrow(m.day_pct), m.day_pct),
+        Style::default().fg(pnl_color(Some(m.day_pct), t)),
+    ))
+}
+
+/// Alerts cube: the active-alert count in the title and the alert nearest to firing in the body.
+fn draw_alerts_cube(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let title = if app.alerts.is_empty() {
+        "alerts".to_string()
+    } else {
+        format!("alerts · {}", app.alerts.len())
+    };
+    let lines = if app.alerts.is_empty() {
+        vec![dim_line("no alerts", &t)]
+    } else {
+        match nearest_alert(&app.alerts, &app.db_display.all_rows) {
+            None => vec![dim_line("awaiting prices", &t)],
+            Some(a) => {
+                let op = match a.direction {
+                    AlertDirection::Above => ">",
+                    AlertDirection::Below => "<",
+                };
+                vec![Line::from(vec![
+                    Span::styled(
+                        format!("{} {}{:.2}", a.ticker, op, a.threshold),
+                        Style::default().fg(t.fg),
+                    ),
+                    Span::styled(
+                        format!("  {:.1}%", a.distance_pct),
+                        Style::default().fg(t.dim),
+                    ),
+                ])]
+            }
+        }
+    };
+    f.render_widget(Paragraph::new(lines).block(cube_block(&title, &t)), area);
 }
 
 /// Builds a table cell from an optional value, showing `-` when absent.
@@ -460,6 +593,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         help_row("s", "stock details", &t),
         help_row("enter", "price chart", &t),
         help_row("x", "options chain (h/l expiry)", &t),
+        help_row("L", "toggle dashboard / logs", &t),
         help_row("?", "this help", &t),
         Line::raw(""),
         section_heading("WATCHLIST", None, &t),
@@ -1264,6 +1398,74 @@ fn resolve_price(ticker: &str, rows: &[QuoteRecord]) -> (Option<f64>, Option<f64
     rows.iter()
         .find(|r| r.ticker.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticker)))
         .map_or((None, None), |r| (r.price, r.previous_close))
+}
+
+/// A quote's single-session move: its ticker and day-change percent.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Mover {
+    /// The quote's ticker symbol.
+    pub ticker: String,
+    /// `(price - previous_close) / previous_close * 100`.
+    pub day_pct: f64,
+}
+
+/// The biggest gainer and biggest loser across `rows`, by day-change percent.
+pub(crate) fn top_movers(rows: &[QuoteRecord]) -> (Option<Mover>, Option<Mover>) {
+    let mut movers: Vec<Mover> = rows
+        .iter()
+        .filter_map(|r| {
+            let ticker = r.ticker.as_deref()?;
+            let day_pct = day_change_pct(r.price, r.previous_close)?;
+            day_pct.is_finite().then(|| Mover {
+                ticker: ticker.to_string(),
+                day_pct,
+            })
+        })
+        .collect();
+    if movers.is_empty() {
+        return (None, None);
+    }
+    movers.sort_by(|a, b| b.day_pct.partial_cmp(&a.day_pct).expect("finite day_pct"));
+    let gainer = movers.first().cloned();
+    let loser = (movers.len() >= 2).then(|| movers.last().cloned()).flatten();
+    (gainer, loser)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AlertProximity {
+    /// The alert's ticker symbol.
+    pub ticker: String,
+    /// Whether the alert fires above or below its threshold.
+    pub direction: AlertDirection,
+    /// The price level the alert watches.
+    pub threshold: f64,
+    /// `|price - threshold| / threshold * 100`.
+    pub distance_pct: f64,
+}
+
+/// Picks the alert nearest its threshold, valued against the latest prices in `rows`.
+pub(crate) fn nearest_alert(alerts: &[Alert], rows: &[QuoteRecord]) -> Option<AlertProximity> {
+    alerts
+        .iter()
+        .filter_map(|a| {
+            let (price, _) = resolve_price(&a.ticker, rows);
+            let price = price?;
+            if a.threshold == 0.0 {
+                return None;
+            }
+            let distance_pct = (price - a.threshold).abs() / a.threshold * 100.0;
+            distance_pct.is_finite().then(|| AlertProximity {
+                ticker: a.ticker.clone(),
+                direction: a.direction,
+                threshold: a.threshold,
+                distance_pct,
+            })
+        })
+        .min_by(|a, b| {
+            a.distance_pct
+                .partial_cmp(&b.distance_pct)
+                .expect("finite distance_pct")
+        })
 }
 
 pub(crate) fn portfolio_positions(holdings: &[Holding], rows: &[QuoteRecord]) -> Vec<Position> {
