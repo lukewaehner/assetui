@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 
+use super::ticker::split_ticker_entry;
+
 /// Which side of the threshold a price alert fires on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlertDirection {
@@ -67,12 +69,10 @@ pub fn parse_alert_input(input: &str) -> Result<(AlertDirection, f64), AlertPars
 pub fn parse_alert_entry(
     input: &str,
 ) -> Result<(String, AlertDirection, f64), AlertParseError> {
-    let (ticker, rest) = input
-        .trim()
-        .split_once(char::is_whitespace)
-        .ok_or(AlertParseError::MissingOperator)?;
+    let (ticker, rest) =
+        split_ticker_entry(input).ok_or(AlertParseError::MissingOperator)?;
     let (direction, threshold) = parse_alert_input(rest)?;
-    Ok((ticker.to_uppercase(), direction, threshold))
+    Ok((ticker, direction, threshold))
 }
 
 pub fn crosses(direction: AlertDirection, threshold: f64, price: f64) -> bool {

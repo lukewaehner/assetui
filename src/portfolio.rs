@@ -1,6 +1,7 @@
 //! Portfolio holdings and the pure P&L compute core.
 
 use crate::models::QuoteRecord;
+use crate::models::ticker::split_ticker_entry;
 
 /// Why a user's holding spec (`shares avg_cost`, e.g. `10 150.5`) could not be parsed.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,13 +52,11 @@ pub fn parse_holding_input(input: &str) -> Result<(f64, f64), HoldingParseError>
 }
 
 pub fn parse_holding_entry(input: &str) -> Result<Holding, HoldingParseError> {
-    let (ticker, rest) = input
-        .trim()
-        .split_once(char::is_whitespace)
-        .ok_or(HoldingParseError::WrongFieldCount)?;
+    let (ticker, rest) =
+        split_ticker_entry(input).ok_or(HoldingParseError::WrongFieldCount)?;
     let (shares, avg_cost) = parse_holding_input(rest)?;
     Ok(Holding {
-        ticker: ticker.to_uppercase(),
+        ticker,
         shares,
         avg_cost,
     })

@@ -21,6 +21,12 @@ impl std::fmt::Display for Ticker {
     }
 }
 
+/// Splits a Manage-page entry into its leading ticker token.
+pub(crate) fn split_ticker_entry(input: &str) -> Option<(String, &str)> {
+    let (ticker, rest) = input.trim().split_once(char::is_whitespace)?;
+    Some((ticker.to_uppercase(), rest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::Ticker;
@@ -64,5 +70,18 @@ mod tests {
 
         // act
         assert_eq!(map.get(&Ticker::new("AAPL")), Some(&1));
+    }
+
+    #[test]
+    fn test_split_ticker_entry_uppercases_and_returns_rest() {
+        assert_eq!(
+            super::split_ticker_entry("  aapl 10 150 "),
+            Some(("AAPL".to_string(), "10 150"))
+        );
+    }
+
+    #[test]
+    fn test_split_ticker_entry_without_separator_is_none() {
+        assert_eq!(super::split_ticker_entry("  aapl  "), None);
     }
 }
