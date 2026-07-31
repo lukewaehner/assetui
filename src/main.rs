@@ -16,15 +16,15 @@ use yfinance_rs::{CacheEndpoint, YfClient};
 struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
-
-    #[arg(short, long, value_delimiter = ',')]
-    ticker: Option<Vec<String>>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Fetches quotes for the specified ticker and stores them in the database.
-    FetchAndStore,
+    FetchAndStore {
+        #[arg(short, long, value_delimiter = ',', required = true)]
+        ticker: Vec<String>,
+    },
 
     /// Dumps the quotes table to a CSV file in the current directory.
     DumpToCsv,
@@ -67,15 +67,8 @@ async fn main() -> Result<(), AppError> {
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     match &args.command {
-        Some(Commands::FetchAndStore) => {
-            let ticker = match &args.ticker {
-                Some(t) => t.clone(),
-                None => {
-                    println!("Please provide tickers with --ticker or -t.");
-                    return Ok(());
-                }
-            };
-            fetch_and_store(&pool, &client, &ticker).await?;
+        Some(Commands::FetchAndStore { ticker }) => {
+            fetch_and_store(&pool, &client, ticker).await?;
         }
         Some(Commands::DumpToCsv) => {
             let output_path = Path::new("quotes_dump.csv");
