@@ -26,7 +26,7 @@ use crate::models::{
 use crate::portfolio::{Holding, Position, summarize, value_position};
 use crate::search::subseq_match_ci;
 
-use super::app::{App, ManageInput, ManageInputKind, ManageSection, Page};
+use super::app::{App, ManageInput, ManageInputKind, ManageSection, Overlay, Page};
 use super::theme::Theme;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -47,17 +47,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_status_bar(f, status_area, app);
 
     if app.page == Page::Market {
-        if app.stock_modal.info_visible {
-            draw_stock_modal(f, app);
-        }
-        if app.stock_modal.chart_visible {
-            draw_chart_modal(f, app);
-        }
-        if app.stock_modal.options_visible {
-            draw_options_modal(f, app);
+        match app.overlay {
+            Overlay::Info => draw_stock_modal(f, app),
+            Overlay::Chart => draw_chart_modal(f, app),
+            Overlay::Options => draw_options_modal(f, app),
+            _ => {}
         }
     }
-    if app.help_visible {
+    if app.overlay == Overlay::Help {
         draw_help_modal(f, app);
     }
 
@@ -483,15 +480,15 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         area,
     );
 
-    let (mode, hint) = if app.help_visible {
+    let (mode, hint) = if app.overlay == Overlay::Help {
         ("HELP", "esc close")
     } else if app.manage_input.is_some() {
         ("MANAGE", "type entry · enter save · esc cancel")
     } else if app.page == Page::Manage {
         ("MANAGE", "j/k move · a add · e edit · d delete · tab market · q quit")
-    } else if app.stock_modal.options_visible {
+    } else if app.overlay == Overlay::Options {
         ("VIEW", "h/l expiry · esc close")
-    } else if app.stock_modal.info_visible || app.stock_modal.chart_visible {
+    } else if app.overlay == Overlay::Info || app.overlay == Overlay::Chart {
         ("VIEW", "s info · enter chart · esc close")
     } else if app.input_mode.is_focused() && app.input_mode.is_fuzzy() {
         ("SEARCH", "type to filter · enter apply · esc cancel")

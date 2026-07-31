@@ -100,6 +100,22 @@ pub enum Page {
     Manage,
 }
 
+/// The single overlay currently on top of the page, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Overlay {
+    /// No overlay.
+    #[default]
+    None,
+    /// The stock-detail info modal (analyst data, statistics, news).
+    Info,
+    /// The price-history chart modal.
+    Chart,
+    /// The options-chain modal.
+    Options,
+    /// The keybinding help modal.
+    Help,
+}
+
 /// Which section of the Manage page currently holds the `j`/`k` cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ManageSection {
@@ -142,7 +158,8 @@ pub struct App {
     pub animations: Animations,
     /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
-    pub help_visible: bool,
+    /// The single overlay currently on top of the page, if any.
+    pub overlay: Overlay,
     /// Slide-in error notifications shown top-right.
     pub notifications: Notifications,
     /// The system appearance the current [`theme`](Self::theme) was derived from.
@@ -300,11 +317,8 @@ pub struct StockInfoModal {
     pub statistics: Option<QuoteRecordStatistics>,
     /// Recent news headlines fetched in the background.
     pub news: Option<StockNews>,
-    pub info_visible: bool,
-    pub chart_visible: bool,
     /// Stock price history fetched in the bg, None while loading.
     pub chart_data: Option<Vec<Candle>>,
-    pub options_visible: bool,
     pub option_chain: Option<OptionChain>,
     /// Index into the chain's `expirations` currently shown in the modal.
     pub selected_expiry: usize,
@@ -365,14 +379,11 @@ impl App {
                 analysis: None,
                 statistics: None,
                 news: None,
-                info_visible: false,
-                chart_visible: false,
                 chart_data: None,
-                options_visible: false,
                 option_chain: None,
                 selected_expiry: 0,
             },
-            help_visible: false,
+            overlay: Overlay::None,
             notifications: Notifications::new(),
             appearance,
             theme: Theme::for_appearance(appearance),
@@ -749,15 +760,8 @@ impl App {
     fn handle_market_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
-                if self.stock_modal.info_visible
-                    || self.stock_modal.chart_visible
-                    || self.stock_modal.options_visible
-                    || self.help_visible
-                {
-                    self.stock_modal.info_visible = false;
-                    self.stock_modal.chart_visible = false;
-                    self.stock_modal.options_visible = false;
-                    self.help_visible = false;
+                if self.overlay != Overlay::None {
+                    self.overlay = Overlay::None;
                 } else if self.input_mode.is_fuzzy() {
                     self.cancel_fuzzy_search();
                 } else {
@@ -791,22 +795,23 @@ impl App {
 
     /// Routes a single command key to the appropriate state change.
     pub fn handle_command_key(&mut self, key: char) {
-        if self.help_visible {
-            return;
-        }
-        if self.stock_modal.options_visible {
-            match key {
-                'h' => self.cycle_expiry(-1),
-                'l' => self.cycle_expiry(1),
-                _ => {}
+        match self.overlay {
+            Overlay::Help => return,
+            Overlay::Options => {
+                match key {
+                    'h' => self.cycle_expiry(-1),
+                    'l' => self.cycle_expiry(1),
+                    _ => {}
+                }
+                return;
             }
-            return;
-        }
-        if self.stock_modal.info_visible || self.stock_modal.chart_visible {
-            if key == 's' {
-                self.open_info_modal();
+            Overlay::Info | Overlay::Chart => {
+                if key == 's' {
+                    self.open_info_modal();
+                }
+                return;
             }
-            return;
+            Overlay::None => {}
         }
         if let Some(mode) = sort_mode_for_key(key) {
             self.set_sort_mode(mode);
@@ -1107,9 +1112,7 @@ impl App {
         };
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
-        self.help_visible = false;
-        self.stock_modal.chart_visible = false;
-        self.stock_modal.info_visible = true;
+        self.overlay = Overlay::Info;
 
         let has_analysis = self
             .stock_modal
@@ -1157,9 +1160,7 @@ impl App {
         };
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
-        self.help_visible = false;
-        self.stock_modal.info_visible = false;
-        self.stock_modal.chart_visible = true;
+        self.overlay = Overlay::Chart;
         if let Some(t) = ticker.as_deref() {
             self.spawn_chart_data(t);
         }
@@ -1179,10 +1180,7 @@ impl App {
         let ticker = stock.ticker.clone();
         let spot = stock.price;
         self.stock_modal.stock = stock;
-        self.help_visible = false;
-        self.stock_modal.info_visible = false;
-        self.stock_modal.chart_visible = false;
-        self.stock_modal.options_visible = true;
+        self.overlay = Overlay::Options;
 
         let has_chain = self
             .stock_modal
@@ -1224,9 +1222,7 @@ impl App {
 
     /// Opens the keybinding help overlay, closing any stock modal so the two never stack.
     fn open_help_modal(&mut self) {
-        self.stock_modal.info_visible = false;
-        self.stock_modal.chart_visible = false;
-        self.help_visible = true;
+        self.overlay = Overlay::Help;
     }
 }
 
@@ -1279,8 +1275,7 @@ mod tests {
         assert!(!app.input_mode.is_focused());
         assert!(app.db_display.rows.is_empty());
         assert!(app.logs.is_empty());
-        assert!(!app.stock_modal.info_visible);
-        assert!(!app.stock_modal.chart_visible);
+        assert_eq!(app.overlay, Overlay::None);
         assert_eq!(app.db_display.sort_mode, SortMode::ById);
         assert_eq!(app.db_display.sort_order, SortOrder::Descending);
     }
@@ -1558,33 +1553,28 @@ mod tests {
 
         app.handle_command_key('x');
 
-        assert!(app.stock_modal.options_visible);
+        assert_eq!(app.overlay, Overlay::Options);
     }
 
     #[tokio::test]
-    async fn test_open_options_modal_clears_other_modals() {
+    async fn test_open_options_modal_replaces_other_overlay() {
         let mut app = app_with_three_stocks();
-        app.stock_modal.info_visible = true;
-        app.stock_modal.chart_visible = true;
-        app.help_visible = true;
+        app.overlay = Overlay::Help;
 
         app.open_options_modal();
 
-        assert!(app.stock_modal.options_visible);
-        assert!(!app.stock_modal.info_visible);
-        assert!(!app.stock_modal.chart_visible);
-        assert!(!app.help_visible);
+        assert_eq!(app.overlay, Overlay::Options);
     }
 
     #[tokio::test]
     async fn test_esc_closes_options_modal() {
         let mut app = app_with_three_stocks();
         app.handle_command_key('x');
-        assert!(app.stock_modal.options_visible);
+        assert_eq!(app.overlay, Overlay::Options);
 
         app.handle_key(KeyCode::Esc);
 
-        assert!(!app.stock_modal.options_visible);
+        assert_eq!(app.overlay, Overlay::None);
     }
 
     #[tokio::test]
@@ -1618,7 +1608,7 @@ mod tests {
     #[tokio::test]
     async fn test_cycle_expiry_advances_and_refetches() {
         let mut app = app_with_three_stocks();
-        app.stock_modal.options_visible = true;
+        app.overlay = Overlay::Options;
         app.stock_modal.option_chain = Some(chain_with_expirations("AAPL", 5));
 
         app.handle_command_key('l');
@@ -1630,7 +1620,7 @@ mod tests {
     #[tokio::test]
     async fn test_cycle_expiry_clamps_at_first() {
         let mut app = app_with_three_stocks();
-        app.stock_modal.options_visible = true;
+        app.overlay = Overlay::Options;
         app.stock_modal.option_chain = Some(chain_with_expirations("AAPL", 5));
 
         app.handle_command_key('h');
@@ -1642,7 +1632,7 @@ mod tests {
     #[tokio::test]
     async fn test_cycle_expiry_clamps_at_last() {
         let mut app = app_with_three_stocks();
-        app.stock_modal.options_visible = true;
+        app.overlay = Overlay::Options;
         app.stock_modal.selected_expiry = 4;
         app.stock_modal.option_chain = Some(chain_with_expirations("AAPL", 5));
 
@@ -2409,8 +2399,7 @@ mod tests {
     async fn test_question_mark_opens_help_modal() {
         let (mut app, _rx) = make_test_app();
         app.handle_key(KeyCode::Char('?'));
-        assert!(app.help_visible);
-        assert!(!app.stock_modal.info_visible);
+        assert_eq!(app.overlay, Overlay::Help);
     }
 
     #[tokio::test]
@@ -2418,15 +2407,14 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.handle_key(KeyCode::Char('?'));
         app.handle_key(KeyCode::Esc);
-        assert!(!app.help_visible);
+        assert_eq!(app.overlay, Overlay::None);
     }
 
     #[tokio::test]
     async fn test_s_opens_info_modal() {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('s'));
-        assert!(app.stock_modal.info_visible);
-        assert!(!app.help_visible);
+        assert_eq!(app.overlay, Overlay::Info);
     }
 
     #[tokio::test]
@@ -2434,18 +2422,16 @@ mod tests {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('?'));
         app.handle_key(KeyCode::Char('s'));
-        assert!(app.help_visible);
-        assert!(!app.stock_modal.info_visible);
+        assert_eq!(app.overlay, Overlay::Help);
     }
 
     #[tokio::test]
     async fn test_s_switches_from_chart_to_info() {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Enter);
-        assert!(app.stock_modal.chart_visible);
+        assert_eq!(app.overlay, Overlay::Chart);
         app.handle_key(KeyCode::Char('s'));
-        assert!(app.stock_modal.info_visible);
-        assert!(!app.stock_modal.chart_visible);
+        assert_eq!(app.overlay, Overlay::Info);
     }
 
     /// Builds a priced quote for movers/alert-proximity tests.
