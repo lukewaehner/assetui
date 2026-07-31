@@ -121,6 +121,44 @@ pub enum Overlay {
     Help,
 }
 
+/// The interaction mode reflected in the status bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusMode {
+    /// The help overlay is open.
+    Help,
+    /// The Manage page's inline entry line is being typed.
+    ManageInput,
+    /// The Manage page is focused with no inline entry active.
+    Manage,
+    /// The options-chain modal is open.
+    Options,
+    /// The info or chart modal is open.
+    View,
+    /// The fuzzy filter is focused for typing.
+    Search,
+    /// The ticker input box is focused.
+    Input,
+    /// A fuzzy filter is active but not focused.
+    Filter,
+    /// The default Market browsing mode.
+    Normal,
+}
+
+impl StatusMode {
+    /// The short chip label shown at the left of the status bar.
+    pub fn label(&self) -> &'static str {
+        match self {
+            StatusMode::Help => "HELP",
+            StatusMode::ManageInput | StatusMode::Manage => "MANAGE",
+            StatusMode::Options | StatusMode::View => "VIEW",
+            StatusMode::Search => "SEARCH",
+            StatusMode::Input => "INPUT",
+            StatusMode::Filter => "FILTER",
+            StatusMode::Normal => "NORMAL",
+        }
+    }
+}
+
 /// Which section of the Manage page currently holds the `j`/`k` cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ManageSection {
@@ -422,6 +460,40 @@ impl App {
         (blinked && self.input_mode.is_focused())
             || self.notifications.has_notification()
             || had_flashes
+    }
+
+    pub fn status_mode(&self) -> (StatusMode, &'static str) {
+        if self.overlay == Overlay::Help {
+            (StatusMode::Help, "esc close")
+        } else if self.manage_input.is_some() {
+            (
+                StatusMode::ManageInput,
+                "type entry · enter save · esc cancel",
+            )
+        } else if self.page == Page::Manage {
+            (
+                StatusMode::Manage,
+                "j/k move · a add · e edit · d delete · tab market · q quit",
+            )
+        } else if self.overlay == Overlay::Options {
+            (StatusMode::Options, "h/l expiry · esc close")
+        } else if self.overlay == Overlay::Info || self.overlay == Overlay::Chart {
+            (StatusMode::View, "s info · enter chart · esc close")
+        } else if self.input_mode.is_focused() && self.input_mode.is_fuzzy() {
+            (StatusMode::Search, "type to filter · enter apply · esc cancel")
+        } else if self.input_mode.is_focused() {
+            (StatusMode::Input, "type ticker · enter fetch · esc done")
+        } else if self.input_mode.is_fuzzy() {
+            (
+                StatusMode::Filter,
+                "j/k move · s info · enter chart · w ★ · / new search · esc clear · ? help",
+            )
+        } else {
+            (
+                StatusMode::Normal,
+                "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · q quit",
+            )
+        }
     }
 
     /// Appends a line to the log panel, dropping the oldest line once the [`MAX_LOG_LINES`] cap is reached.
@@ -1261,6 +1333,55 @@ mod tests {
         assert_eq!(app.overlay, Overlay::None);
         assert_eq!(app.db_display.sort_mode, SortMode::ById);
         assert_eq!(app.db_display.sort_order, SortOrder::Descending);
+    }
+
+    #[tokio::test]
+    async fn status_mode_is_normal_with_hint_for_default_market_state() {
+        // arrange
+        let (app, _rx) = make_test_app();
+
+        // act
+        let (mode, hint) = app.status_mode();
+
+        // assert
+        assert_eq!(
+            (mode, mode.label(), hint),
+            (
+                StatusMode::Normal,
+                "NORMAL",
+                "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · q quit"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mode_is_view_with_options_hint_when_options_overlay_open() {
+        // arrange
+        let (mut app, _rx) = make_test_app();
+        app.overlay = Overlay::Options;
+
+        // act
+        let (mode, hint) = app.status_mode();
+
+        // assert
+        assert_eq!(
+            (mode, mode.label(), hint),
+            (StatusMode::Options, "VIEW", "h/l expiry · esc close")
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mode_help_overlay_takes_precedence_over_manage_page() {
+        // arrange
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+        app.overlay = Overlay::Help;
+
+        // act
+        let (mode, hint) = app.status_mode();
+
+        // assert
+        assert_eq!((mode, mode.label(), hint), (StatusMode::Help, "HELP", "esc close"));
     }
 
     #[tokio::test]

@@ -516,33 +516,9 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         area,
     );
 
-    let (mode, hint) = if app.overlay == Overlay::Help {
-        ("HELP", "esc close")
-    } else if app.manage_input.is_some() {
-        ("MANAGE", "type entry · enter save · esc cancel")
-    } else if app.page == Page::Manage {
-        ("MANAGE", "j/k move · a add · e edit · d delete · tab market · q quit")
-    } else if app.overlay == Overlay::Options {
-        ("VIEW", "h/l expiry · esc close")
-    } else if app.overlay == Overlay::Info || app.overlay == Overlay::Chart {
-        ("VIEW", "s info · enter chart · esc close")
-    } else if app.input_mode.is_focused() && app.input_mode.is_fuzzy() {
-        ("SEARCH", "type to filter · enter apply · esc cancel")
-    } else if app.input_mode.is_focused() {
-        ("INPUT", "type ticker · enter fetch · esc done")
-    } else if app.input_mode.is_fuzzy() {
-        (
-            "FILTER",
-            "j/k move · s info · enter chart · w ★ · / new search · esc clear · ? help",
-        )
-    } else {
-        (
-            "NORMAL",
-            "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · q quit",
-        )
-    };
+    let (mode, hint) = app.status_mode();
 
-    let chip = format!(" {mode} ");
+    let chip = format!(" {} ", mode.label());
     let page = app.db_display.page + 1;
     let total_pages = app.db_display.total_pages();
     let count = if app.input_mode.is_fuzzy() {
