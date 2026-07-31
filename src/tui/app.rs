@@ -168,6 +168,24 @@ pub enum ManageSection {
     Alerts,
 }
 
+impl ManageSection {
+    /// Number of rows this section renders, read from its backing list.
+    fn item_count(&self, app: &App) -> usize {
+        match self {
+            ManageSection::Holdings => app.holdings.len(),
+            ManageSection::Alerts => app.alerts.len(),
+        }
+    }
+
+    /// The inline-input kind used when composing an entry for this section.
+    fn input_kind(&self) -> ManageInputKind {
+        match self {
+            ManageSection::Holdings => ManageInputKind::Holding,
+            ManageSection::Alerts => ManageInputKind::Alert,
+        }
+    }
+}
+
 /// Which kind of entry the Manage-page inline input is composing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManageInputKind {
@@ -657,7 +675,7 @@ impl App {
         match self.manage_section {
             ManageSection::Holdings => {
                 if delta > 0 {
-                    if self.manage_selected + 1 < self.holdings.len() {
+                    if self.manage_selected + 1 < self.manage_section.item_count(self) {
                         self.manage_selected += 1;
                     } else {
                         self.manage_section = ManageSection::Alerts;
@@ -669,14 +687,14 @@ impl App {
             }
             ManageSection::Alerts => {
                 if delta > 0 {
-                    if self.manage_selected + 1 < self.alerts.len() {
+                    if self.manage_selected + 1 < self.manage_section.item_count(self) {
                         self.manage_selected += 1;
                     }
                 } else if self.manage_selected > 0 {
                     self.manage_selected -= 1;
                 } else {
                     self.manage_section = ManageSection::Holdings;
-                    self.manage_selected = self.holdings.len().saturating_sub(1);
+                    self.manage_selected = ManageSection::Holdings.item_count(self).saturating_sub(1);
                 }
             }
         }
@@ -710,12 +728,8 @@ impl App {
 
     /// Opens an inline add line for the focused section (empty buffer).
     fn start_manage_add(&mut self) {
-        let kind = match self.manage_section {
-            ManageSection::Holdings => ManageInputKind::Holding,
-            ManageSection::Alerts => ManageInputKind::Alert,
-        };
         self.manage_input = Some(ManageInput {
-            kind,
+            kind: self.manage_section.input_kind(),
             buffer: String::new(),
         });
     }
@@ -729,7 +743,7 @@ impl App {
             return;
         };
         self.manage_input = Some(ManageInput {
-            kind: ManageInputKind::Holding,
+            kind: self.manage_section.input_kind(),
             buffer: format!("{} {} {}", h.ticker, h.shares, h.avg_cost),
         });
     }
@@ -782,7 +796,7 @@ impl App {
     fn delete_selected_manage(&mut self) {
         match self.manage_section {
             ManageSection::Holdings => {
-                if self.manage_selected < self.holdings.len() {
+                if self.manage_selected < self.manage_section.item_count(self) {
                     let removed = self.holdings.remove(self.manage_selected);
                     self.push_portfolio_toast(format!("Removed {}", removed.ticker));
                     self.spawn_remove_holding(removed.ticker);
@@ -790,7 +804,7 @@ impl App {
                 }
             }
             ManageSection::Alerts => {
-                if self.manage_selected < self.alerts.len() {
+                if self.manage_selected < self.manage_section.item_count(self) {
                     let removed = self.alerts.remove(self.manage_selected);
                     self.push_portfolio_toast(format!("Removed alert {}", removed.ticker));
                     self.spawn_remove_alert(removed.id);
@@ -802,10 +816,7 @@ impl App {
 
     /// Clamps `manage_selected` to the focused section's bounds after a removal.
     fn clamp_manage_selected(&mut self) {
-        let len = match self.manage_section {
-            ManageSection::Holdings => self.holdings.len(),
-            ManageSection::Alerts => self.alerts.len(),
-        };
+        let len = self.manage_section.item_count(self);
         if self.manage_selected >= len {
             self.manage_selected = len.saturating_sub(1);
         }
@@ -2301,6 +2312,25 @@ mod tests {
         app.handle_key(KeyCode::Char('k'));
         assert_eq!(app.manage_section, ManageSection::Holdings);
         assert_eq!(app.manage_selected, 1);
+    }
+
+    #[tokio::test]
+    async fn test_manage_section_item_count_reads_backing_list() {
+        // arrange
+        let (mut app, _rx) = make_test_app();
+        app.holdings = vec![holding_for("AAPL"), holding_for("TSLA")];
+        app.alerts = vec![alert_for(1, "NVDA")];
+
+        // act
+        assert_eq!(ManageSection::Holdings.item_count(&app), 2);
+        assert_eq!(ManageSection::Alerts.item_count(&app), 1);
+    }
+
+    #[test]
+    fn test_manage_section_input_kind_maps_each_section() {
+        // arrange
+        assert_eq!(ManageSection::Holdings.input_kind(), ManageInputKind::Holding);
+        assert_eq!(ManageSection::Alerts.input_kind(), ManageInputKind::Alert);
     }
 
     #[tokio::test]
