@@ -365,7 +365,7 @@ impl App {
                 .await
                 .unwrap_or_else(|e| {
                     let _ = tx.send(AppEvent::Error(format!(
-                        "Failed to add {ticker} to watchlist: {e}"
+                        "Failed to remove {ticker} from watchlist: {e}"
                     )));
                 });
         });
