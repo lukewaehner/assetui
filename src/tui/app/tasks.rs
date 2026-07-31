@@ -27,8 +27,8 @@ impl App {
     pub(crate) fn spawn_reload(&self) {
         let pool = self.services.pool.clone();
         let tx = self.services.event_tx.clone();
-        let mode = self.db_display.sort_mode;
-        let order = self.db_display.sort_order;
+        let mode = self.market.db_display.sort_mode;
+        let order = self.market.db_display.sort_order;
         tokio::spawn(async move {
             match fetch_sorted(&pool, mode, order, PAGE_FETCH_LIMIT).await {
                 Ok(rows) => {

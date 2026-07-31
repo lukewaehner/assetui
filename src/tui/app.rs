@@ -203,16 +203,31 @@ pub struct ManageInput {
     pub buffer: String,
 }
 
-/// Top-level application state.
-pub struct App {
+/// Market-page state: the ticker input box, the quotes table, and the log panel.
+pub struct MarketState {
     /// Ticker input box state (current text and whether the box is focused).
     pub input_mode: InputMode,
-    /// Set to `true` when the user presses `q`.
-    pub should_quit: bool,
     /// The quotes table and its associated sort/selection state.
     pub db_display: DbDisplay,
     /// Lines shown in the log panel (most recent at the bottom), capped at [`MAX_LOG_LINES`].
     pub logs: VecDeque<String>,
+}
+
+pub struct ManageState {
+    /// Which Manage-page section the `j`/`k` cursor is in.
+    pub section: ManageSection,
+    /// Selected row index within the focused Manage section.
+    pub selected: usize,
+    /// The Manage page's inline add/edit line, when active.
+    pub input: Option<ManageInput>,
+}
+
+/// Top-level application state.
+pub struct App {
+    /// Market-page state: input box, quotes table, and log panel.
+    pub market: MarketState,
+    /// Set to `true` when the user presses `q`.
+    pub should_quit: bool,
     /// Shared handles (pool, client, event channel) cloned into async tasks.
     pub services: Services,
     /// Transient animation state advanced by [`App::tick`].
@@ -236,12 +251,8 @@ pub struct App {
     pub holdings: Vec<Holding>,
     /// The top-level page currently displayed.
     pub page: Page,
-    /// Which Manage-page section the `j`/`k` cursor is in.
-    pub manage_section: ManageSection,
-    /// Selected row index within the focused Manage section.
-    pub manage_selected: usize,
-    /// The Manage page's inline add/edit line, when active.
-    pub manage_input: Option<ManageInput>,
+    /// Manage-page state: section focus, selected row, and inline add/edit line.
+    pub manage: ManageState,
     pub show_logs: bool,
 }
 
@@ -407,24 +418,26 @@ impl App {
     ) -> Self {
         let appearance = super::theme::detect_appearance();
         Self {
-            input_mode: InputMode {
-                input: String::new(),
-                activity: InputActivity::Idle,
+            market: MarketState {
+                input_mode: InputMode {
+                    input: String::new(),
+                    activity: InputActivity::Idle,
+                },
+                db_display: DbDisplay {
+                    rows: Vec::new(),
+                    all_rows: Vec::new(),
+                    status: String::from("Loading..."),
+                    table_state: TableState::default(),
+                    watchlist: HashSet::new(),
+                    watchlist_only: false,
+                    sort_mode: SortMode::ById,
+                    sort_order: SortOrder::Descending,
+                    page: 0,
+                    page_size: 25,
+                },
+                logs: VecDeque::new(),
             },
             should_quit: false,
-            db_display: DbDisplay {
-                rows: Vec::new(),
-                all_rows: Vec::new(),
-                status: String::from("Loading..."),
-                table_state: TableState::default(),
-                watchlist: HashSet::new(),
-                watchlist_only: false,
-                sort_mode: SortMode::ById,
-                sort_order: SortOrder::Descending,
-                page: 0,
-                page_size: 25,
-            },
-            logs: VecDeque::new(),
             services: Services {
                 pool,
                 client,
@@ -453,9 +466,11 @@ impl App {
             alerts: Vec::new(),
             holdings: Vec::new(),
             page: Page::Market,
-            manage_section: ManageSection::Holdings,
-            manage_selected: 0,
-            manage_input: None,
+            manage: ManageState {
+                section: ManageSection::Holdings,
+                selected: 0,
+                input: None,
+            },
             show_logs: false,
         }
     }
@@ -475,7 +490,7 @@ impl App {
             .row_flash_map
             .retain(|_, (_, ts)| ts.elapsed() < FLASH_TTL);
 
-        (blinked && self.input_mode.is_focused())
+        (blinked && self.market.input_mode.is_focused())
             || self.notifications.has_notification()
             || had_flashes
     }
@@ -483,7 +498,7 @@ impl App {
     pub fn status_mode(&self) -> (StatusMode, &'static str) {
         if self.overlay == Overlay::Help {
             (StatusMode::Help, "esc close")
-        } else if self.manage_input.is_some() {
+        } else if self.manage.input.is_some() {
             (
                 StatusMode::ManageInput,
                 "type entry · enter save · esc cancel",
@@ -497,11 +512,11 @@ impl App {
             (StatusMode::Options, "h/l expiry · esc close")
         } else if self.overlay == Overlay::Info || self.overlay == Overlay::Chart {
             (StatusMode::View, "s info · enter chart · esc close")
-        } else if self.input_mode.is_focused() && self.input_mode.is_fuzzy() {
+        } else if self.market.input_mode.is_focused() && self.market.input_mode.is_fuzzy() {
             (StatusMode::Search, "type to filter · enter apply · esc cancel")
-        } else if self.input_mode.is_focused() {
+        } else if self.market.input_mode.is_focused() {
             (StatusMode::Input, "type ticker · enter fetch · esc done")
-        } else if self.input_mode.is_fuzzy() {
+        } else if self.market.input_mode.is_fuzzy() {
             (
                 StatusMode::Filter,
                 "j/k move · s info · enter chart · w ★ · / new search · esc clear · ? help",
@@ -516,37 +531,37 @@ impl App {
 
     /// Appends a line to the log panel, dropping the oldest line once the [`MAX_LOG_LINES`] cap is reached.
     fn push_log(&mut self, line: String) {
-        if self.logs.len() >= MAX_LOG_LINES {
-            self.logs.pop_front();
+        if self.market.logs.len() >= MAX_LOG_LINES {
+            self.market.logs.pop_front();
         }
-        self.logs.push_back(line);
+        self.market.logs.push_back(line);
     }
 
     /// Applies an [`AppEvent`] to the application state.
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::PageLoaded(rows) => {
-                self.db_display.status = String::new();
-                self.db_display.all_rows = rows;
+                self.market.db_display.status = String::new();
+                self.market.db_display.all_rows = rows;
                 self.apply_filter();
                 self.resubscribe_stream();
             }
             AppEvent::FetchSpawned(symbol) => {
-                self.db_display.status = format!("fetching {symbol}…");
+                self.market.db_display.status = format!("fetching {symbol}…");
                 self.push_log(format!("[INFO] fetching {symbol}"));
             }
             AppEvent::FetchCompleted(record) => {
                 let name = record.ticker.as_deref().unwrap_or("?");
-                self.db_display.status = format!("stored {name}");
+                self.market.db_display.status = format!("stored {name}");
                 self.push_log(format!("[SUCCESS] stored {name}"));
-                self.db_display.all_rows.insert(0, record);
+                self.market.db_display.all_rows.insert(0, record);
                 self.apply_filter();
             }
             AppEvent::LogLine(line) => {
                 self.push_log(line);
             }
             AppEvent::WatchlistLoaded(tickers) => {
-                self.db_display.watchlist = tickers.into_iter().collect();
+                self.market.db_display.watchlist = tickers.into_iter().collect();
             }
             AppEvent::AlertsLoaded(alerts) => {
                 self.alerts = alerts;
@@ -577,10 +592,10 @@ impl App {
             }
             AppEvent::QuoteTick(tick) => {
                 self.materialize_held_ticker_row(&tick);
-                tick.apply(&mut self.db_display.all_rows, &mut HashMap::new());
-                let range = self.db_display.window_range();
+                tick.apply(&mut self.market.db_display.all_rows, &mut HashMap::new());
+                let range = self.market.db_display.window_range();
                 tick.apply(
-                    &mut self.db_display.rows[range],
+                    &mut self.market.db_display.rows[range],
                     &mut self.animations.row_flash_map,
                 );
                 self.evaluate_alerts(&tick);
@@ -613,7 +628,7 @@ impl App {
 
     /// Records an error in the status bar and log panel, and raises a slide-in notification.
     fn push_error(&mut self, e: String) {
-        self.db_display.status = format!("Error: {e}");
+        self.market.db_display.status = format!("Error: {e}");
         self.push_toast(Level::Error, "Error", "ERROR", e);
     }
 
@@ -653,7 +668,7 @@ impl App {
 
     /// Routes a raw terminal key press, dispatching by the current page.
     pub fn handle_key(&mut self, code: KeyCode) {
-        if matches!(code, KeyCode::Tab | KeyCode::BackTab) && self.manage_input.is_none() {
+        if matches!(code, KeyCode::Tab | KeyCode::BackTab) && self.manage.input.is_none() {
             self.cycle_page();
             return;
         }
@@ -672,43 +687,43 @@ impl App {
     }
 
     fn manage_move(&mut self, delta: isize) {
-        match self.manage_section {
+        match self.manage.section {
             ManageSection::Holdings => {
                 if delta > 0 {
-                    if self.manage_selected + 1 < self.manage_section.item_count(self) {
-                        self.manage_selected += 1;
+                    if self.manage.selected + 1 < self.manage.section.item_count(self) {
+                        self.manage.selected += 1;
                     } else {
-                        self.manage_section = ManageSection::Alerts;
-                        self.manage_selected = 0;
+                        self.manage.section = ManageSection::Alerts;
+                        self.manage.selected = 0;
                     }
-                } else if self.manage_selected > 0 {
-                    self.manage_selected -= 1;
+                } else if self.manage.selected > 0 {
+                    self.manage.selected -= 1;
                 }
             }
             ManageSection::Alerts => {
                 if delta > 0 {
-                    if self.manage_selected + 1 < self.manage_section.item_count(self) {
-                        self.manage_selected += 1;
+                    if self.manage.selected + 1 < self.manage.section.item_count(self) {
+                        self.manage.selected += 1;
                     }
-                } else if self.manage_selected > 0 {
-                    self.manage_selected -= 1;
+                } else if self.manage.selected > 0 {
+                    self.manage.selected -= 1;
                 } else {
-                    self.manage_section = ManageSection::Holdings;
-                    self.manage_selected = ManageSection::Holdings.item_count(self).saturating_sub(1);
+                    self.manage.section = ManageSection::Holdings;
+                    self.manage.selected = ManageSection::Holdings.item_count(self).saturating_sub(1);
                 }
             }
         }
     }
 
     fn handle_manage_key(&mut self, code: KeyCode) {
-        if let Some(input) = self.manage_input.as_mut() {
+        if let Some(input) = self.manage.input.as_mut() {
             match code {
                 KeyCode::Char(c) => input.buffer.push(c),
                 KeyCode::Backspace => {
                     input.buffer.pop();
                 }
                 KeyCode::Enter => self.submit_manage_input(),
-                KeyCode::Esc => self.manage_input = None,
+                KeyCode::Esc => self.manage.input = None,
                 _ => {}
             }
             return;
@@ -728,34 +743,34 @@ impl App {
 
     /// Opens an inline add line for the focused section (empty buffer).
     fn start_manage_add(&mut self) {
-        self.manage_input = Some(ManageInput {
-            kind: self.manage_section.input_kind(),
+        self.manage.input = Some(ManageInput {
+            kind: self.manage.section.input_kind(),
             buffer: String::new(),
         });
     }
 
     /// Opens an inline edit line pre-filled from the selected holding (`TICKER SHARES COST`).
     fn start_manage_edit(&mut self) {
-        if self.manage_section != ManageSection::Holdings {
+        if self.manage.section != ManageSection::Holdings {
             return;
         }
-        let Some(h) = self.holdings.get(self.manage_selected) else {
+        let Some(h) = self.holdings.get(self.manage.selected) else {
             return;
         };
-        self.manage_input = Some(ManageInput {
-            kind: self.manage_section.input_kind(),
+        self.manage.input = Some(ManageInput {
+            kind: self.manage.section.input_kind(),
             buffer: format!("{} {} {}", h.ticker, h.shares, h.avg_cost),
         });
     }
 
     /// Cancels any active inline entry.
     fn cancel_manage_input(&mut self) {
-        self.manage_input = None;
+        self.manage.input = None;
     }
 
     /// Parses and applies the inline entry.
     fn submit_manage_input(&mut self) {
-        let Some(input) = self.manage_input.as_ref() else {
+        let Some(input) = self.manage.input.as_ref() else {
             return;
         };
         match input.kind {
@@ -794,18 +809,18 @@ impl App {
     }
 
     fn delete_selected_manage(&mut self) {
-        match self.manage_section {
+        match self.manage.section {
             ManageSection::Holdings => {
-                if self.manage_selected < self.manage_section.item_count(self) {
-                    let removed = self.holdings.remove(self.manage_selected);
+                if self.manage.selected < self.manage.section.item_count(self) {
+                    let removed = self.holdings.remove(self.manage.selected);
                     self.push_portfolio_toast(format!("Removed {}", removed.ticker));
                     self.spawn_remove_holding(removed.ticker);
                     self.clamp_manage_selected();
                 }
             }
             ManageSection::Alerts => {
-                if self.manage_selected < self.manage_section.item_count(self) {
-                    let removed = self.alerts.remove(self.manage_selected);
+                if self.manage.selected < self.manage.section.item_count(self) {
+                    let removed = self.alerts.remove(self.manage.selected);
                     self.push_portfolio_toast(format!("Removed alert {}", removed.ticker));
                     self.spawn_remove_alert(removed.id);
                     self.clamp_manage_selected();
@@ -816,9 +831,9 @@ impl App {
 
     /// Clamps `manage_selected` to the focused section's bounds after a removal.
     fn clamp_manage_selected(&mut self) {
-        let len = self.manage_section.item_count(self);
-        if self.manage_selected >= len {
-            self.manage_selected = len.saturating_sub(1);
+        let len = self.manage.section.item_count(self);
+        if self.manage.selected >= len {
+            self.manage.selected = len.saturating_sub(1);
         }
     }
 
@@ -827,27 +842,27 @@ impl App {
             KeyCode::Esc => {
                 if self.overlay != Overlay::None {
                     self.overlay = Overlay::None;
-                } else if self.input_mode.is_fuzzy() {
+                } else if self.market.input_mode.is_fuzzy() {
                     self.cancel_fuzzy_search();
                 } else {
-                    self.input_mode.activity = InputActivity::Idle;
+                    self.market.input_mode.activity = InputActivity::Idle;
                 }
             }
-            KeyCode::Char(c) if self.input_mode.is_focused() => {
-                self.input_mode.input.push(c);
-                if self.input_mode.is_fuzzy() {
+            KeyCode::Char(c) if self.market.input_mode.is_focused() => {
+                self.market.input_mode.input.push(c);
+                if self.market.input_mode.is_fuzzy() {
                     self.apply_filter();
                 }
             }
             KeyCode::Char(c) => self.handle_command_key(c),
-            KeyCode::Backspace if self.input_mode.is_focused() => {
-                self.input_mode.input.pop();
-                if self.input_mode.is_fuzzy() {
+            KeyCode::Backspace if self.market.input_mode.is_focused() => {
+                self.market.input_mode.input.pop();
+                if self.market.input_mode.is_fuzzy() {
                     self.apply_filter();
                 }
             }
-            KeyCode::Enter if self.input_mode.is_focused() => {
-                if self.input_mode.is_fuzzy() {
+            KeyCode::Enter if self.market.input_mode.is_focused() => {
+                if self.market.input_mode.is_fuzzy() {
                     self.accept_fuzzy_search();
                 } else {
                     self.submit_input();
@@ -891,18 +906,18 @@ impl App {
             'x' => self.open_options_modal(),
             'L' => self.show_logs = !self.show_logs,
             'W' => {
-                self.db_display.watchlist_only = !self.db_display.watchlist_only;
+                self.market.db_display.watchlist_only = !self.market.db_display.watchlist_only;
                 self.apply_filter();
                 self.resubscribe_stream();
             }
             'i' => {
-                if self.input_mode.is_focused() {
-                    self.input_mode.activity = InputActivity::Idle;
+                if self.market.input_mode.is_focused() {
+                    self.market.input_mode.activity = InputActivity::Idle;
                 } else {
-                    if self.input_mode.is_fuzzy() {
+                    if self.market.input_mode.is_fuzzy() {
                         self.cancel_fuzzy_search();
                     }
-                    self.input_mode.activity = InputActivity::Ticker;
+                    self.market.input_mode.activity = InputActivity::Ticker;
                 }
             }
             '/' => self.start_fuzzy_search(),
@@ -915,8 +930,8 @@ impl App {
     }
 
     fn submit_input(&mut self) {
-        let symbols = parse_tickers(&self.input_mode.input);
-        self.input_mode.input.clear();
+        let symbols = parse_tickers(&self.market.input_mode.input);
+        self.market.input_mode.input.clear();
         for symbol in symbols {
             self.spawn_fetch(symbol, FetchOrigin::UserRequest);
         }
@@ -936,7 +951,7 @@ impl App {
 
     /// Whether `all_rows` holds a priced quote for `ticker` (case-insensitive).
     fn has_priced_row(&self, ticker: &str) -> bool {
-        self.db_display.all_rows.iter().any(|r| {
+        self.market.db_display.all_rows.iter().any(|r| {
             r.ticker
                 .as_deref()
                 .is_some_and(|t| t.eq_ignore_ascii_case(ticker))
@@ -958,7 +973,7 @@ impl App {
 
     /// The full symbol set the live stream must cover: the visible quotes window plus every held ticker.
     fn stream_symbols(&self) -> Vec<String> {
-        let mut syms = self.db_display.window_tickers();
+        let mut syms = self.market.db_display.window_tickers();
         syms.extend(self.held_tickers());
         syms.sort();
         syms.dedup();
@@ -987,7 +1002,7 @@ impl App {
             .holdings
             .iter()
             .any(|h| h.ticker.eq_ignore_ascii_case(ticker));
-        let already_present = self.db_display.all_rows.iter().any(|r| {
+        let already_present = self.market.db_display.all_rows.iter().any(|r| {
             r.ticker
                 .as_deref()
                 .is_some_and(|t| t.eq_ignore_ascii_case(ticker))
@@ -995,7 +1010,7 @@ impl App {
         if !held || already_present {
             return;
         }
-        self.db_display.all_rows.push(QuoteRecord {
+        self.market.db_display.all_rows.push(QuoteRecord {
             ticker: Some(ticker.to_ascii_uppercase()),
             ..Default::default()
         });
@@ -1008,8 +1023,8 @@ impl App {
     }
 
     fn selected_ticker(&self) -> Option<String> {
-        let selected_idx = self.db_display.table_state.selected()?;
-        let window = self.db_display.window();
+        let selected_idx = self.market.db_display.table_state.selected()?;
+        let window = self.market.db_display.window();
         window.get(selected_idx).and_then(|row| row.ticker.clone())
     }
 
@@ -1018,14 +1033,14 @@ impl App {
             return;
         };
 
-        if self.db_display.watchlist.remove(&ticker) {
+        if self.market.db_display.watchlist.remove(&ticker) {
             self.spawn_remove_from_watchlist(ticker);
         } else {
-            self.db_display.watchlist.insert(ticker.clone());
+            self.market.db_display.watchlist.insert(ticker.clone());
             self.spawn_save_to_watchlist(ticker);
         }
 
-        if self.db_display.watchlist_only {
+        if self.market.db_display.watchlist_only {
             self.apply_filter();
             self.resubscribe_stream();
         }
@@ -1034,31 +1049,31 @@ impl App {
     /// Sets the sort column and re-fetches the table.
     fn set_sort_mode(&mut self, mode: SortMode) {
         self.push_log(format!("[SORT] mode → {mode:?}"));
-        self.db_display.sort_mode = mode;
+        self.market.db_display.sort_mode = mode;
         self.spawn_reload();
     }
 
     /// Flips the sort direction and re-fetches the table.
     fn toggle_sort_order(&mut self) {
-        let order = match self.db_display.sort_order {
+        let order = match self.market.db_display.sort_order {
             SortOrder::Ascending => SortOrder::Descending,
             SortOrder::Descending => SortOrder::Ascending,
         };
         self.push_log(format!("[SORT] order → {order:?}"));
-        self.db_display.sort_order = order;
+        self.market.db_display.sort_order = order;
         self.spawn_reload();
     }
 
     /// Moves to the next (`delta > 0`) or previous page, clamped to the valid page range.
     fn paginate(&mut self, delta: i32) {
-        let total = self.db_display.total_pages();
+        let total = self.market.db_display.total_pages();
         let new_page = if delta > 0 {
-            (self.db_display.page + 1).min(total.saturating_sub(1))
+            (self.market.db_display.page + 1).min(total.saturating_sub(1))
         } else {
-            self.db_display.page.saturating_sub(1)
+            self.market.db_display.page.saturating_sub(1)
         };
-        if new_page != self.db_display.page {
-            self.db_display.page = new_page;
+        if new_page != self.market.db_display.page {
+            self.market.db_display.page = new_page;
             self.reset_selection();
             self.resubscribe_stream();
         }
@@ -1066,12 +1081,12 @@ impl App {
 
     /// Moves the table selection by `delta`, wrapping at the ends of the current page.
     fn move_selection(&mut self, delta: i32) {
-        let len = self.db_display.window_len();
+        let len = self.market.db_display.window_len();
         if len == 0 {
             return;
         }
         let i = self
-            .db_display
+            .market.db_display
             .table_state
             .selected()
             .map(|i| {
@@ -1084,93 +1099,93 @@ impl App {
                 }
             })
             .unwrap_or(0);
-        self.db_display.table_state.select(Some(i));
+        self.market.db_display.table_state.select(Some(i));
     }
 
     fn start_fuzzy_search(&mut self) {
-        self.input_mode.activity = InputActivity::Fuzzy;
-        self.input_mode.input.clear();
+        self.market.input_mode.activity = InputActivity::Fuzzy;
+        self.market.input_mode.input.clear();
         self.apply_filter();
     }
 
     fn accept_fuzzy_search(&mut self) {
-        if self.input_mode.input.trim().is_empty() {
+        if self.market.input_mode.input.trim().is_empty() {
             self.cancel_fuzzy_search();
             return;
         }
-        self.input_mode.activity = InputActivity::FuzzyApplied;
+        self.market.input_mode.activity = InputActivity::FuzzyApplied;
         self.resubscribe_stream();
     }
 
     /// Cancels fuzzy search (Esc): clears the query and restores the full table.
     fn cancel_fuzzy_search(&mut self) {
-        self.input_mode.activity = InputActivity::Idle;
-        self.input_mode.input.clear();
+        self.market.input_mode.activity = InputActivity::Idle;
+        self.market.input_mode.input.clear();
         self.apply_filter();
         self.resubscribe_stream();
     }
 
     fn apply_filter(&mut self) {
-        let query = &self.input_mode.input;
-        let mut rows: Vec<QuoteRecord> = if self.input_mode.is_fuzzy() {
-            self.db_display
+        let query = &self.market.input_mode.input;
+        let mut rows: Vec<QuoteRecord> = if self.market.input_mode.is_fuzzy() {
+            self.market.db_display
                 .all_rows
                 .iter()
                 .filter(|r| r.matches_query(query))
                 .cloned()
                 .collect()
         } else {
-            self.db_display.all_rows.clone()
+            self.market.db_display.all_rows.clone()
         };
-        if self.db_display.watchlist_only {
-            rows.retain(|r| self.db_display.on_watchlist(r));
+        if self.market.db_display.watchlist_only {
+            rows.retain(|r| self.market.db_display.on_watchlist(r));
         }
-        self.db_display.rows = rows;
-        self.db_display.page = 0;
+        self.market.db_display.rows = rows;
+        self.market.db_display.page = 0;
         self.reset_selection();
     }
 
     pub fn set_page_size(&mut self, size: usize) {
         let size = size.max(1);
-        if self.db_display.page_size == size {
+        if self.market.db_display.page_size == size {
             return;
         }
         let global_idx = self
-            .db_display
+            .market.db_display
             .table_state
             .selected()
-            .map(|i| self.db_display.page * self.db_display.page_size + i);
+            .map(|i| self.market.db_display.page * self.market.db_display.page_size + i);
 
-        self.db_display.page_size = size;
+        self.market.db_display.page_size = size;
 
         let target_page = global_idx.map(|gi| gi / size).unwrap_or(0);
-        self.db_display.page = target_page.min(self.db_display.total_pages().saturating_sub(1));
+        self.market.db_display.page = target_page.min(self.market.db_display.total_pages().saturating_sub(1));
 
-        let win_len = self.db_display.window_len();
+        let win_len = self.market.db_display.window_len();
         if win_len == 0 {
-            self.db_display.table_state.select(None);
+            self.market.db_display.table_state.select(None);
         } else {
             let local = global_idx.map(|gi| gi % size).unwrap_or(0).min(win_len - 1);
-            self.db_display.table_state.select(Some(local));
+            self.market.db_display.table_state.select(Some(local));
         }
         self.resubscribe_stream();
     }
 
     /// Selects row 0 in the current window, or clears selection if empty.
     fn reset_selection(&mut self) {
-        if self.db_display.window_len() == 0 {
-            self.db_display.table_state.select(None);
+        if self.market.db_display.window_len() == 0 {
+            self.market.db_display.table_state.select(None);
         } else {
-            self.db_display.table_state.select(Some(0));
+            self.market.db_display.table_state.select(Some(0));
         }
     }
 
     fn open_info_modal(&mut self) {
         let Some(stock) = self
-            .db_display
+            .market.db_display
             .table_state
             .selected()
-            .and_then(|i| self.db_display.window().get(i))
+            .and_then(|i| self.market.db_display.window().get(i))
             .cloned()
         else {
             return;
@@ -1215,10 +1230,10 @@ impl App {
 
     fn open_chart_modal(&mut self) {
         let Some(stock) = self
-            .db_display
+            .market.db_display
             .table_state
             .selected()
-            .and_then(|i| self.db_display.window().get(i))
+            .and_then(|i| self.market.db_display.window().get(i))
             .cloned()
         else {
             return;
@@ -1234,10 +1249,10 @@ impl App {
     /// Opens the options-chain modal for the selected row and starts fetching its chain in the background.
     fn open_options_modal(&mut self) {
         let Some(stock) = self
-            .db_display
+            .market.db_display
             .table_state
             .selected()
-            .and_then(|i| self.db_display.window().get(i))
+            .and_then(|i| self.market.db_display.window().get(i))
             .cloned()
         else {
             return;
@@ -1338,12 +1353,12 @@ mod tests {
     async fn test_app_new_default_state() {
         let (app, _rx) = make_test_app();
         assert!(!app.should_quit);
-        assert!(!app.input_mode.is_focused());
-        assert!(app.db_display.rows.is_empty());
-        assert!(app.logs.is_empty());
+        assert!(!app.market.input_mode.is_focused());
+        assert!(app.market.db_display.rows.is_empty());
+        assert!(app.market.logs.is_empty());
         assert_eq!(app.overlay, Overlay::None);
-        assert_eq!(app.db_display.sort_mode, SortMode::ById);
-        assert_eq!(app.db_display.sort_order, SortOrder::Descending);
+        assert_eq!(app.market.db_display.sort_mode, SortMode::ById);
+        assert_eq!(app.market.db_display.sort_order, SortOrder::Descending);
     }
 
     #[tokio::test]
@@ -1399,17 +1414,17 @@ mod tests {
     async fn test_handle_event_page_loaded() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(vec![QuoteRecord::default()]));
-        assert_eq!(app.db_display.rows.len(), 1);
-        assert!(app.db_display.status.is_empty());
-        assert_eq!(app.db_display.table_state.selected(), Some(0));
+        assert_eq!(app.market.db_display.rows.len(), 1);
+        assert!(app.market.db_display.status.is_empty());
+        assert_eq!(app.market.db_display.table_state.selected(), Some(0));
     }
 
     #[tokio::test]
     async fn test_handle_event_fetch_spawned() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::FetchSpawned("AAPL".to_string()));
-        assert!(app.db_display.status.contains("AAPL"));
-        assert_eq!(app.logs.len(), 1);
+        assert!(app.market.db_display.status.contains("AAPL"));
+        assert_eq!(app.market.logs.len(), 1);
     }
 
     #[tokio::test]
@@ -1420,24 +1435,24 @@ mod tests {
             ..Default::default()
         };
         app.handle_event(AppEvent::FetchCompleted(record));
-        assert_eq!(app.db_display.rows.len(), 1);
-        assert_eq!(app.logs.len(), 1);
-        assert!(app.logs[0].contains("AAPL"));
+        assert_eq!(app.market.db_display.rows.len(), 1);
+        assert_eq!(app.market.logs.len(), 1);
+        assert!(app.market.logs[0].contains("AAPL"));
     }
 
     #[tokio::test]
     async fn test_handle_event_log_line() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::LogLine("hello".to_string()));
-        assert_eq!(app.logs.back(), Some(&"hello".to_string()));
+        assert_eq!(app.market.logs.back(), Some(&"hello".to_string()));
     }
 
     #[tokio::test]
     async fn test_handle_event_error() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::Error("oops".to_string()));
-        assert!(app.db_display.status.contains("oops"));
-        assert!(app.logs.iter().any(|l| l.contains("oops")));
+        assert!(app.market.db_display.status.contains("oops"));
+        assert!(app.market.logs.iter().any(|l| l.contains("oops")));
     }
 
     fn analysis_for(ticker: &str) -> QuoteRecordAnalysis {
@@ -1768,60 +1783,60 @@ mod tests {
     async fn test_command_key_i_toggles_input() {
         let (mut app, _rx) = make_test_app();
         app.handle_command_key('i');
-        assert!(app.input_mode.is_focused());
+        assert!(app.market.input_mode.is_focused());
         app.handle_command_key('i');
-        assert!(!app.input_mode.is_focused());
+        assert!(!app.market.input_mode.is_focused());
     }
 
     #[tokio::test]
     async fn test_command_key_navigation_j_wraps() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(n_records(3)));
-        assert_eq!(app.db_display.table_state.selected(), Some(0));
+        assert_eq!(app.market.db_display.table_state.selected(), Some(0));
         app.handle_command_key('j');
-        assert_eq!(app.db_display.table_state.selected(), Some(1));
+        assert_eq!(app.market.db_display.table_state.selected(), Some(1));
         app.handle_command_key('j');
-        assert_eq!(app.db_display.table_state.selected(), Some(2));
+        assert_eq!(app.market.db_display.table_state.selected(), Some(2));
         app.handle_command_key('j');
-        assert_eq!(app.db_display.table_state.selected(), Some(0));
+        assert_eq!(app.market.db_display.table_state.selected(), Some(0));
     }
 
     #[tokio::test]
     async fn test_command_key_navigation_k_wraps() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(n_records(3)));
-        assert_eq!(app.db_display.table_state.selected(), Some(0));
+        assert_eq!(app.market.db_display.table_state.selected(), Some(0));
         app.handle_command_key('k');
-        assert_eq!(app.db_display.table_state.selected(), Some(2));
+        assert_eq!(app.market.db_display.table_state.selected(), Some(2));
     }
 
     #[tokio::test]
     async fn test_command_key_o_toggles_sort_order() {
         let (mut app, _rx) = make_test_app();
-        assert_eq!(app.db_display.sort_order, SortOrder::Descending);
+        assert_eq!(app.market.db_display.sort_order, SortOrder::Descending);
         app.handle_command_key('o');
-        assert_eq!(app.db_display.sort_order, SortOrder::Ascending);
+        assert_eq!(app.market.db_display.sort_order, SortOrder::Ascending);
         app.handle_command_key('o');
-        assert_eq!(app.db_display.sort_order, SortOrder::Descending);
+        assert_eq!(app.market.db_display.sort_order, SortOrder::Descending);
     }
 
     #[tokio::test]
     async fn test_command_key_sort_by_price() {
         let (mut app, _rx) = make_test_app();
-        assert_eq!(app.db_display.sort_mode, SortMode::ById);
+        assert_eq!(app.market.db_display.sort_mode, SortMode::ById);
         app.handle_command_key('p');
-        assert_eq!(app.db_display.sort_mode, SortMode::ByPrice);
+        assert_eq!(app.market.db_display.sort_mode, SortMode::ByPrice);
     }
 
     #[tokio::test]
     async fn test_window_follows_page() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(n_records(30)));
-        assert_eq!(app.db_display.total_pages(), 2);
-        assert_eq!(app.db_display.window_len(), 25);
+        assert_eq!(app.market.db_display.total_pages(), 2);
+        assert_eq!(app.market.db_display.window_len(), 25);
         app.handle_command_key('l');
-        assert_eq!(app.db_display.page, 1);
-        assert_eq!(app.db_display.window_len(), 5);
+        assert_eq!(app.market.db_display.page, 1);
+        assert_eq!(app.market.db_display.window_len(), 5);
     }
 
     #[tokio::test]
@@ -1829,24 +1844,24 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(n_records(30)));
         app.handle_command_key('h');
-        assert_eq!(app.db_display.page, 0);
+        assert_eq!(app.market.db_display.page, 0);
         app.handle_command_key('l');
         app.handle_command_key('l');
-        assert_eq!(app.db_display.page, 1);
+        assert_eq!(app.market.db_display.page, 1);
     }
 
     #[tokio::test]
     async fn test_fuzzy_search_filters_live() {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('/'));
-        assert!(app.input_mode.is_focused() && app.input_mode.is_fuzzy());
-        assert_eq!(app.db_display.rows.len(), 3, "empty query shows all");
+        assert!(app.market.input_mode.is_focused() && app.market.input_mode.is_fuzzy());
+        assert_eq!(app.market.db_display.rows.len(), 3, "empty query shows all");
 
         type_str(&mut app, "apl");
-        assert_eq!(app.db_display.rows.len(), 1);
-        assert_eq!(app.db_display.rows[0].ticker.as_deref(), Some("AAPL"));
-        assert_eq!(app.db_display.all_rows.len(), 3, "master list untouched");
-        assert_eq!(app.db_display.table_state.selected(), Some(0));
+        assert_eq!(app.market.db_display.rows.len(), 1);
+        assert_eq!(app.market.db_display.rows[0].ticker.as_deref(), Some("AAPL"));
+        assert_eq!(app.market.db_display.all_rows.len(), 3, "master list untouched");
+        assert_eq!(app.market.db_display.table_state.selected(), Some(0));
     }
 
     #[tokio::test]
@@ -1854,12 +1869,12 @@ mod tests {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('/'));
         type_str(&mut app, "tsla");
-        assert_eq!(app.db_display.rows.len(), 1);
+        assert_eq!(app.market.db_display.rows.len(), 1);
         app.handle_key(KeyCode::Backspace);
         app.handle_key(KeyCode::Backspace);
         app.handle_key(KeyCode::Backspace);
         app.handle_key(KeyCode::Backspace);
-        assert_eq!(app.db_display.rows.len(), 3, "empty query shows all");
+        assert_eq!(app.market.db_display.rows.len(), 3, "empty query shows all");
     }
 
     #[tokio::test]
@@ -1867,15 +1882,15 @@ mod tests {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('/'));
         type_str(&mut app, "inc");
-        assert_eq!(app.db_display.rows.len(), 2, "Apple Inc. + Tesla Inc.");
+        assert_eq!(app.market.db_display.rows.len(), 2, "Apple Inc. + Tesla Inc.");
 
         app.handle_key(KeyCode::Enter);
-        assert!(!app.input_mode.is_focused(), "input box loses focus");
-        assert!(app.input_mode.is_fuzzy(), "filter stays active");
-        assert_eq!(app.db_display.rows.len(), 2);
+        assert!(!app.market.input_mode.is_focused(), "input box loses focus");
+        assert!(app.market.input_mode.is_fuzzy(), "filter stays active");
+        assert_eq!(app.market.db_display.rows.len(), 2);
 
         app.handle_key(KeyCode::Char('j'));
-        assert_eq!(app.db_display.table_state.selected(), Some(1));
+        assert_eq!(app.market.db_display.table_state.selected(), Some(1));
     }
 
     #[tokio::test]
@@ -1883,18 +1898,18 @@ mod tests {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('/'));
         type_str(&mut app, "aapl");
-        assert_eq!(app.db_display.rows.len(), 1);
+        assert_eq!(app.market.db_display.rows.len(), 1);
         app.handle_key(KeyCode::Esc);
-        assert!(!app.input_mode.is_fuzzy());
-        assert!(app.input_mode.input.is_empty());
-        assert_eq!(app.db_display.rows.len(), 3);
+        assert!(!app.market.input_mode.is_fuzzy());
+        assert!(app.market.input_mode.input.is_empty());
+        assert_eq!(app.market.db_display.rows.len(), 3);
 
         app.handle_key(KeyCode::Char('/'));
         type_str(&mut app, "aapl");
         app.handle_key(KeyCode::Enter);
         app.handle_key(KeyCode::Esc);
-        assert!(!app.input_mode.is_fuzzy());
-        assert_eq!(app.db_display.rows.len(), 3);
+        assert!(!app.market.input_mode.is_fuzzy());
+        assert_eq!(app.market.db_display.rows.len(), 3);
     }
 
     #[tokio::test]
@@ -1902,9 +1917,9 @@ mod tests {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('/'));
         app.handle_key(KeyCode::Enter);
-        assert!(!app.input_mode.is_fuzzy());
-        assert!(!app.input_mode.is_focused());
-        assert_eq!(app.db_display.rows.len(), 3);
+        assert!(!app.market.input_mode.is_fuzzy());
+        assert!(!app.market.input_mode.is_focused());
+        assert_eq!(app.market.db_display.rows.len(), 3);
     }
 
     #[tokio::test]
@@ -1915,10 +1930,10 @@ mod tests {
         app.handle_key(KeyCode::Enter);
 
         app.handle_key(KeyCode::Char('i'));
-        assert!(app.input_mode.is_focused(), "input box focused for a fetch");
-        assert!(!app.input_mode.is_fuzzy());
-        assert!(app.input_mode.input.is_empty());
-        assert_eq!(app.db_display.rows.len(), 3, "filter cleared");
+        assert!(app.market.input_mode.is_focused(), "input box focused for a fetch");
+        assert!(!app.market.input_mode.is_fuzzy());
+        assert!(app.market.input_mode.input.is_empty());
+        assert_eq!(app.market.db_display.rows.len(), 3, "filter cleared");
     }
 
     #[tokio::test]
@@ -1932,9 +1947,9 @@ mod tests {
             named("AAPL", "Apple Inc."),
             named("TSLA", "Tesla Inc."),
         ]));
-        assert_eq!(app.db_display.all_rows.len(), 2);
-        assert_eq!(app.db_display.rows.len(), 1, "filter survives the reload");
-        assert_eq!(app.db_display.rows[0].ticker.as_deref(), Some("AAPL"));
+        assert_eq!(app.market.db_display.all_rows.len(), 2);
+        assert_eq!(app.market.db_display.rows.len(), 1, "filter survives the reload");
+        assert_eq!(app.market.db_display.rows[0].ticker.as_deref(), Some("AAPL"));
     }
 
     #[tokio::test]
@@ -1943,7 +1958,7 @@ mod tests {
         app.handle_key(KeyCode::Char('/'));
         type_str(&mut app, "aapl");
         app.handle_key(KeyCode::Enter);
-        assert_eq!(app.db_display.rows.len(), 1, "TSLA is hidden");
+        assert_eq!(app.market.db_display.rows.len(), 1, "TSLA is hidden");
 
         app.handle_event(AppEvent::QuoteTick(QuoteTick {
             ticker: Some("TSLA".to_string()),
@@ -1955,7 +1970,7 @@ mod tests {
 
         app.handle_key(KeyCode::Esc);
         let tsla = app
-            .db_display
+            .market.db_display
             .rows
             .iter()
             .find(|r| r.ticker.as_deref() == Some("TSLA"))
@@ -1966,8 +1981,8 @@ mod tests {
     #[tokio::test]
     async fn test_app_new_starts_with_empty_watchlist() {
         let (app, _rx) = make_test_app();
-        assert!(app.db_display.watchlist.is_empty());
-        assert!(!app.db_display.watchlist_only);
+        assert!(app.market.db_display.watchlist.is_empty());
+        assert!(!app.market.db_display.watchlist_only);
     }
 
     #[tokio::test]
@@ -1977,9 +1992,9 @@ mod tests {
             "AAPL".to_string(),
             "TSLA".to_string(),
         ]));
-        assert_eq!(app.db_display.watchlist.len(), 2);
-        assert!(app.db_display.watchlist.contains("AAPL"));
-        assert!(app.db_display.watchlist.contains("TSLA"));
+        assert_eq!(app.market.db_display.watchlist.len(), 2);
+        assert!(app.market.db_display.watchlist.contains("AAPL"));
+        assert!(app.market.db_display.watchlist.contains("TSLA"));
     }
 
     /// The set collapses duplicate tickers coming back from the db.
@@ -1990,8 +2005,8 @@ mod tests {
             "AAPL".to_string(),
             "AAPL".to_string(),
         ]));
-        assert_eq!(app.db_display.watchlist.len(), 1);
-        assert!(app.db_display.watchlist.contains("AAPL"));
+        assert_eq!(app.market.db_display.watchlist.len(), 1);
+        assert!(app.market.db_display.watchlist.contains("AAPL"));
     }
 
     #[tokio::test]
@@ -1999,9 +2014,9 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
         app.handle_event(AppEvent::WatchlistLoaded(vec!["TSLA".to_string()]));
-        assert_eq!(app.db_display.watchlist.len(), 1);
-        assert!(app.db_display.watchlist.contains("TSLA"));
-        assert!(!app.db_display.watchlist.contains("AAPL"));
+        assert_eq!(app.market.db_display.watchlist.len(), 1);
+        assert!(app.market.db_display.watchlist.contains("TSLA"));
+        assert!(!app.market.db_display.watchlist.contains("AAPL"));
     }
 
     #[tokio::test]
@@ -2009,7 +2024,7 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
         app.handle_event(AppEvent::WatchlistLoaded(vec![]));
-        assert!(app.db_display.watchlist.is_empty());
+        assert!(app.market.db_display.watchlist.is_empty());
     }
 
     fn alert_for(id: i32, ticker: &str) -> crate::models::Alert {
@@ -2149,7 +2164,7 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("AAPL", Some(150.0))));
 
         let positions =
-            crate::portfolio::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+            crate::portfolio::portfolio_positions(&app.holdings, &app.market.db_display.all_rows);
         assert_eq!(positions[0].market_value, Some(1500.0));
         assert_eq!(positions[0].unrealized_pnl, Some(500.0));
     }
@@ -2172,7 +2187,7 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("TSLA", Some(999.0))));
 
         let positions =
-            crate::portfolio::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+            crate::portfolio::portfolio_positions(&app.holdings, &app.market.db_display.all_rows);
         assert_eq!(positions[0].market_value, Some(1200.0), "AAPL still valued at its own price");
     }
 
@@ -2201,7 +2216,7 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("MSFT", Some(200.0))));
 
         let positions =
-            crate::portfolio::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+            crate::portfolio::portfolio_positions(&app.holdings, &app.market.db_display.all_rows);
         assert_eq!(positions[0].market_value, Some(2000.0));
     }
 
@@ -2214,7 +2229,7 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("MSFT", Some(200.0))));
 
         assert!(
-            !app.db_display
+            !app.market.db_display
                 .all_rows
                 .iter()
                 .any(|r| r.ticker.as_deref() == Some("MSFT")),
@@ -2302,16 +2317,16 @@ mod tests {
         app.page = Page::Manage;
 
         app.handle_key(KeyCode::Char('j'));
-        assert_eq!(app.manage_section, ManageSection::Holdings);
-        assert_eq!(app.manage_selected, 1);
+        assert_eq!(app.manage.section, ManageSection::Holdings);
+        assert_eq!(app.manage.selected, 1);
 
         app.handle_key(KeyCode::Char('j'));
-        assert_eq!(app.manage_section, ManageSection::Alerts);
-        assert_eq!(app.manage_selected, 0);
+        assert_eq!(app.manage.section, ManageSection::Alerts);
+        assert_eq!(app.manage.selected, 0);
 
         app.handle_key(KeyCode::Char('k'));
-        assert_eq!(app.manage_section, ManageSection::Holdings);
-        assert_eq!(app.manage_selected, 1);
+        assert_eq!(app.manage.section, ManageSection::Holdings);
+        assert_eq!(app.manage.selected, 1);
     }
 
     #[tokio::test]
@@ -2339,7 +2354,7 @@ mod tests {
         app.page = Page::Manage;
 
         app.handle_key(KeyCode::Char('a'));
-        assert!(app.manage_input.is_some(), "a opens the inline entry");
+        assert!(app.manage.input.is_some(), "a opens the inline entry");
         type_str(&mut app, "AAPL 10 150");
         app.handle_key(KeyCode::Enter);
 
@@ -2347,7 +2362,7 @@ mod tests {
         assert_eq!(app.holdings[0].ticker, "AAPL");
         assert_eq!(app.holdings[0].shares, 10.0);
         assert_eq!(app.holdings[0].avg_cost, 150.0);
-        assert!(app.manage_input.is_none(), "input closes on success");
+        assert!(app.manage.input.is_none(), "input closes on success");
     }
 
     #[tokio::test]
@@ -2362,7 +2377,7 @@ mod tests {
 
         app.handle_key(KeyCode::Char('e'));
 
-        assert_eq!(app.manage_input.as_ref().map(|i| i.buffer.as_str()), Some("AAPL 5 100"));
+        assert_eq!(app.manage.input.as_ref().map(|i| i.buffer.as_str()), Some("AAPL 5 100"));
     }
 
     #[tokio::test]
@@ -2376,7 +2391,7 @@ mod tests {
         app.page = Page::Manage;
 
         app.handle_key(KeyCode::Char('e'));
-        app.manage_input.as_mut().unwrap().buffer = "AAPL 20 200".to_string();
+        app.manage.input.as_mut().unwrap().buffer = "AAPL 20 200".to_string();
         app.handle_key(KeyCode::Enter);
 
         assert_eq!(app.holdings.len(), 1, "edit replaces, not duplicates");
@@ -2409,7 +2424,7 @@ mod tests {
         app.handle_key(KeyCode::Enter);
 
         assert!(app.holdings.is_empty());
-        assert!(app.manage_input.is_some(), "a bad entry keeps the line open");
+        assert!(app.manage.input.is_some(), "a bad entry keeps the line open");
     }
 
     #[tokio::test]
@@ -2421,7 +2436,7 @@ mod tests {
         type_str(&mut app, "AAP");
         app.handle_key(KeyCode::Esc);
 
-        assert!(app.manage_input.is_none());
+        assert!(app.manage.input.is_none());
         assert_eq!(app.page, Page::Manage, "esc cancels the input, not the page");
     }
 
@@ -2429,7 +2444,7 @@ mod tests {
     async fn test_manage_add_alert_saves_and_closes_input() {
         let (mut app, _rx) = make_test_app();
         app.page = Page::Manage;
-        app.manage_section = ManageSection::Alerts;
+        app.manage.section = ManageSection::Alerts;
 
         app.handle_key(KeyCode::Char('a'));
         type_str(&mut app, "AAPL >150");
@@ -2439,7 +2454,7 @@ mod tests {
         assert_eq!(app.alerts[0].ticker, "AAPL");
         assert_eq!(app.alerts[0].direction, AlertDirection::Above);
         assert_eq!(app.alerts[0].threshold, 150.0);
-        assert!(app.manage_input.is_none());
+        assert!(app.manage.input.is_none());
     }
 
     #[tokio::test]
@@ -2450,7 +2465,7 @@ mod tests {
             alert_for(2, "TSLA"),
         ]));
         app.page = Page::Manage;
-        app.manage_section = ManageSection::Alerts;
+        app.manage.section = ManageSection::Alerts;
 
         app.handle_key(KeyCode::Char('d'));
 
@@ -2462,14 +2477,14 @@ mod tests {
     async fn test_manage_invalid_alert_keeps_input_open() {
         let (mut app, _rx) = make_test_app();
         app.page = Page::Manage;
-        app.manage_section = ManageSection::Alerts;
+        app.manage.section = ManageSection::Alerts;
 
         app.handle_key(KeyCode::Char('a'));
         type_str(&mut app, "nope");
         app.handle_key(KeyCode::Enter);
 
         assert!(app.alerts.is_empty());
-        assert!(app.manage_input.is_some());
+        assert!(app.manage.input.is_some());
     }
 
     #[tokio::test]

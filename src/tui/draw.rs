@@ -70,7 +70,7 @@ fn draw_market_body(f: &mut Frame, body: Rect, app: &mut App) {
     let [input_area, log_area] =
         Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(left);
 
-    let (input_border, db_border) = if app.input_mode.is_focused() {
+    let (input_border, db_border) = if app.market.input_mode.is_focused() {
         (t.accent, t.border)
     } else {
         (t.border, t.accent)
@@ -96,12 +96,12 @@ fn block_title(text: String, t: &Theme) -> Line<'static> {
 /// Renders the ticker input box with a blinking cursor while focused.
 fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
     let t = app.theme;
-    let cursor = if app.input_mode.is_focused() && app.animations.blink_state {
+    let cursor = if app.market.input_mode.is_focused() && app.animations.blink_state {
         "▌"
     } else {
         " "
     };
-    let title = if app.input_mode.is_fuzzy() {
+    let title = if app.market.input_mode.is_fuzzy() {
         "assetui · search".to_string()
     } else {
         "assetui · query".to_string()
@@ -112,11 +112,11 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App, border_color: Color) {
         .border_style(Style::default().fg(border_color).bg(t.panel))
         .style(Style::default().bg(t.panel));
     let mut spans = Vec::with_capacity(3);
-    if app.input_mode.is_fuzzy() {
+    if app.market.input_mode.is_fuzzy() {
         spans.push(Span::styled("/", Style::default().fg(t.dim)));
     }
     spans.push(Span::styled(
-        app.input_mode.input.clone(),
+        app.market.input_mode.input.clone(),
         Style::default().fg(t.fg),
     ));
     spans.push(Span::styled(cursor, Style::default().fg(t.accent)));
@@ -132,9 +132,9 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
         .border_style(Style::default().fg(t.border).bg(t.panel))
         .style(Style::default().bg(t.panel));
     let visible = area.height.saturating_sub(2) as usize;
-    let start = app.logs.len().saturating_sub(visible);
+    let start = app.market.logs.len().saturating_sub(visible);
     let log_lines: Vec<Line> = app
-        .logs
+        .market.logs
         .iter()
         .skip(start)
         .map(|s| Line::styled(s.as_str(), Style::default().fg(t.dim)))
@@ -192,7 +192,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let positions = portfolio_positions(&app.holdings, &app.db_display.all_rows);
+    let positions = portfolio_positions(&app.holdings, &app.market.db_display.all_rows);
     let lines = if app.holdings.is_empty() {
         vec![dim_line("no holdings", &t)]
     } else if !positions.iter().any(|p| p.market_value.is_some()) {
@@ -227,7 +227,7 @@ fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
 /// Movers cube: the day's biggest gainer and biggest loser across tracked quotes.
 fn draw_movers_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let (gainer, loser) = top_movers(&app.db_display.all_rows);
+    let (gainer, loser) = top_movers(&app.market.db_display.all_rows);
     let lines = match gainer {
         None => vec![dim_line("no quotes yet", &t)],
         Some(g) => vec![
@@ -260,7 +260,7 @@ fn draw_alerts_cube(f: &mut Frame, area: Rect, app: &App) {
     let lines = if app.alerts.is_empty() {
         vec![dim_line("no alerts", &t)]
     } else {
-        match nearest_alert(&app.alerts, &app.db_display.all_rows) {
+        match nearest_alert(&app.alerts, &app.market.db_display.all_rows) {
             None => vec![dim_line("awaiting prices", &t)],
             Some(a) => {
                 let op = match a.direction {
@@ -286,7 +286,7 @@ fn draw_alerts_cube(f: &mut Frame, area: Rect, app: &App) {
 /// Breadth cube: how many tracked quotes are up versus down on the day.
 fn draw_breadth_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let (advancers, decliners) = day_breadth(&app.db_display.all_rows);
+    let (advancers, decliners) = day_breadth(&app.market.db_display.all_rows);
     let lines = if advancers == 0 && decliners == 0 {
         vec![dim_line("no quotes yet", &t)]
     } else {
@@ -308,7 +308,7 @@ fn draw_breadth_cube(f: &mut Frame, area: Rect, app: &App) {
 /// Most-active cube: the most-traded tracked quote by day volume.
 fn draw_active_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let lines = match most_active(&app.db_display.all_rows) {
+    let lines = match most_active(&app.market.db_display.all_rows) {
         None => vec![dim_line("no volume", &t)],
         Some((ticker, volume)) => vec![Line::from(vec![
             Span::styled(format!("{ticker:<6}"), Style::default().fg(t.fg)),
@@ -459,11 +459,11 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     ])
     .bottom_margin(1);
 
-    let window = app.db_display.window_range();
-    let query = &app.input_mode.input;
-    let searching = app.input_mode.is_fuzzy();
+    let window = app.market.db_display.window_range();
+    let query = &app.market.input_mode.input;
+    let searching = app.market.input_mode.is_fuzzy();
 
-    if app.db_display.rows.is_empty() {
+    if app.market.db_display.rows.is_empty() {
         let centered = centered_rect(40, 10, area);
         f.render_widget(
             Paragraph::new(Span::styled(
@@ -475,8 +475,8 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         );
         return;
     }
-    let rows = app.db_display.rows[window].iter().map(|q| {
-        let star = if is_watchlisted(q.ticker.as_deref(), &app.db_display.watchlist) {
+    let rows = app.market.db_display.rows[window].iter().map(|q| {
+        let star = if is_watchlisted(q.ticker.as_deref(), &app.market.db_display.watchlist) {
             Cell::from(Span::styled("★", Style::default().fg(t.gold)))
         } else {
             Cell::from("")
@@ -519,7 +519,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     ];
 
     let mut quotes_table_title_text = "assetui · ".to_string();
-    quotes_table_title_text.push_str(if app.db_display.watchlist_only {
+    quotes_table_title_text.push_str(if app.market.db_display.watchlist_only {
         "watchlist"
     } else {
         "quotes"
@@ -535,9 +535,9 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             Style::default().fg(t.dim),
         ));
     }
-    if !app.db_display.status.is_empty() {
+    if !app.market.db_display.status.is_empty() {
         title.push(Span::styled(
-            format!("{} ", app.db_display.status),
+            format!("{} ", app.market.db_display.status),
             Style::default().fg(t.dim),
         ));
     }
@@ -556,7 +556,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ));
 
-    f.render_stateful_widget(table, area, &mut app.db_display.table_state);
+    f.render_stateful_widget(table, area, &mut app.market.db_display.table_state);
 }
 
 fn is_watchlisted(ticker: Option<&str>, watchlist: &HashSet<String>) -> bool {
@@ -577,16 +577,16 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let (mode, hint) = app.status_mode();
 
     let chip = format!(" {} ", mode.label());
-    let page = app.db_display.page + 1;
-    let total_pages = app.db_display.total_pages();
-    let count = if app.input_mode.is_fuzzy() {
+    let page = app.market.db_display.page + 1;
+    let total_pages = app.market.db_display.total_pages();
+    let count = if app.market.input_mode.is_fuzzy() {
         format!(
             "{}/{}",
-            app.db_display.rows.len(),
-            app.db_display.all_rows.len()
+            app.market.db_display.rows.len(),
+            app.market.db_display.all_rows.len()
         )
     } else {
-        app.db_display.rows.len().to_string()
+        app.market.db_display.rows.len().to_string()
     };
     let right = format!("{count} quotes · page {page}/{total_pages} ");
 
@@ -1562,13 +1562,13 @@ fn draw_manage_body(f: &mut Frame, body: Rect, app: &mut App) {
         f,
         holdings_area,
         app,
-        app.manage_section == ManageSection::Holdings,
+        app.manage.section == ManageSection::Holdings,
     );
     draw_alerts_section(
         f,
         alerts_area,
         app,
-        app.manage_section == ManageSection::Alerts,
+        app.manage.section == ManageSection::Alerts,
     );
 }
 
@@ -1600,7 +1600,7 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
     f.render_widget(block, area);
 
     let holding_input = app
-        .manage_input
+        .manage.input
         .as_ref()
         .filter(|i| i.kind == ManageInputKind::Holding);
 
@@ -1622,7 +1622,7 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
         return;
     }
 
-    let positions = portfolio_positions(&app.holdings, &app.db_display.all_rows);
+    let positions = portfolio_positions(&app.holdings, &app.market.db_display.all_rows);
     let summary = summarize(&positions);
     let table_area = content;
     let totals_area = bottom;
@@ -1666,7 +1666,7 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
         table = table
             .row_highlight_style(Style::default().bg(t.cursor).add_modifier(Modifier::BOLD))
             .highlight_symbol(Span::styled("▸ ", Style::default().fg(t.accent)));
-        state.select(Some(app.manage_selected.min(positions.len().saturating_sub(1))));
+        state.select(Some(app.manage.selected.min(positions.len().saturating_sub(1))));
     }
     f.render_stateful_widget(table, table_area, &mut state);
 
@@ -1700,7 +1700,7 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
     f.render_widget(block, area);
 
     let alert_input = app
-        .manage_input
+        .manage.input
         .as_ref()
         .filter(|i| i.kind == ManageInputKind::Alert);
 
@@ -1749,7 +1749,7 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
         table = table
             .row_highlight_style(Style::default().bg(t.cursor).add_modifier(Modifier::BOLD))
             .highlight_symbol(Span::styled("▸ ", Style::default().fg(t.accent)));
-        state.select(Some(app.manage_selected.min(app.alerts.len().saturating_sub(1))));
+        state.select(Some(app.manage.selected.min(app.alerts.len().saturating_sub(1))));
     }
     f.render_stateful_widget(table, content, &mut state);
 }
