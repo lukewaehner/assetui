@@ -69,19 +69,8 @@ pub async fn fetch_sorted(
     limit: i64,
 ) -> sqlx::Result<Vec<QuoteRecord>> {
     debug!(?mode, ?order, "fetching sorted quotes");
-    let column = match mode {
-        SortMode::ById => "id",
-        SortMode::ByTicker => "ticker",
-        SortMode::ByPrice => "price",
-        SortMode::ByPrevClose => "previous_close",
-        SortMode::ByVolume => "day_volume",
-        SortMode::ByAsOf => "as_of",
-        SortMode::ByName => "name",
-    };
-    let direction = match order {
-        SortOrder::Ascending => "ASC",
-        SortOrder::Descending => "DESC",
-    };
+    let column = mode.column();
+    let direction = order.keyword();
 
     let query = format!(
         "SELECT id, ticker, name, price, previous_close, day_volume, as_of
