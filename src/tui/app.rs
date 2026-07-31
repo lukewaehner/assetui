@@ -34,6 +34,11 @@ const BLINK_INTERVAL: Duration = Duration::from_millis(500);
 /// Maximum number of lines retained in the log panel.
 const MAX_LOG_LINES: usize = 500;
 
+const TOAST_ANCHOR: Anchor = Anchor::TopRight;
+const TOAST_ANIMATION: Animation = Animation::Slide;
+const TOAST_SLIDE_DIRECTION: SlideDirection = SlideDirection::FromRight;
+const TOAST_DISMISS_AFTER: Duration = Duration::from_secs(5);
+
 pub fn table_page_size(terminal_height: u16) -> usize {
     terminal_height.saturating_sub(5).max(1) as usize
 }
@@ -500,52 +505,35 @@ impl App {
         }
     }
 
-    /// Records an error in the status bar and log panel, and raises a slide-in notification.
-    fn push_error(&mut self, e: String) {
-        self.db_display.status = format!("Error: {e}");
-        self.push_log(format!("[ERROR] {e}"));
-        if let Ok(notif) = Notification::new(e)
-            .title("Error")
-            .level(Level::Error)
-            .anchor(Anchor::TopRight)
-            .animation(Animation::Slide)
-            .slide_direction(SlideDirection::FromRight)
-            .auto_dismiss(AutoDismiss::After(Duration::from_secs(5)))
+    /// Builds a slide-in toast and mirrors it into the log panel.
+    fn push_toast(&mut self, level: Level, title: &'static str, log_prefix: &str, msg: String) {
+        self.push_log(format!("[{log_prefix}] {msg}"));
+        if let Ok(notif) = Notification::new(msg)
+            .title(title)
+            .level(level)
+            .anchor(TOAST_ANCHOR)
+            .animation(TOAST_ANIMATION)
+            .slide_direction(TOAST_SLIDE_DIRECTION)
+            .auto_dismiss(AutoDismiss::After(TOAST_DISMISS_AFTER))
             .build()
         {
             let _ = self.notifications.add(notif);
         }
     }
 
+    /// Records an error in the status bar and log panel, and raises a slide-in notification.
+    fn push_error(&mut self, e: String) {
+        self.db_display.status = format!("Error: {e}");
+        self.push_toast(Level::Error, "Error", "ERROR", e);
+    }
+
     fn push_alert_toast(&mut self, msg: String) {
-        self.push_log(format!("[ALERT] {msg}"));
-        if let Ok(notif) = Notification::new(msg)
-            .title("Alert")
-            .level(Level::Warn)
-            .anchor(Anchor::TopRight)
-            .animation(Animation::Slide)
-            .slide_direction(SlideDirection::FromRight)
-            .auto_dismiss(AutoDismiss::After(Duration::from_secs(5)))
-            .build()
-        {
-            let _ = self.notifications.add(notif);
-        }
+        self.push_toast(Level::Warn, "Alert", "ALERT", msg);
     }
 
     /// Pushes a portfolio-action toast (an `Info`-level confirmation) and mirrors it into the log panel.
     fn push_portfolio_toast(&mut self, msg: String) {
-        self.push_log(format!("[PORTFOLIO] {msg}"));
-        if let Ok(notif) = Notification::new(msg)
-            .title("Portfolio")
-            .level(Level::Info)
-            .anchor(Anchor::TopRight)
-            .animation(Animation::Slide)
-            .slide_direction(SlideDirection::FromRight)
-            .auto_dismiss(AutoDismiss::After(Duration::from_secs(5)))
-            .build()
-        {
-            let _ = self.notifications.add(notif);
-        }
+        self.push_toast(Level::Info, "Portfolio", "PORTFOLIO", msg);
     }
 
     fn evaluate_alerts(&mut self, tick: &QuoteTick) {
