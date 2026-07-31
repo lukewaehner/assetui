@@ -599,9 +599,6 @@ fn help_row(keys: &'static str, desc: &'static str, t: &Theme) -> Line<'static> 
 /// Renders the keybinding help overlay: a centred reference of every command key, grouped by purpose.
 fn draw_help_modal(f: &mut Frame, app: &App) {
     let t = app.theme;
-    let area = centered_rect(48, 80, f.area());
-    f.render_widget(Clear, area);
-
     let title = Line::from(vec![
         Span::raw(" "),
         Span::styled(
@@ -610,12 +607,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         ),
         Span::styled(" · keybindings ", Style::default().fg(t.dim)),
     ]);
-    let modal = modal_block(title, &t);
-    let inner = modal.inner(area);
-    f.render_widget(modal, area);
-
-    let [content, footer] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    let (content, footer) = modal_frame(f, 48, 80, title, &t);
 
     let lines = vec![
         section_heading("NAVIGATION", None, &t),
@@ -684,6 +676,24 @@ fn modal_block(title: Line<'static>, t: &Theme) -> Block<'static> {
         .title(title)
         .padding(Padding::new(2, 2, 1, 0))
         .style(Style::default().bg(t.panel))
+}
+
+/// Draws the shared overlay chrome and returns the `(content, footer)` regions to fill.
+fn modal_frame(
+    f: &mut Frame,
+    pct_x: u16,
+    pct_y: u16,
+    title: Line<'static>,
+    t: &Theme,
+) -> (Rect, Rect) {
+    let area = centered_rect(pct_x, pct_y, f.area());
+    f.render_widget(Clear, area);
+    let modal = modal_block(title, t);
+    let inner = modal.inner(area);
+    f.render_widget(modal, area);
+    let [content, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    (content, footer)
 }
 
 fn modal_title(ticker: &str, suffix: &str, t: &Theme) -> Line<'static> {
@@ -788,23 +798,13 @@ fn truncate(s: &str, max: usize) -> String {
 /// Renders the stock-detail overlay modal at 65 × 55% of the terminal area.
 fn draw_stock_modal(f: &mut Frame, app: &mut App) {
     let t = app.theme;
-    let area = centered_rect(65, 55, f.area());
-    f.render_widget(Clear, area);
     let stock = &app.stock_modal.stock;
-    let modal = modal_block(
-        modal_title(
-            stock.ticker.as_deref().unwrap_or("-"),
-            stock.name.as_deref().unwrap_or("-"),
-            &t,
-        ),
+    let title = modal_title(
+        stock.ticker.as_deref().unwrap_or("-"),
+        stock.name.as_deref().unwrap_or("-"),
         &t,
     );
-
-    let inner = modal.inner(area);
-    f.render_widget(modal, area);
-
-    let [content, footer] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    let (content, footer) = modal_frame(f, 65, 55, title, &t);
 
     let mut lines: Vec<Line> = vec![
         price_line(stock, &app.animations.row_flash_map, &t),
@@ -1256,32 +1256,25 @@ fn contracts_for_expiry(
 
 fn draw_options_modal(f: &mut Frame, app: &mut App) {
     let t = app.theme;
-    let area = centered_rect(85, 72, f.area());
-    f.render_widget(Clear, area);
     let ticker = app.stock_modal.stock.ticker.as_deref().unwrap_or("-");
-    let modal = modal_block(modal_title(ticker, "options", &t), &t);
-    let inner = modal.inner(area);
-    f.render_widget(modal, area);
+    let title = modal_title(ticker, "options", &t);
+    let (content, footer_area) = modal_frame(f, 85, 72, title, &t);
 
     let Some(chain) = &app.stock_modal.option_chain else {
-        f.render_widget(placeholder("Loading options…", &t), inner);
+        f.render_widget(placeholder("Loading options…", &t), content);
         return;
     };
     if chain.expirations.is_empty() {
-        f.render_widget(placeholder("No options for this ticker.", &t), inner);
+        f.render_widget(placeholder("No options for this ticker.", &t), content);
         return;
     }
-    if inner.width < 44 {
-        f.render_widget(placeholder("Terminal too narrow for options.", &t), inner);
+    if content.width < 44 {
+        f.render_widget(placeholder("Terminal too narrow for options.", &t), content);
         return;
     }
 
-    let [selector_area, tables_area, footer_area] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
+    let [selector_area, tables_area] =
+        Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(content);
 
     let idx = app
         .stock_modal
