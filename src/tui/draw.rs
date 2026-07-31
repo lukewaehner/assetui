@@ -23,7 +23,7 @@ use crate::models::{
     Alert, AlertDirection, FLASH_TTL, OptionChain, OptionContract, QuoteRecord,
     QuoteRecordAnalysis, QuoteRecordStatistics, StockNews, day_change_pct,
 };
-use crate::portfolio::{Holding, Position, summarize, value_position};
+use crate::portfolio::{portfolio_positions, resolve_price, summarize};
 use crate::search::subseq_match_ci;
 
 use super::app::{App, ManageInput, ManageInputKind, ManageSection, Overlay, Page};
@@ -1422,12 +1422,6 @@ fn draw_option_table(
     f.render_widget(table, area);
 }
 
-fn resolve_price(ticker: &str, rows: &[QuoteRecord]) -> (Option<f64>, Option<f64>) {
-    rows.iter()
-        .find(|r| r.ticker.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticker)))
-        .map_or((None, None), |r| (r.price, r.previous_close))
-}
-
 /// A quote's single-session move: its ticker and day-change percent.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Mover {
@@ -1494,16 +1488,6 @@ pub(crate) fn nearest_alert(alerts: &[Alert], rows: &[QuoteRecord]) -> Option<Al
                 .partial_cmp(&b.distance_pct)
                 .expect("finite distance_pct")
         })
-}
-
-pub(crate) fn portfolio_positions(holdings: &[Holding], rows: &[QuoteRecord]) -> Vec<Position> {
-    holdings
-        .iter()
-        .map(|h| {
-            let (price, previous_close) = resolve_price(&h.ticker, rows);
-            value_position(h.clone(), price, previous_close)
-        })
-        .collect()
 }
 
 fn pnl_color(value: Option<f64>, t: &Theme) -> Color {
@@ -1999,27 +1983,6 @@ mod tests {
     fn contracts_for_expiry_out_of_range_index_is_empty() {
         let chain = OptionChain::default();
         assert!(contracts_for_expiry(&chain, 5, OptionKind::Call).is_empty());
-    }
-
-    fn quote(ticker: &str, price: Option<f64>, prev: Option<f64>) -> QuoteRecord {
-        QuoteRecord {
-            ticker: Some(ticker.to_string()),
-            price,
-            previous_close: prev,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn resolve_price_finds_row_case_insensitively() {
-        let rows = vec![quote("AAPL", Some(150.0), Some(148.0))];
-        assert_eq!(resolve_price("aapl", &rows), (Some(150.0), Some(148.0)));
-    }
-
-    #[test]
-    fn resolve_price_absent_ticker_is_none() {
-        let rows = vec![quote("AAPL", Some(150.0), Some(148.0))];
-        assert_eq!(resolve_price("TSLA", &rows), (None, None));
     }
 
     #[test]

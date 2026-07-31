@@ -2017,7 +2017,7 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("AAPL", Some(150.0))));
 
         let positions =
-            crate::tui::draw::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+            crate::portfolio::portfolio_positions(&app.holdings, &app.db_display.all_rows);
         assert_eq!(positions[0].market_value, Some(1500.0));
         assert_eq!(positions[0].unrealized_pnl, Some(500.0));
     }
@@ -2040,7 +2040,7 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("TSLA", Some(999.0))));
 
         let positions =
-            crate::tui::draw::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+            crate::portfolio::portfolio_positions(&app.holdings, &app.db_display.all_rows);
         assert_eq!(positions[0].market_value, Some(1200.0), "AAPL still valued at its own price");
     }
 
@@ -2069,7 +2069,7 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("MSFT", Some(200.0))));
 
         let positions =
-            crate::tui::draw::portfolio_positions(&app.holdings, &app.db_display.all_rows);
+            crate::portfolio::portfolio_positions(&app.holdings, &app.db_display.all_rows);
         assert_eq!(positions[0].market_value, Some(2000.0));
     }
 

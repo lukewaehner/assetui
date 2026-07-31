@@ -1,5 +1,7 @@
 //! Portfolio holdings and the pure P&L compute core.
 
+use crate::models::QuoteRecord;
+
 /// Why a user's holding spec (`shares avg_cost`, e.g. `10 150.5`) could not be parsed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HoldingParseError {
@@ -148,6 +150,22 @@ pub fn summarize(positions: &[Position]) -> PortfolioSummary {
         total_pnl_pct,
         total_day_change,
     }
+}
+
+pub(crate) fn resolve_price(ticker: &str, rows: &[QuoteRecord]) -> (Option<f64>, Option<f64>) {
+    rows.iter()
+        .find(|r| r.ticker.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticker)))
+        .map_or((None, None), |r| (r.price, r.previous_close))
+}
+
+pub(crate) fn portfolio_positions(holdings: &[Holding], rows: &[QuoteRecord]) -> Vec<Position> {
+    holdings
+        .iter()
+        .map(|h| {
+            let (price, previous_close) = resolve_price(&h.ticker, rows);
+            value_position(h.clone(), price, previous_close)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -313,5 +331,26 @@ mod tests {
         assert_eq!(s.total_pnl, 0.0);
         assert_eq!(s.total_pnl_pct, None);
         assert_eq!(s.total_day_change, 0.0);
+    }
+
+    fn quote(ticker: &str, price: Option<f64>, prev: Option<f64>) -> QuoteRecord {
+        QuoteRecord {
+            ticker: Some(ticker.to_string()),
+            price,
+            previous_close: prev,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolve_price_finds_row_case_insensitively() {
+        let rows = vec![quote("AAPL", Some(150.0), Some(148.0))];
+        assert_eq!(resolve_price("aapl", &rows), (Some(150.0), Some(148.0)));
+    }
+
+    #[test]
+    fn resolve_price_absent_ticker_is_none() {
+        let rows = vec![quote("AAPL", Some(150.0), Some(148.0))];
+        assert_eq!(resolve_price("TSLA", &rows), (None, None));
     }
 }
