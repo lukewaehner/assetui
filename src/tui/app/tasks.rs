@@ -1,8 +1,12 @@
 //! Async task spawners for [`App`].
 
+use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use yfinance_rs::YfClient;
+
+use crate::AppError;
 
 use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered, remove_alert};
 use crate::db::portfolio::{list_holdings, remove_holding, upsert_holding};
@@ -59,100 +63,84 @@ impl App {
         });
     }
 
-    pub(crate) fn spawn_analysis(&self, symbol: &str) {
+    fn spawn_client_fetch<T, Fut>(
+        &self,
+        symbol: String,
+        err_prefix: &'static str,
+        fetch: impl FnOnce(YfClient, String) -> Fut + Send + 'static,
+        to_event: impl FnOnce(T) -> AppEvent + Send + 'static,
+    ) where
+        T: Send + 'static,
+        Fut: Future<Output = Result<T, AppError>> + Send + 'static,
+    {
         let tx = self.services.event_tx.clone();
         let client = self.services.client.clone();
-        let symbol = symbol.to_owned();
         tokio::spawn(async move {
-            match fetch_analysis(&client, &symbol).await {
-                Ok(a) => {
-                    let _ = tx.send(AppEvent::StockAnalysisReady(a));
+            match fetch(client, symbol.clone()).await {
+                Ok(value) => {
+                    let _ = tx.send(to_event(value));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("analysis {symbol}: {e}")));
+                    let _ = tx.send(AppEvent::Error(format!("{err_prefix} {symbol}: {e}")));
                 }
             }
         });
+    }
+
+    pub(crate) fn spawn_analysis(&self, symbol: &str) {
+        self.spawn_client_fetch(
+            symbol.to_owned(),
+            "analysis",
+            |client, symbol| async move { fetch_analysis(&client, &symbol).await },
+            AppEvent::StockAnalysisReady,
+        );
     }
 
     pub(crate) fn spawn_statistics(&self, symbol: &str) {
-        let tx = self.services.event_tx.clone();
-        let client = self.services.client.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_key_statistics(&client, &symbol).await {
-                Ok(s) => {
-                    let _ = tx.send(AppEvent::StockStatisticsReady(s));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("statistics {symbol}: {e}")));
-                }
-            }
-        });
+        self.spawn_client_fetch(
+            symbol.to_owned(),
+            "statistics",
+            |client, symbol| async move { fetch_key_statistics(&client, &symbol).await },
+            AppEvent::StockStatisticsReady,
+        );
     }
 
     pub(crate) fn spawn_news(&self, symbol: &str) {
-        let tx = self.services.event_tx.clone();
-        let client = self.services.client.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_news(&client, &symbol).await {
-                Ok(n) => {
-                    let _ = tx.send(AppEvent::StockNewsReady(n));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("news {symbol}: {e}")));
-                }
-            }
-        });
+        self.spawn_client_fetch(
+            symbol.to_owned(),
+            "news",
+            |client, symbol| async move { fetch_news(&client, &symbol).await },
+            AppEvent::StockNewsReady,
+        );
     }
 
     pub(crate) fn spawn_chart_data(&self, symbol: &str) {
-        let tx = self.services.event_tx.clone();
-        let client = self.services.client.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_chart_data(&client, &symbol).await {
-                Ok(a) => {
-                    let _ = tx.send(AppEvent::ChartDataReady(a));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("chart {symbol}: {e}")));
-                }
-            }
-        });
+        self.spawn_client_fetch(
+            symbol.to_owned(),
+            "chart",
+            |client, symbol| async move { fetch_chart_data(&client, &symbol).await },
+            AppEvent::ChartDataReady,
+        );
     }
 
     pub(crate) fn spawn_option_chain(&self, symbol: &str) {
-        let tx = self.services.event_tx.clone();
-        let client = self.services.client.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_option_chain(&client, &symbol).await {
-                Ok(chain) => {
-                    let _ = tx.send(AppEvent::OptionChainReady(chain));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("options {symbol}: {e}")));
-                }
-            }
-        });
+        self.spawn_client_fetch(
+            symbol.to_owned(),
+            "options",
+            |client, symbol| async move { fetch_option_chain(&client, &symbol).await },
+            AppEvent::OptionChainReady,
+        );
     }
 
     pub(crate) fn spawn_option_chain_for_expiry(&self, symbol: &str, expiry: DateTime<Utc>) {
-        let tx = self.services.event_tx.clone();
-        let client = self.services.client.clone();
-        let symbol = symbol.to_owned();
-        tokio::spawn(async move {
-            match fetch_option_chain_for_expiry(&client, &symbol, expiry).await {
-                Ok(chain) => {
-                    let _ = tx.send(AppEvent::OptionChainReady(chain));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("options {symbol}: {e}")));
-                }
-            }
-        });
+        self.spawn_client_fetch(
+            symbol.to_owned(),
+            "options",
+            move |client, symbol| async move {
+                fetch_option_chain_for_expiry(&client, &symbol, expiry).await
+            },
+            AppEvent::OptionChainReady,
+        );
     }
 
     pub(crate) fn spawn_stream(&self, symbols: Vec<String>) {
@@ -265,14 +253,7 @@ impl App {
             if let Err(e) = add_alert(&pool, &ticker, direction, threshold).await {
                 let _ = tx.send(AppEvent::Error(format!("Failed to save alert for {ticker}: {e}")));
             }
-            match list_alerts(&pool).await {
-                Ok(alerts) => {
-                    let _ = tx.send(AppEvent::AlertsLoaded(alerts));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("Failed to reload alerts: {e}")));
-                }
-            }
+            reload_alerts(&pool, &tx).await;
         });
     }
 
@@ -283,14 +264,7 @@ impl App {
             if let Err(e) = remove_alert(&pool, id).await {
                 let _ = tx.send(AppEvent::Error(format!("Failed to remove alert {id}: {e}")));
             }
-            match list_alerts(&pool).await {
-                Ok(alerts) => {
-                    let _ = tx.send(AppEvent::AlertsLoaded(alerts));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("Failed to reload alerts: {e}")));
-                }
-            }
+            reload_alerts(&pool, &tx).await;
         });
     }
 
@@ -382,6 +356,20 @@ async fn reload_portfolio(
         }
         Err(e) => {
             let _ = tx.send(AppEvent::Error(format!("Failed to reload portfolio: {e}")));
+        }
+    }
+}
+
+async fn reload_alerts(
+    pool: &sqlx::PgPool,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+) {
+    match list_alerts(pool).await {
+        Ok(alerts) => {
+            let _ = tx.send(AppEvent::AlertsLoaded(alerts));
+        }
+        Err(e) => {
+            let _ = tx.send(AppEvent::Error(format!("Failed to reload alerts: {e}")));
         }
     }
 }
