@@ -15,7 +15,7 @@ use super::theme::{Appearance, Theme};
 use crate::{
     cli::parse_tickers,
     models::{
-        Alert, AlertDirection, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
+        Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
         QuoteRecordStatistics, QuoteTick, StockNews, crosses, parse_alert_entry,
     },
     portfolio::{Holding, parse_holding_entry},
@@ -564,10 +564,7 @@ impl App {
 
         let now = chrono::Utc::now();
         for alert in fired {
-            let dir = match alert.direction {
-                crate::models::AlertDirection::Above => "above",
-                crate::models::AlertDirection::Below => "below",
-            };
+            let dir = alert.direction.label();
             self.push_alert_toast(format!(
                 "{} crossed {dir} {:.2} → {price:.2}",
                 alert.ticker, alert.threshold
@@ -712,10 +709,7 @@ impl App {
                         created_at: chrono::Utc::now(),
                         triggered_at: None,
                     });
-                    let dir = match direction {
-                        AlertDirection::Above => "above",
-                        AlertDirection::Below => "below",
-                    };
+                    let dir = direction.label();
                     self.push_alert_toast(format!("Alert: {ticker} {dir} {threshold:.2}"));
                     self.spawn_add_alert(ticker, direction, threshold);
                     self.cancel_manage_input();
@@ -1229,6 +1223,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::AlertDirection;
     use crate::models::QuoteRecord;
     use crate::sort::{SortMode, SortOrder};
     use tokio::sync::mpsc;

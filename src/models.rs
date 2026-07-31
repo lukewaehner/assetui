@@ -88,6 +88,15 @@ pub enum AlertDirection {
     Below,
 }
 
+impl AlertDirection {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AlertDirection::Above => "above",
+            AlertDirection::Below => "below",
+        }
+    }
+}
+
 /// Why a user's alert spec (`>150` / `<100`) could not be parsed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlertParseError {
@@ -431,6 +440,12 @@ mod tests {
         assert!(crosses(AlertDirection::Below, 100.0, 99.0), "just below");
         assert!(crosses(AlertDirection::Below, 100.0, 100.0), "exactly at");
         assert!(!crosses(AlertDirection::Below, 100.0, 100.01), "just above");
+    }
+
+    #[test]
+    fn alert_direction_label_maps_each_variant() {
+        assert_eq!(AlertDirection::Above.label(), "above");
+        assert_eq!(AlertDirection::Below.label(), "below");
     }
 
     #[test]

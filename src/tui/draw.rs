@@ -1667,10 +1667,7 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
             .collect::<Vec<_>>(),
     );
     let rows = app.alerts.iter().map(|a| {
-        let dir = match a.direction {
-            crate::models::AlertDirection::Above => "above",
-            crate::models::AlertDirection::Below => "below",
-        };
+        let dir = a.direction.label();
         Row::new(vec![
             Cell::from(Span::styled(
                 a.ticker.clone(),
