@@ -11,6 +11,12 @@ use crate::models::QuoteRecord;
 /// Inserts a quote into the database and returns the row's `id`.
 #[instrument(skip(quote, p), fields(ticker = ?quote.ticker))]
 pub async fn store_quote_to_db(quote: &QuoteRecord, p: &Pool<Postgres>) -> Result<i32, AppError> {
+    if quote.ticker.is_none() || quote.as_of.is_none() {
+        return Err(AppError::Data(
+            "cannot store quote without a ticker and as_of".to_string(),
+        ));
+    }
+
     debug!("inserting quote into postgres");
     let id: i32 = sqlx::query_scalar(
         "

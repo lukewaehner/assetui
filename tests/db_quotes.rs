@@ -92,6 +92,26 @@ async fn test_fetch_all_returns_stored(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
+async fn test_store_rejects_missing_ticker(pool: sqlx::PgPool) {
+    let quote = QuoteRecord {
+        id: None,
+        ticker: None,
+        name: Some("Nameless Inc.".to_string()),
+        price: Some(10.0),
+        previous_close: Some(9.0),
+        day_volume: Some(1_000.0),
+        as_of: Some(Utc::now()),
+    };
+
+    let result = store_quote_to_db(&quote, &pool).await;
+
+    assert!(
+        result.is_err(),
+        "storing a quote without a ticker should return an error, got {result:?}"
+    );
+}
+
+#[sqlx::test]
 async fn test_dump_to_csv_writes_to_given_path(pool: sqlx::PgPool) {
     store_quote_to_db(&make_quote("AMZN"), &pool)
         .await
