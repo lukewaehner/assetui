@@ -2511,6 +2511,9 @@ mod tests {
         assert!(dashboard.contains("portfolio"), "portfolio cube is drawn");
         assert!(dashboard.contains("movers"), "movers cube is drawn");
         assert!(dashboard.contains("alerts"), "alerts cube is drawn");
+        assert!(dashboard.contains("breadth"), "breadth cube is drawn");
+        assert!(dashboard.contains("most active"), "most-active cube is drawn");
+        assert!(dashboard.contains("status"), "status cube is drawn");
 
         app.handle_key(KeyCode::Char('L'));
         terminal
@@ -2615,6 +2618,54 @@ mod tests {
         let rows = vec![named("AAPL", "Apple Inc.")];
 
         assert_eq!(crate::tui::draw::top_movers(&rows), (None, None));
+    }
+
+    #[test]
+    fn test_day_breadth_counts_advancers_and_decliners() {
+        let rows = vec![
+            quote("AAPL", 110.0, 100.0),
+            quote("MSFT", 105.0, 100.0),
+            quote("TSLA", 90.0, 100.0),
+            quote("KO", 100.0, 100.0),
+            named("NVDA", "NVIDIA Corp."),
+        ];
+
+        assert_eq!(crate::tui::draw::day_breadth(&rows), (2, 1));
+    }
+
+    #[test]
+    fn test_most_active_picks_highest_volume() {
+        let rows = vec![
+            QuoteRecord {
+                ticker: Some("AAPL".to_string()),
+                day_volume: Some(62_400_000.0),
+                ..Default::default()
+            },
+            QuoteRecord {
+                ticker: Some("TSLA".to_string()),
+                day_volume: Some(18_000_000.0),
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            crate::tui::draw::most_active(&rows),
+            Some(("AAPL".to_string(), 62_400_000.0))
+        );
+    }
+
+    #[test]
+    fn test_most_active_is_none_without_positive_volume() {
+        let rows = vec![
+            QuoteRecord {
+                ticker: Some("AAPL".to_string()),
+                day_volume: Some(0.0),
+                ..Default::default()
+            },
+            quote("TSLA", 90.0, 100.0),
+        ];
+
+        assert!(crate::tui::draw::most_active(&rows).is_none());
     }
 
     #[test]

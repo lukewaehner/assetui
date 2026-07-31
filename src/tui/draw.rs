@@ -171,16 +171,23 @@ fn move_arrow(value: f64) -> &'static str {
 }
 
 fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
-    let [portfolio_area, movers_area, alerts_area, _rest] = Layout::vertical([
-        Constraint::Length(5),
-        Constraint::Length(4),
-        Constraint::Length(4),
-        Constraint::Min(0),
-    ])
-    .areas(area);
+    let [portfolio_area, movers_area, alerts_area, breadth_area, active_area, status_area, _rest] =
+        Layout::vertical([
+            Constraint::Length(5),
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .areas(area);
     draw_portfolio_cube(f, portfolio_area, app);
     draw_movers_cube(f, movers_area, app);
     draw_alerts_cube(f, alerts_area, app);
+    draw_breadth_cube(f, breadth_area, app);
+    draw_active_cube(f, active_area, app);
+    draw_status_cube(f, status_area, app);
 }
 
 fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
@@ -274,6 +281,57 @@ fn draw_alerts_cube(f: &mut Frame, area: Rect, app: &App) {
         }
     };
     f.render_widget(Paragraph::new(lines).block(cube_block(&title, &t)), area);
+}
+
+/// Breadth cube: how many tracked quotes are up versus down on the day.
+fn draw_breadth_cube(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let (advancers, decliners) = day_breadth(&app.db_display.all_rows);
+    let lines = if advancers == 0 && decliners == 0 {
+        vec![dim_line("no quotes yet", &t)]
+    } else {
+        vec![Line::from(vec![
+            Span::styled(
+                format!("{} {advancers}", direction_arrow(Direction::Up)),
+                Style::default().fg(direction_color(Direction::Up, &t)),
+            ),
+            Span::raw("    "),
+            Span::styled(
+                format!("{} {decliners}", direction_arrow(Direction::Down)),
+                Style::default().fg(direction_color(Direction::Down, &t)),
+            ),
+        ])]
+    };
+    f.render_widget(Paragraph::new(lines).block(cube_block("breadth", &t)), area);
+}
+
+/// Most-active cube: the most-traded tracked quote by day volume.
+fn draw_active_cube(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let lines = match most_active(&app.db_display.all_rows) {
+        None => vec![dim_line("no volume", &t)],
+        Some((ticker, volume)) => vec![Line::from(vec![
+            Span::styled(format!("{ticker:<6}"), Style::default().fg(t.fg)),
+            Span::styled(fmt_volume(volume), Style::default().fg(t.dim)),
+        ])],
+    };
+    f.render_widget(Paragraph::new(lines).block(cube_block("most active", &t)), area);
+}
+
+/// Status cube: whether the live quote stream is running and how many symbols it covers.
+fn draw_status_cube(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let tracked = app.subscribed_symbols.len();
+    let status = if app.stream_handle.is_some() {
+        Span::styled("live●", Style::default().fg(t.up))
+    } else {
+        Span::styled("offline", Style::default().fg(t.dim))
+    };
+    let line = Line::from(vec![
+        status,
+        Span::styled(format!("  {tracked} tracked"), Style::default().fg(t.fg)),
+    ]);
+    f.render_widget(Paragraph::new(line).block(cube_block("status", &t)), area);
 }
 
 /// Builds a table cell from an optional value, showing `-` when absent.
@@ -1457,6 +1515,31 @@ pub(crate) fn nearest_alert(alerts: &[Alert], rows: &[QuoteRecord]) -> Option<Al
                 .partial_cmp(&b.distance_pct)
                 .expect("finite distance_pct")
         })
+}
+
+/// Advancers and decliners across `rows`: how many tracked quotes are up versus down on the day.
+pub(crate) fn day_breadth(rows: &[QuoteRecord]) -> (usize, usize) {
+    let mut advancers = 0;
+    let mut decliners = 0;
+    for pct in rows
+        .iter()
+        .filter_map(|r| day_change_pct(r.price, r.previous_close))
+    {
+        if pct > 0.0 {
+            advancers += 1;
+        } else if pct < 0.0 {
+            decliners += 1;
+        }
+    }
+    (advancers, decliners)
+}
+
+/// The most-traded quote in `rows` by day volume: its ticker and share volume.
+pub(crate) fn most_active(rows: &[QuoteRecord]) -> Option<(String, f64)> {
+    rows.iter()
+        .filter_map(|r| Some((r.ticker.as_deref()?.to_string(), r.day_volume?)))
+        .filter(|(_, v)| v.is_finite() && *v > 0.0)
+        .max_by(|a, b| a.1.partial_cmp(&b.1).expect("finite volume"))
 }
 
 fn pnl_color(value: Option<f64>, t: &Theme) -> Color {
