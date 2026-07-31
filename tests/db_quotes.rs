@@ -92,23 +92,24 @@ async fn test_fetch_all_returns_stored(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn test_dump_to_csv_creates_file(pool: sqlx::PgPool) {
+async fn test_dump_to_csv_writes_to_given_path(pool: sqlx::PgPool) {
     store_quote_to_db(&make_quote("AMZN"), &pool)
         .await
         .expect("store failed");
 
-    let dir = std::env::temp_dir();
-    let path = dump_table_to_csv(&pool, &dir)
+    let out = std::env::temp_dir().join(format!("quotes_dump_test_{}.csv", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+
+    let written = dump_table_to_csv(&pool, &out)
         .await
         .expect("dump_table_to_csv returned an error");
 
-    assert!(path.starts_with(&dir), "CSV should be written inside `dir`");
-    let name = path.file_name().unwrap().to_string_lossy();
-    assert!(
-        name.starts_with("quotes_dump_") && name.ends_with(".csv"),
-        "unexpected CSV filename: {name}"
-    );
-    assert!(path.exists(), "returned path should exist on disk");
+    assert_eq!(written, out, "should return the file path it was given");
+    assert!(out.exists(), "the CSV file should exist on disk");
+    let bytes = std::fs::metadata(&out)
+        .expect("CSV file should be readable")
+        .len();
+    assert!(bytes > 0, "the CSV file should be non-empty");
 
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&out);
 }

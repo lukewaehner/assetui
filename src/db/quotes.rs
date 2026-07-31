@@ -43,22 +43,19 @@ pub async fn fetch_all_quotes(p: &Pool<Postgres>) -> Result<Vec<QuoteRecord>, Ap
     Ok(rows)
 }
 
-#[instrument(skip(p, dir))]
-pub async fn dump_table_to_csv(p: &Pool<Postgres>, dir: &Path) -> Result<PathBuf, AppError> {
+/// Dumps every quote to the CSV file at `out`, returning that same path.
+#[instrument(skip(p, out))]
+pub async fn dump_table_to_csv(p: &Pool<Postgres>, out: &Path) -> Result<PathBuf, AppError> {
     debug!("dumping quotes table to csv");
     let rows: Vec<QuoteRecord> = fetch_all_quotes(p).await?;
-    let path = dir.join(format!(
-        "quotes_dump_{}.csv",
-        chrono::Utc::now().format("%Y%m%d%H%M%S")
-    ));
-    let mut wtr = csv::Writer::from_path(&path)?;
+    let mut wtr = csv::Writer::from_path(out)?;
     for row in rows {
         wtr.serialize(row)?;
     }
     wtr.flush()?;
     info!(
         "quotes table dumped to csv successfully, written at: {}",
-        path.display()
+        out.display()
     );
-    Ok(path)
+    Ok(out.to_path_buf())
 }

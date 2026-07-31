@@ -71,9 +71,8 @@ async fn main() -> Result<(), AppError> {
             fetch_and_store(&pool, &client, ticker).await?;
         }
         Some(Commands::DumpToCsv) => {
-            let output_path = Path::new("quotes_dump.csv");
-            dump_table_to_csv(&pool, output_path).await?;
-            println!("Quotes table dumped to {:?}", output_path);
+            let written = dump_table_to_csv(&pool, Path::new("quotes_dump.csv")).await?;
+            println!("Quotes table dumped to {}", written.display());
         }
         Some(Commands::PullFromDb) => {
             print_tickers(&pool).await?;
