@@ -106,7 +106,8 @@ async fn test_csv_export_content_matches_stored_data(pool: sqlx::PgPool) {
         .await
         .expect("store CSVTEST2 failed");
 
-    let csv_path = dump_table_to_csv(&pool, &std::env::temp_dir())
+    let out = std::env::temp_dir().join(format!("quotes_export_{}.csv", std::process::id()));
+    let csv_path = dump_table_to_csv(&pool, &out)
         .await
         .expect("dump_table_to_csv failed");
 
