@@ -316,6 +316,43 @@ fn fuzzy_cell(text: Option<&str>, query: &str, active: bool, t: &Theme) -> Cell<
     Cell::from(Line::from(spans))
 }
 
+const PRICE_EPSILON: f64 = 0.001;
+
+/// Which way a value moved, once an epsilon band has collapsed near-zero deltas to flat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Up,
+    Down,
+    Neutral,
+}
+
+fn direction(delta: f64, eps: f64) -> Direction {
+    if delta > eps {
+        Direction::Up
+    } else if delta < -eps {
+        Direction::Down
+    } else {
+        Direction::Neutral
+    }
+}
+
+/// The theme colour for a movement direction.
+fn direction_color(dir: Direction, t: &Theme) -> Color {
+    match dir {
+        Direction::Up => t.up,
+        Direction::Down => t.down,
+        Direction::Neutral => t.neutral,
+    }
+}
+
+fn direction_arrow(dir: Direction) -> &'static str {
+    match dir {
+        Direction::Up => "▲",
+        Direction::Down => "▼",
+        Direction::Neutral => "·",
+    }
+}
+
 fn price_change_color(
     stock: &QuoteRecord,
     flash_map: &HashMap<String, (f64, Instant)>,
@@ -332,9 +369,8 @@ fn price_change_color(
             _ => None,
         });
     match diff {
-        Some(d) if d > 0.001 => t.up,
-        Some(d) if d < -0.001 => t.down,
-        _ => t.neutral,
+        Some(d) => direction_color(direction(d, PRICE_EPSILON), t),
+        None => t.neutral,
     }
 }
 
@@ -873,13 +909,8 @@ fn price_line(
         && let Some(pct) = day_change_pct(stock.price, stock.previous_close)
     {
         let diff = price - prev;
-        let (arrow, color) = if diff > 0.001 {
-            ("▲", t.up)
-        } else if diff < -0.001 {
-            ("▼", t.down)
-        } else {
-            ("·", t.neutral)
-        };
+        let dir = direction(diff, PRICE_EPSILON);
+        let (arrow, color) = (direction_arrow(dir), direction_color(dir, t));
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("{arrow} ${:.2} ({pct:+.2}%)", diff.abs()),
@@ -1477,9 +1508,7 @@ pub(crate) fn portfolio_positions(holdings: &[Holding], rows: &[QuoteRecord]) ->
 
 fn pnl_color(value: Option<f64>, t: &Theme) -> Color {
     match value {
-        Some(v) if v > f64::EPSILON => t.up,
-        Some(v) if v < -f64::EPSILON => t.down,
-        Some(_) => t.neutral,
+        Some(v) => direction_color(direction(v, f64::EPSILON), t),
         None => t.dim,
     }
 }
@@ -2000,6 +2029,14 @@ mod tests {
         assert_eq!(pnl_color(Some(-5.0), &t), t.down);
         assert_eq!(pnl_color(Some(0.0), &t), t.neutral);
         assert_eq!(pnl_color(None, &t), t.dim);
+    }
+
+    #[test]
+    fn direction_classifies_relative_to_epsilon_band() {
+        assert_eq!(direction(0.5, PRICE_EPSILON), Direction::Up);
+        assert_eq!(direction(-0.5, PRICE_EPSILON), Direction::Down);
+        assert_eq!(direction(0.0, PRICE_EPSILON), Direction::Neutral);
+        assert_eq!(direction(PRICE_EPSILON / 2.0, PRICE_EPSILON), Direction::Neutral);
     }
 
     #[test]
