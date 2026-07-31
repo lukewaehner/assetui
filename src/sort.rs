@@ -26,7 +26,7 @@ mod tests {
     #[test]
     fn test_sort_order_clone() {
         let original = SortOrder::Ascending;
-        let cloned = original.clone();
+        let cloned = original;
         assert_eq!(cloned, SortOrder::Ascending);
     }
 
