@@ -134,7 +134,8 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
     let visible = area.height.saturating_sub(2) as usize;
     let start = app.market.logs.len().saturating_sub(visible);
     let log_lines: Vec<Line> = app
-        .market.logs
+        .market
+        .logs
         .iter()
         .skip(start)
         .map(|s| Line::styled(s.as_str(), Style::default().fg(t.dim)))
@@ -171,17 +172,24 @@ fn move_arrow(value: f64) -> &'static str {
 }
 
 fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
-    let [portfolio_area, movers_area, alerts_area, breadth_area, active_area, status_area, _rest] =
-        Layout::vertical([
-            Constraint::Length(5),
-            Constraint::Length(4),
-            Constraint::Length(4),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(0),
-        ])
-        .areas(area);
+    let [
+        portfolio_area,
+        movers_area,
+        alerts_area,
+        breadth_area,
+        active_area,
+        status_area,
+        _rest,
+    ] = Layout::vertical([
+        Constraint::Length(5),
+        Constraint::Length(4),
+        Constraint::Length(4),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(0),
+    ])
+    .areas(area);
     draw_portfolio_cube(f, portfolio_area, app);
     draw_movers_cube(f, movers_area, app);
     draw_alerts_cube(f, alerts_area, app);
@@ -222,7 +230,10 @@ fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
             ]),
         ]
     };
-    f.render_widget(Paragraph::new(lines).block(cube_block("portfolio", &t)), area);
+    f.render_widget(
+        Paragraph::new(lines).block(cube_block("portfolio", &t)),
+        area,
+    );
 }
 
 /// Movers cube: the day's biggest gainer and biggest loser across tracked quotes.
@@ -245,7 +256,12 @@ fn draw_movers_cube(f: &mut Frame, area: Rect, app: &App) {
 /// One `TICKER ▲ +x.x%` mover row, coloured by the sign of its day move.
 fn mover_line(m: &Mover, t: &Theme) -> Line<'static> {
     Line::from(Span::styled(
-        format!("{:<6}{} {:+.1}%", m.ticker, move_arrow(m.day_pct), m.day_pct),
+        format!(
+            "{:<6}{} {:+.1}%",
+            m.ticker,
+            move_arrow(m.day_pct),
+            m.day_pct
+        ),
         Style::default().fg(pnl_color(Some(m.day_pct), t)),
     ))
 }
@@ -317,7 +333,10 @@ fn draw_active_cube(f: &mut Frame, area: Rect, app: &App) {
             Span::styled(fmt_volume(volume), Style::default().fg(t.dim)),
         ])],
     };
-    f.render_widget(Paragraph::new(lines).block(cube_block("most active", &t)), area);
+    f.render_widget(
+        Paragraph::new(lines).block(cube_block("most active", &t)),
+        area,
+    );
 }
 
 /// Status cube: whether the live quote stream is running and how many symbols it covers.
@@ -485,7 +504,10 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             Cell::from("")
         };
         let bell = if has_active_alert(q.ticker.as_deref(), &app.alerts) {
-            Cell::from(Span::styled("!", Style::default().fg(t.accent).add_modifier(Modifier::BOLD)))
+            Cell::from(Span::styled(
+                "!",
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+            ))
         } else {
             Cell::from("")
         };
@@ -501,7 +523,11 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             opt_cell(day_change_pct(q.price, q.previous_close), |pct| {
                 format!("{pct:+.2}%")
             })
-            .style(Style::default().fg(price_change_color(q, &app.animations.row_flash_map, &t))),
+            .style(Style::default().fg(price_change_color(
+                q,
+                &app.animations.row_flash_map,
+                &t,
+            ))),
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
             opt_cell(q.day_volume, fmt_volume),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
@@ -535,12 +561,6 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     if searching && !query.trim().is_empty() {
         title.push(Span::styled(
             format!("filter: {} ", query.trim()),
-            Style::default().fg(t.dim),
-        ));
-    }
-    if !app.market.db_display.status.is_empty() {
-        title.push(Span::styled(
-            format!("{} ", app.market.db_display.status),
             Style::default().fg(t.dim),
         ));
     }
@@ -996,11 +1016,7 @@ fn push_analysis_lines(
     }
 }
 
-fn push_statistics_lines(
-    lines: &mut Vec<Line<'static>>,
-    stats: &QuoteRecordStatistics,
-    t: &Theme,
-) {
+fn push_statistics_lines(lines: &mut Vec<Line<'static>>, stats: &QuoteRecordStatistics, t: &Theme) {
     lines.push(section_heading("KEY STATISTICS", None, t));
     lines.push(Line::raw(""));
 
@@ -1052,7 +1068,10 @@ fn push_news_lines(lines: &mut Vec<Line<'static>>, news: &StockNews, width: usiz
         ));
         let meta = fmt_news_meta(item.publisher.as_deref(), item.published_at);
         if !meta.is_empty() {
-            lines.push(Line::styled(format!("  {meta}"), Style::default().fg(t.dim)));
+            lines.push(Line::styled(
+                format!("  {meta}"),
+                Style::default().fg(t.dim),
+            ));
         }
     }
 }
@@ -1408,9 +1427,15 @@ fn draw_option_table(
             cells.push(opt_cell(a.map(|a| a.theo_price), |v| format!("{v:.2}")));
             cells.push(opt_cell(a.map(|a| a.greeks.delta), |v| format!("{v:.3}")));
             cells.push(opt_cell(a.map(|a| a.greeks.gamma), |v| format!("{v:.4}")));
-            cells.push(opt_cell(a.map(|a| a.greeks.theta / 365.0), |v| format!("{v:.3}")));
-            cells.push(opt_cell(a.map(|a| a.greeks.vega / 100.0), |v| format!("{v:.3}")));
-            cells.push(opt_cell(a.map(|a| a.greeks.rho / 100.0), |v| format!("{v:.3}")));
+            cells.push(opt_cell(a.map(|a| a.greeks.theta / 365.0), |v| {
+                format!("{v:.3}")
+            }));
+            cells.push(opt_cell(a.map(|a| a.greeks.vega / 100.0), |v| {
+                format!("{v:.3}")
+            }));
+            cells.push(opt_cell(a.map(|a| a.greeks.rho / 100.0), |v| {
+                format!("{v:.3}")
+            }));
         }
         Row::new(cells)
     });
@@ -1437,13 +1462,17 @@ fn draw_option_table(
     }
 
     let block = Block::default()
-        .title(section_heading(title, Some(format!("{}", contracts.len())), t))
+        .title(section_heading(
+            title,
+            Some(format!("{}", contracts.len())),
+            t,
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(t.border));
 
     if contracts.is_empty() {
-        let empty = Paragraph::new(Span::styled("no contracts", Style::default().fg(t.dim)))
-            .block(block);
+        let empty =
+            Paragraph::new(Span::styled("no contracts", Style::default().fg(t.dim))).block(block);
         f.render_widget(empty, area);
         return;
     }
@@ -1479,7 +1508,9 @@ pub(crate) fn top_movers(rows: &[QuoteRecord]) -> (Option<Mover>, Option<Mover>)
     }
     movers.sort_by(|a, b| b.day_pct.partial_cmp(&a.day_pct).expect("finite day_pct"));
     let gainer = movers.first().cloned();
-    let loser = (movers.len() >= 2).then(|| movers.last().cloned()).flatten();
+    let loser = (movers.len() >= 2)
+        .then(|| movers.last().cloned())
+        .flatten();
     (gainer, loser)
 }
 
@@ -1586,7 +1617,10 @@ fn manage_input_line(input: &ManageInput, blink: bool, t: &Theme) -> Line<'stati
         };
         spans.push(Span::styled(hint, Style::default().fg(t.dim)));
     } else {
-        spans.push(Span::styled(input.buffer.clone(), Style::default().fg(t.fg)));
+        spans.push(Span::styled(
+            input.buffer.clone(),
+            Style::default().fg(t.fg),
+        ));
         spans.push(Span::styled(cursor, Style::default().fg(t.accent)));
     }
     Line::from(spans)
@@ -1603,7 +1637,8 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
     f.render_widget(block, area);
 
     let holding_input = app
-        .manage.input
+        .manage
+        .input
         .as_ref()
         .filter(|i| i.kind == ManageInputKind::Holding);
 
@@ -1619,7 +1654,10 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
 
     if app.holdings.is_empty() {
         f.render_widget(
-            Paragraph::new(Span::styled("no holdings — press a to add", Style::default().fg(t.dim))),
+            Paragraph::new(Span::styled(
+                "no holdings — press a to add",
+                Style::default().fg(t.dim),
+            )),
             content,
         );
         return;
@@ -1632,10 +1670,19 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
 
     let head_sty = Style::default().fg(t.dim).add_modifier(Modifier::BOLD);
     let header = Row::new(
-        ["Ticker", "Shares", "Avg Cost", "Price", "Mkt Value", "P&L $", "P&L %", "Day $"]
-            .into_iter()
-            .map(|h| Cell::from(Span::styled(h, head_sty)))
-            .collect::<Vec<_>>(),
+        [
+            "Ticker",
+            "Shares",
+            "Avg Cost",
+            "Price",
+            "Mkt Value",
+            "P&L $",
+            "P&L %",
+            "Day $",
+        ]
+        .into_iter()
+        .map(|h| Cell::from(Span::styled(h, head_sty)))
+        .collect::<Vec<_>>(),
     );
     let rows = positions.iter().map(|p| {
         Row::new(vec![
@@ -1669,7 +1716,9 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
         table = table
             .row_highlight_style(Style::default().bg(t.cursor).add_modifier(Modifier::BOLD))
             .highlight_symbol(Span::styled("▸ ", Style::default().fg(t.accent)));
-        state.select(Some(app.manage.selected.min(positions.len().saturating_sub(1))));
+        state.select(Some(
+            app.manage.selected.min(positions.len().saturating_sub(1)),
+        ));
     }
     f.render_stateful_widget(table, table_area, &mut state);
 
@@ -1679,7 +1728,10 @@ fn draw_holdings_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
             .map_or_else(|| "-".to_string(), |v| format!("{v:+.2}%"));
         let totals = Line::from(vec![
             label("Value ", &t),
-            Span::styled(format!("${:.2}   ", summary.total_market_value), Style::default().fg(t.fg)),
+            Span::styled(
+                format!("${:.2}   ", summary.total_market_value),
+                Style::default().fg(t.fg),
+            ),
             label("P&L ", &t),
             Span::styled(
                 format!("{:+.2} ({pct})", summary.total_pnl),
@@ -1703,7 +1755,8 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
     f.render_widget(block, area);
 
     let alert_input = app
-        .manage.input
+        .manage
+        .input
         .as_ref()
         .filter(|i| i.kind == ManageInputKind::Alert);
 
@@ -1745,14 +1798,20 @@ fn draw_alerts_section(f: &mut Frame, area: Rect, app: &App, focused: bool) {
             Cell::from(format!("{:.2}", a.threshold)),
         ])
     });
-    let widths = [Constraint::Length(8), Constraint::Length(11), Constraint::Length(12)];
+    let widths = [
+        Constraint::Length(8),
+        Constraint::Length(11),
+        Constraint::Length(12),
+    ];
     let mut table = Table::new(rows, widths).header(header);
     let mut state = ratatui::widgets::TableState::default();
     if focused {
         table = table
             .row_highlight_style(Style::default().bg(t.cursor).add_modifier(Modifier::BOLD))
             .highlight_symbol(Span::styled("▸ ", Style::default().fg(t.accent)));
-        state.select(Some(app.manage.selected.min(app.alerts.len().saturating_sub(1))));
+        state.select(Some(
+            app.manage.selected.min(app.alerts.len().saturating_sub(1)),
+        ));
     }
     f.render_stateful_widget(table, content, &mut state);
 }
@@ -1976,7 +2035,11 @@ mod tests {
         assert_eq!(fmt_pct_opt(None), "-");
     }
 
-    fn opt_contract(kind: OptionKind, strike: f64, expiry: chrono::DateTime<chrono::Utc>) -> OptionContract {
+    fn opt_contract(
+        kind: OptionKind,
+        strike: f64,
+        expiry: chrono::DateTime<chrono::Utc>,
+    ) -> OptionContract {
         OptionContract {
             kind,
             expiry,
@@ -2054,7 +2117,10 @@ mod tests {
         assert_eq!(direction(0.5, PRICE_EPSILON), Direction::Up);
         assert_eq!(direction(-0.5, PRICE_EPSILON), Direction::Down);
         assert_eq!(direction(0.0, PRICE_EPSILON), Direction::Neutral);
-        assert_eq!(direction(PRICE_EPSILON / 2.0, PRICE_EPSILON), Direction::Neutral);
+        assert_eq!(
+            direction(PRICE_EPSILON / 2.0, PRICE_EPSILON),
+            Direction::Neutral
+        );
     }
 
     #[test]
