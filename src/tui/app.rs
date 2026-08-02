@@ -31,6 +31,9 @@ const PAGE_FETCH_LIMIT: i64 = 200;
 /// Interval at which the input-box cursor toggles visibility.
 const BLINK_INTERVAL: Duration = Duration::from_millis(500);
 
+/// How often the Market dashboard cubes re-snapshot their data.
+const DASHBOARD_REFRESH: Duration = Duration::from_secs(3);
+
 /// Maximum number of lines retained in the log panel.
 const MAX_LOG_LINES: usize = 500;
 
@@ -211,6 +214,24 @@ pub struct MarketState {
     pub db_display: DbDisplay,
     /// Lines shown in the log panel (most recent at the bottom), capped at [`MAX_LOG_LINES`].
     pub logs: VecDeque<String>,
+    /// Throttled snapshot the dashboard cubes render from, so they don't jitter on every quote tick.
+    pub dashboard: DashboardSnapshot,
+    /// Time accumulated since [`Self::dashboard`] last refreshed.
+    pub dashboard_age: Duration,
+}
+
+/// A point-in-time copy of the inputs the Market dashboard cubes render from.
+#[derive(Default)]
+pub struct DashboardSnapshot {
+    pub rows: Vec<QuoteRecord>,
+    /// Holdings as of the last refresh.
+    pub holdings: Vec<Holding>,
+    /// Active alerts as of the last refresh.
+    pub alerts: Vec<Alert>,
+    /// Whether the live quote stream was running at the last refresh.
+    pub stream_live: bool,
+    /// Number of streamed symbols at the last refresh.
+    pub tracked: usize,
 }
 
 pub struct ManageState {
@@ -436,6 +457,8 @@ impl App {
                     page_size: 25,
                 },
                 logs: VecDeque::new(),
+                dashboard: DashboardSnapshot::default(),
+                dashboard_age: DASHBOARD_REFRESH,
             },
             should_quit: false,
             services: Services {
@@ -490,9 +513,29 @@ impl App {
             .row_flash_map
             .retain(|_, (_, ts)| ts.elapsed() < FLASH_TTL);
 
+        self.market.dashboard_age += elapsed;
+        let dashboard_refreshed = self.market.dashboard_age >= DASHBOARD_REFRESH;
+        if dashboard_refreshed {
+            self.refresh_dashboard();
+            self.market.dashboard_age = Duration::ZERO;
+        }
+
         (blinked && self.market.input_mode.is_focused())
             || self.notifications.has_notification()
             || had_flashes
+            || (dashboard_refreshed && self.page == Page::Market && !self.show_logs)
+    }
+
+    /// Snapshots the current dashboard inputs into [`MarketState::dashboard`].
+    fn refresh_dashboard(&mut self) {
+        let snapshot = DashboardSnapshot {
+            rows: self.market.db_display.all_rows.clone(),
+            holdings: self.holdings.clone(),
+            alerts: self.alerts.clone(),
+            stream_live: self.stream_handle.is_some(),
+            tracked: self.subscribed_symbols.len(),
+        };
+        self.market.dashboard = snapshot;
     }
 
     pub fn status_mode(&self) -> (StatusMode, &'static str) {
@@ -2517,6 +2560,7 @@ mod tests {
         ]));
         app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("AAPL")]));
         app.handle_event(AppEvent::AlertsLoaded(vec![alert_for(1, "AAPL")]));
+        app.tick(DASHBOARD_REFRESH);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
 
         terminal
@@ -2545,6 +2589,52 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect()
+    }
+
+    /// The value a dashboard cube would show for the sole holding.
+    fn dashboard_market_value(app: &App) -> Option<f64> {
+        crate::portfolio::portfolio_positions(
+            &app.market.dashboard.holdings,
+            &app.market.dashboard.rows,
+        )[0]
+            .market_value
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_snapshot_primes_on_first_tick() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![quote("AAPL", 110.0, 100.0)]));
+        assert!(app.market.dashboard.rows.is_empty(), "empty before any tick");
+
+        app.tick(Duration::from_millis(100));
+
+        assert_eq!(app.market.dashboard.rows.len(), 1, "first tick primes the snapshot");
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_holds_value_until_refresh_interval() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::PageLoaded(vec![quote("AAPL", 100.0, 100.0)]));
+        app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("AAPL")]));
+        app.tick(DASHBOARD_REFRESH);
+        assert_eq!(dashboard_market_value(&app), Some(1000.0));
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("AAPL", Some(150.0))));
+        assert_eq!(
+            app.market.db_display.all_rows[0].price,
+            Some(150.0),
+            "live data updates immediately"
+        );
+
+        app.tick(Duration::from_secs(1));
+        assert_eq!(
+            dashboard_market_value(&app),
+            Some(1000.0),
+            "cube holds until the interval elapses"
+        );
+
+        app.tick(Duration::from_secs(2));
+        assert_eq!(dashboard_market_value(&app), Some(1500.0), "10 shares * $150");
     }
 
     #[tokio::test]

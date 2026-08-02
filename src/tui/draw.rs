@@ -192,8 +192,9 @@ fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let positions = portfolio_positions(&app.holdings, &app.market.db_display.all_rows);
-    let lines = if app.holdings.is_empty() {
+    let snap = &app.market.dashboard;
+    let positions = portfolio_positions(&snap.holdings, &snap.rows);
+    let lines = if snap.holdings.is_empty() {
         vec![dim_line("no holdings", &t)]
     } else if !positions.iter().any(|p| p.market_value.is_some()) {
         vec![dim_line("awaiting prices", &t)]
@@ -227,7 +228,7 @@ fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
 /// Movers cube: the day's biggest gainer and biggest loser across tracked quotes.
 fn draw_movers_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let (gainer, loser) = top_movers(&app.market.db_display.all_rows);
+    let (gainer, loser) = top_movers(&app.market.dashboard.rows);
     let lines = match gainer {
         None => vec![dim_line("no quotes yet", &t)],
         Some(g) => vec![
@@ -252,15 +253,16 @@ fn mover_line(m: &Mover, t: &Theme) -> Line<'static> {
 /// Alerts cube: the active-alert count in the title and the alert nearest to firing in the body.
 fn draw_alerts_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let title = if app.alerts.is_empty() {
+    let snap = &app.market.dashboard;
+    let title = if snap.alerts.is_empty() {
         "alerts".to_string()
     } else {
-        format!("alerts · {}", app.alerts.len())
+        format!("alerts · {}", snap.alerts.len())
     };
-    let lines = if app.alerts.is_empty() {
+    let lines = if snap.alerts.is_empty() {
         vec![dim_line("no alerts", &t)]
     } else {
-        match nearest_alert(&app.alerts, &app.market.db_display.all_rows) {
+        match nearest_alert(&snap.alerts, &snap.rows) {
             None => vec![dim_line("awaiting prices", &t)],
             Some(a) => {
                 let op = match a.direction {
@@ -286,7 +288,7 @@ fn draw_alerts_cube(f: &mut Frame, area: Rect, app: &App) {
 /// Breadth cube: how many tracked quotes are up versus down on the day.
 fn draw_breadth_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let (advancers, decliners) = day_breadth(&app.market.db_display.all_rows);
+    let (advancers, decliners) = day_breadth(&app.market.dashboard.rows);
     let lines = if advancers == 0 && decliners == 0 {
         vec![dim_line("no quotes yet", &t)]
     } else {
@@ -308,7 +310,7 @@ fn draw_breadth_cube(f: &mut Frame, area: Rect, app: &App) {
 /// Most-active cube: the most-traded tracked quote by day volume.
 fn draw_active_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let lines = match most_active(&app.market.db_display.all_rows) {
+    let lines = match most_active(&app.market.dashboard.rows) {
         None => vec![dim_line("no volume", &t)],
         Some((ticker, volume)) => vec![Line::from(vec![
             Span::styled(format!("{ticker:<6}"), Style::default().fg(t.fg)),
@@ -321,8 +323,9 @@ fn draw_active_cube(f: &mut Frame, area: Rect, app: &App) {
 /// Status cube: whether the live quote stream is running and how many symbols it covers.
 fn draw_status_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let tracked = app.subscribed_symbols.len();
-    let status = if app.stream_handle.is_some() {
+    let snap = &app.market.dashboard;
+    let tracked = snap.tracked;
+    let status = if snap.stream_live {
         Span::styled("live●", Style::default().fg(t.up))
     } else {
         Span::styled("offline", Style::default().fg(t.dim))
