@@ -8,6 +8,7 @@ pub mod models;
 pub mod portfolio;
 pub mod run;
 pub mod search;
+pub mod sectors;
 pub mod sort;
 pub mod tui;
 
