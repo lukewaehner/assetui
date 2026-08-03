@@ -381,6 +381,7 @@ impl App {
                             "sector {}: {e}",
                             sector_label(sector)
                         )));
+                        let _ = tx.send(AppEvent::SectorDataReady { sector, tiles: Vec::new() });
                         return;
                     }
                 };
@@ -407,6 +408,7 @@ impl App {
                             "sector {}: {e}",
                             sector_label(sector)
                         )));
+                        let _ = tx.send(AppEvent::SectorDataReady { sector, tiles: Vec::new() });
                     }
                 }
             });

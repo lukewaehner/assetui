@@ -1487,6 +1487,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sector_data_ready_with_empty_tiles_forms_a_counting_group() {
+        use yfinance_rs::screener::EquitySector;
+        let (mut app, _rx) = make_test_app();
+
+        app.handle_event(AppEvent::SectorDataReady { sector: EquitySector::Energy, tiles: Vec::new() });
+
+        assert_eq!(app.sectors.map.groups.len(), 1, "empty sector still forms a group");
+        assert_eq!(app.sectors.map.groups[0].total_market_cap, 0.0);
+    }
+
+    #[tokio::test]
     async fn status_mode_is_normal_with_hint_for_default_market_state() {
         // arrange
         let (app, _rx) = make_test_app();
