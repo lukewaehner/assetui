@@ -114,7 +114,7 @@ mod tests {
         ];
         let out = rsi(&closes, 14);
         let v = out[14].expect("defined at index 14");
-        assert!((v - 70.53).abs() < 0.1, "expected ~70.53, got {v}");
+        assert!((v - 70.46).abs() < 0.01, "expected ~70.46, got {v}");
     }
 
     #[test]
