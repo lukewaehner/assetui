@@ -2048,14 +2048,52 @@ fn draw_chart_modal(f: &mut Frame, app: &mut App) {
         None => {
             f.render_widget(placeholder("Loading data...", &t), inner);
         }
-        Some(candles) => draw_stock_chart(
-            f,
-            inner,
-            candles,
-            stock.ticker.as_deref().unwrap_or("-"),
-            &t,
-        ),
+        Some(candles) => {
+            let show_volume = app.stock_modal.show_volume;
+            let volume_h = if show_volume && inner.height >= 14 { 7 } else { 0 };
+            let [price_area, volume_area] = Layout::vertical([
+                Constraint::Min(6),
+                Constraint::Length(volume_h),
+            ])
+            .areas(inner);
+            let ticker = stock.ticker.as_deref().unwrap_or("-").to_string();
+            draw_stock_chart(f, price_area, candles, &ticker, &t);
+            if volume_h > 0 {
+                draw_volume_panel(f, volume_area, candles, &t);
+            }
+        }
     }
+}
+
+/// Per-candle share volume as `Sparkline` bar heights (0 when a candle carries no volume).
+fn volume_series(candles: &[Candle]) -> Vec<u64> {
+    candles
+        .iter()
+        .map(|c| {
+            c.volume
+                .as_ref()
+                .map(|q| q.as_decimal().as_f64())
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .map_or(0, |v| v as u64)
+        })
+        .collect()
+}
+
+/// Renders the volume sub-panel: a titled block with a volume Sparkline.
+fn draw_volume_panel(f: &mut Frame, area: Rect, candles: &[Candle], t: &Theme) {
+    let block = Block::default()
+        .title(block_title("volume".into(), t))
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(t.border));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let data = volume_series(candles);
+    f.render_widget(
+        Sparkline::default()
+            .data(&data)
+            .style(Style::default().fg(t.dim)),
+        inner,
+    );
 }
 
 /// (min, max) of paired low/high series, or `None` when empty.

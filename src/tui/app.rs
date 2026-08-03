@@ -461,6 +461,8 @@ pub struct StockInfoModal {
     pub option_chain: Option<OptionChain>,
     /// Index into the chain's `expirations` currently shown in the modal.
     pub selected_expiry: usize,
+    /// Whether the chart modal shows the volume sub-panel (toggle: `v`).
+    pub show_volume: bool,
 }
 
 fn sort_mode_for_key(key: char) -> Option<SortMode> {
@@ -526,6 +528,7 @@ impl App {
                 chart_data: None,
                 option_chain: None,
                 selected_expiry: 0,
+                show_volume: true,
             },
             overlay: Overlay::None,
             notifications: Notifications::new(),
