@@ -843,6 +843,7 @@ impl App {
         }
 
         match code {
+            KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('r') => {
                 self.sectors.loading = true;
                 self.spawn_sector_map();
@@ -1616,6 +1617,14 @@ mod tests {
 
         assert_eq!(app.overlay, Overlay::Chart);
         assert_eq!(app.stock_modal.stock.ticker.as_deref(), Some("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn test_q_quits_from_sectors_page() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Sectors;
+        app.handle_key(KeyCode::Char('q'));
+        assert!(app.should_quit);
     }
 
     #[tokio::test]
