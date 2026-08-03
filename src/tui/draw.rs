@@ -1490,8 +1490,7 @@ pub(crate) struct Mover {
     pub day_pct: f64,
 }
 
-/// The biggest gainer and biggest loser across `rows`, by day-change percent.
-pub(crate) fn top_movers(rows: &[QuoteRecord]) -> (Option<Mover>, Option<Mover>) {
+pub(crate) fn ranked_movers(rows: &[QuoteRecord], limit: usize) -> Vec<Mover> {
     let mut movers: Vec<Mover> = rows
         .iter()
         .filter_map(|r| {
@@ -1503,14 +1502,16 @@ pub(crate) fn top_movers(rows: &[QuoteRecord]) -> (Option<Mover>, Option<Mover>)
             })
         })
         .collect();
-    if movers.is_empty() {
-        return (None, None);
-    }
     movers.sort_by(|a, b| b.day_pct.partial_cmp(&a.day_pct).expect("finite day_pct"));
+    movers.truncate(limit);
+    movers
+}
+
+/// The biggest gainer and biggest loser across `rows`, by day-change percent.
+pub(crate) fn top_movers(rows: &[QuoteRecord]) -> (Option<Mover>, Option<Mover>) {
+    let movers = ranked_movers(rows, usize::MAX);
     let gainer = movers.first().cloned();
-    let loser = (movers.len() >= 2)
-        .then(|| movers.last().cloned())
-        .flatten();
+    let loser = (movers.len() >= 2).then(|| movers.last().cloned()).flatten();
     (gainer, loser)
 }
 
@@ -1946,6 +1947,88 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mover_row(ticker: &str, price: f64, previous_close: f64) -> QuoteRecord {
+        QuoteRecord {
+            ticker: Some(ticker.to_string()),
+            price: Some(price),
+            previous_close: Some(previous_close),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn top_movers_returns_highest_gainer_and_lowest_loser() {
+        // arrange
+        let rows = vec![
+            mover_row("GAIN", 110.0, 100.0),
+            mover_row("FLAT", 100.0, 100.0),
+            mover_row("LOSS", 95.0, 100.0),
+        ];
+
+        // act
+        let (gainer, loser) = top_movers(&rows);
+
+        // assert
+        assert_eq!(gainer.unwrap().ticker, "GAIN");
+        assert_eq!(loser.unwrap().ticker, "LOSS");
+    }
+
+    #[test]
+    fn top_movers_single_quote_has_no_loser() {
+        let rows = vec![mover_row("ONLY", 110.0, 100.0)];
+
+        let (gainer, loser) = top_movers(&rows);
+
+        assert_eq!(gainer.unwrap().ticker, "ONLY");
+        assert!(loser.is_none(), "one quote is never shown as both ends");
+    }
+
+    #[test]
+    fn ranked_movers_sorts_biggest_gain_first() {
+        let rows = vec![
+            mover_row("LOSS", 95.0, 100.0),
+            mover_row("GAIN", 110.0, 100.0),
+            mover_row("MILD", 102.0, 100.0),
+        ];
+
+        let ranked = ranked_movers(&rows, 10);
+
+        let tickers: Vec<&str> = ranked.iter().map(|m| m.ticker.as_str()).collect();
+        assert_eq!(tickers, vec!["GAIN", "MILD", "LOSS"]);
+    }
+
+    #[test]
+    fn ranked_movers_truncates_to_limit() {
+        let rows = vec![
+            mover_row("A", 110.0, 100.0),
+            mover_row("B", 108.0, 100.0),
+            mover_row("C", 106.0, 100.0),
+        ];
+
+        let ranked = ranked_movers(&rows, 2);
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].ticker, "A");
+        assert_eq!(ranked[1].ticker, "B");
+    }
+
+    #[test]
+    fn ranked_movers_skips_quotes_without_a_day_move() {
+        let mut no_close = mover_row("SKIP", 110.0, 0.0);
+        no_close.previous_close = None;
+        let rows = vec![no_close, mover_row("KEEP", 110.0, 100.0)];
+
+        let ranked = ranked_movers(&rows, 10);
+
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].ticker, "KEEP");
+    }
+
+    #[test]
+    fn ranked_movers_empty_input_is_empty() {
+        assert!(ranked_movers(&[], 10).is_empty());
+    }
 
     fn watchlist(tickers: &[&str]) -> HashSet<String> {
         tickers.iter().map(|s| s.to_string()).collect()
