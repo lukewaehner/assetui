@@ -2050,16 +2050,22 @@ fn draw_chart_modal(f: &mut Frame, app: &mut App) {
         }
         Some(candles) => {
             let show_volume = app.stock_modal.show_volume;
+            let show_rsi = app.stock_modal.show_rsi;
             let volume_h = if show_volume && inner.height >= 14 { 7 } else { 0 };
-            let [price_area, volume_area] = Layout::vertical([
+            let rsi_h = if show_rsi && inner.height >= 14 + volume_h { 8 } else { 0 };
+            let [price_area, volume_area, rsi_area] = Layout::vertical([
                 Constraint::Min(6),
                 Constraint::Length(volume_h),
+                Constraint::Length(rsi_h),
             ])
             .areas(inner);
             let ticker = stock.ticker.as_deref().unwrap_or("-").to_string();
             draw_stock_chart(f, price_area, candles, &ticker, &t);
             if volume_h > 0 {
                 draw_volume_panel(f, volume_area, candles, &t);
+            }
+            if rsi_h > 0 {
+                draw_rsi_panel(f, rsi_area, candles, &t);
             }
         }
     }
@@ -2094,6 +2100,58 @@ fn draw_volume_panel(f: &mut Frame, area: Rect, candles: &[Candle], t: &Theme) {
             .style(Style::default().fg(t.dim)),
         inner,
     );
+}
+
+fn draw_rsi_panel(f: &mut Frame, area: Rect, candles: &[Candle], t: &Theme) {
+    let block = Block::default()
+        .title(block_title(format!("RSI {}", crate::indicators::RSI_PERIOD), t))
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(t.border));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let closes: Vec<f64> = candles
+        .iter()
+        .map(|c| c.ohlc.close.as_decimal().as_f64())
+        .collect();
+    let rsi = crate::indicators::rsi(&closes, crate::indicators::RSI_PERIOD);
+    let pts: Vec<(f64, f64)> = rsi
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| v.map(|y| (i as f64, y)))
+        .collect();
+    if pts.is_empty() {
+        f.render_widget(placeholder("not enough data", t), inner);
+        return;
+    }
+    let xmax = (candles.len().saturating_sub(1)) as f64;
+    let band = |y: f64| vec![(0.0, y), (xmax, y)];
+    let over = band(70.0);
+    let under = band(30.0);
+    let rsi_ds = Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(t.accent))
+        .data(&pts);
+    let over_ds = Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(t.dim))
+        .data(&over);
+    let under_ds = Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(t.dim))
+        .data(&under);
+    let chart = Chart::new(vec![rsi_ds, over_ds, under_ds])
+        .x_axis(Axis::default().style(Style::default().fg(t.dim)).bounds([0.0, xmax]))
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(t.dim))
+                .bounds([0.0, 100.0])
+                .labels(["0", "30", "70", "100"]),
+        );
+    f.render_widget(chart, inner);
 }
 
 /// (min, max) of paired low/high series, or `None` when empty.

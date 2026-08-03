@@ -463,6 +463,8 @@ pub struct StockInfoModal {
     pub selected_expiry: usize,
     /// Whether the chart modal shows the volume sub-panel (toggle: `v`).
     pub show_volume: bool,
+    /// Whether the chart modal shows the RSI sub-panel (toggle: `r`).
+    pub show_rsi: bool,
 }
 
 fn sort_mode_for_key(key: char) -> Option<SortMode> {
@@ -529,6 +531,7 @@ impl App {
                 option_chain: None,
                 selected_expiry: 0,
                 show_volume: true,
+                show_rsi: true,
             },
             overlay: Overlay::None,
             notifications: Notifications::new(),
