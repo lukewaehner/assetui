@@ -9,6 +9,9 @@ pub(crate) fn squarify(weights: &[f64], area: Rect) -> Vec<Rect> {
         return out;
     }
 
+    let max_x = area.x.saturating_add(area.width);
+    let max_y = area.y.saturating_add(area.height);
+
     let area_cells = f64::from(area.width) * f64::from(area.height);
     let areas: Vec<f64> = weights
         .iter()
@@ -48,7 +51,7 @@ pub(crate) fn squarify(weights: &[f64], area: Rect) -> Vec<Rect> {
         let mut pos = if vertical_strip { fy } else { fx };
         for k in i..j {
             let cell = if row_sum > 0.0 { areas[k] / row_sum * short } else { 0.0 };
-            out[k] = if vertical_strip {
+            let mut r = if vertical_strip {
                 Rect::new(
                     fx.round() as u16,
                     pos.round() as u16,
@@ -63,6 +66,11 @@ pub(crate) fn squarify(weights: &[f64], area: Rect) -> Vec<Rect> {
                     thickness.round() as u16,
                 )
             };
+            r.x = r.x.min(max_x);
+            r.y = r.y.min(max_y);
+            r.width = r.width.min(max_x - r.x);
+            r.height = r.height.min(max_y - r.y);
+            out[k] = r;
             pos += cell;
         }
 
@@ -115,12 +123,19 @@ mod tests {
     }
 
     #[test]
-    fn squarify_returns_one_rect_per_weight_all_within_area() {
-        let area = Rect::new(0, 0, 60, 30);
-        let rects = squarify(&[5.0, 3.0, 2.0, 1.0, 1.0], area);
-        assert_eq!(rects.len(), 5);
-        for r in &rects {
-            assert!(contains(area, *r), "rect {r:?} escaped {area:?}");
+    fn squarify_keeps_every_rect_within_the_area() {
+        let cases: &[(&[f64], Rect)] = &[
+            (&[5.0, 3.0, 2.0, 1.0, 1.0], Rect::new(0, 0, 60, 30)),
+            (&[5.34, 17.39, 11.48, 11.48, 18.2], Rect::new(3, 2, 13, 30)),
+            (&[1.0, 1.0, 1.0], Rect::new(5, 5, 7, 3)),
+            (&[100.0, 1.0, 1.0, 1.0, 1.0, 1.0], Rect::new(0, 0, 41, 19)),
+        ];
+        for (weights, area) in cases {
+            let rects = squarify(weights, *area);
+            assert_eq!(rects.len(), weights.len());
+            for r in &rects {
+                assert!(contains(*area, *r), "rect {r:?} escaped {area:?} for {weights:?}");
+            }
         }
     }
 
