@@ -624,7 +624,9 @@ impl App {
             )
         } else if self.overlay == Overlay::Options {
             (StatusMode::Options, "h/l expiry · esc close")
-        } else if self.overlay == Overlay::Info || self.overlay == Overlay::Chart {
+        } else if self.overlay == Overlay::Chart {
+            (StatusMode::View, "s info · v vol · r rsi · esc close")
+        } else if self.overlay == Overlay::Info {
             (StatusMode::View, "s info · enter chart · esc close")
         } else if self.page == Page::Sectors {
             (
@@ -842,6 +844,8 @@ impl App {
         if self.overlay != Overlay::None {
             if code == KeyCode::Esc {
                 self.overlay = Overlay::None;
+            } else if let KeyCode::Char(c) = code {
+                self.toggle_chart_panel(c);
             }
             return;
         }
@@ -1090,6 +1094,9 @@ impl App {
                 return;
             }
             Overlay::Info | Overlay::Chart => {
+                if self.toggle_chart_panel(key) {
+                    return;
+                }
                 if key == 's' {
                     self.open_info_modal();
                 }
@@ -1130,6 +1137,24 @@ impl App {
             'h' => self.paginate(-1),
             'l' => self.paginate(1),
             _ => {}
+        }
+    }
+
+    /// Flips a chart sub-panel toggle while the chart modal is open: `v` volume, `r` RSI.
+    fn toggle_chart_panel(&mut self, key: char) -> bool {
+        if self.overlay != Overlay::Chart {
+            return false;
+        }
+        match key {
+            'v' => {
+                self.stock_modal.show_volume = !self.stock_modal.show_volume;
+                true
+            }
+            'r' => {
+                self.stock_modal.show_rsi = !self.stock_modal.show_rsi;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -1621,6 +1646,28 @@ mod tests {
 
         assert_eq!(app.overlay, Overlay::Chart);
         assert_eq!(app.stock_modal.stock.ticker.as_deref(), Some("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn test_v_toggles_volume_in_chart_modal() {
+        let (mut app, _rx) = make_test_app();
+        app.overlay = Overlay::Chart;
+        assert!(app.stock_modal.show_volume, "volume on by default");
+
+        app.handle_key(KeyCode::Char('v'));
+
+        assert!(!app.stock_modal.show_volume, "v turned volume off");
+    }
+
+    #[tokio::test]
+    async fn test_r_toggles_rsi_in_chart_modal() {
+        let (mut app, _rx) = make_test_app();
+        app.overlay = Overlay::Chart;
+        assert!(app.stock_modal.show_rsi, "rsi on by default");
+
+        app.handle_key(KeyCode::Char('r'));
+
+        assert!(!app.stock_modal.show_rsi, "r turned rsi off");
     }
 
     #[tokio::test]
