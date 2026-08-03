@@ -43,6 +43,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.page {
         Page::Market => draw_market_body(f, body, app),
         Page::Manage => draw_manage_body(f, body, app),
+        Page::Sectors => {}
     }
     draw_status_bar(f, status_area, app);
 

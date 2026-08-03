@@ -121,6 +121,7 @@ pub enum Page {
     Market,
     /// User-owned data management: holdings and alerts.
     Manage,
+    Sectors,
 }
 
 /// The single overlay currently on top of the page, if any.
@@ -270,8 +271,6 @@ pub struct SectorState {
     #[allow(dead_code)]
     pub selected: usize,
     /// Set once the first fetch is kicked off, so page entry doesn't refetch every frame.
-    // TODO(sectors-render): drop this #[allow] once page entry checks this to
-    #[allow(dead_code)]
     pub requested: bool,
 }
 
@@ -771,21 +770,53 @@ impl App {
     /// Routes a raw terminal key press, dispatching by the current page.
     pub fn handle_key(&mut self, code: KeyCode) {
         if matches!(code, KeyCode::Tab | KeyCode::BackTab) && self.manage.input.is_none() {
-            self.cycle_page();
+            match code {
+                KeyCode::Tab => self.next_page(),
+                _ => self.prev_page(),
+            }
             return;
         }
         match self.page {
             Page::Market => self.handle_market_key(code),
             Page::Manage => self.handle_manage_key(code),
+            Page::Sectors => self.handle_sectors_key(code),
         }
     }
 
-    /// Toggles between the Market and Manage pages (two pages, so forward and back are the same).
-    fn cycle_page(&mut self) {
+    /// Advances the page forward: Market → Manage → Sectors → Market.
+    fn next_page(&mut self) {
         self.page = match self.page {
             Page::Market => Page::Manage,
-            Page::Manage => Page::Market,
+            Page::Manage => Page::Sectors,
+            Page::Sectors => Page::Market,
         };
+        self.on_page_entered();
+    }
+
+    /// Advances the page backward: the reverse of [`Self::next_page`].
+    fn prev_page(&mut self) {
+        self.page = match self.page {
+            Page::Market => Page::Sectors,
+            Page::Manage => Page::Market,
+            Page::Sectors => Page::Manage,
+        };
+        self.on_page_entered();
+    }
+
+    /// Runs page-entry side effects.
+    fn on_page_entered(&mut self) {
+        if self.page == Page::Sectors && !self.sectors.requested {
+            self.sectors.requested = true;
+            self.sectors.loading = true;
+            self.spawn_sector_map();
+        }
+    }
+
+    fn handle_sectors_key(&mut self, code: KeyCode) {
+        if let KeyCode::Char('r') = code {
+            self.sectors.loading = true;
+            self.spawn_sector_map();
+        }
     }
 
     fn manage_move(&mut self, delta: isize) {
@@ -2431,11 +2462,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tab_cycles_between_pages() {
+    async fn test_tab_cycles_forward_through_all_pages() {
         let (mut app, _rx) = make_test_app();
         assert_eq!(app.page, Page::Market, "starts on Market");
 
         app.handle_key(KeyCode::Tab);
+        assert_eq!(app.page, Page::Manage);
+
+        app.handle_key(KeyCode::Tab);
+        assert_eq!(app.page, Page::Sectors);
+
+        app.handle_key(KeyCode::Tab);
+        assert_eq!(app.page, Page::Market, "wraps back to Market");
+    }
+
+    #[tokio::test]
+    async fn test_backtab_cycles_backward_through_all_pages() {
+        let (mut app, _rx) = make_test_app();
+
+        app.handle_key(KeyCode::BackTab);
+        assert_eq!(app.page, Page::Sectors, "back from Market wraps to Sectors");
+
+        app.handle_key(KeyCode::BackTab);
         assert_eq!(app.page, Page::Manage);
 
         app.handle_key(KeyCode::BackTab);

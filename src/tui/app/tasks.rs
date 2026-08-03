@@ -345,8 +345,6 @@ impl App {
         });
     }
 
-    // TODO(sectors-render): drop this #[allow] once the Sectors page calls this
-    #[allow(dead_code)]
     pub(crate) fn spawn_sector_map(&self) {
         use crate::sectors::{SECTOR_TOP_N, make_tile, rank_tiles};
         use yfinance_rs::screener::{
@@ -417,8 +415,6 @@ impl App {
 }
 
 /// Human-readable label for a sector, for error messages.
-// TODO(sectors-render): drop this #[allow] once `spawn_sector_map` is called.
-#[allow(dead_code)]
 fn sector_label(s: yfinance_rs::screener::EquitySector) -> &'static str {
     use yfinance_rs::screener::EquitySector::*;
     match s {
