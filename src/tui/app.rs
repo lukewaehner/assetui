@@ -85,8 +85,6 @@ pub enum AppEvent {
     /// The macOS system appearance changed.
     ThemeChanged(Appearance),
     /// One sector's screener results, mapped to treemap tiles.
-    // TODO(sectors-render): drop this #[allow] once the Sectors page wires up
-    #[allow(dead_code)]
     SectorDataReady {
         /// Which sector these tiles belong to.
         sector: yfinance_rs::screener::EquitySector,
