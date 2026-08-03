@@ -2260,31 +2260,31 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
     let sma_slow_pts = sma_points(&sma_slow);
 
     let range = price_range(candles);
-    let (hi_line, lo_line): (Vec<(f64, f64)>, Vec<(f64, f64)>) = match range {
-        Some((lo, hi)) => (vec![(0.0, hi), (xmax, hi)], vec![(0.0, lo), (xmax, lo)]),
-        None => (Vec::new(), Vec::new()),
+    let hi_line: Vec<(f64, f64)> = match range {
+        Some((_, hi)) => vec![(0.0, hi), (xmax, hi)],
+        None => Vec::new(),
+    };
+    let lo_line: Vec<(f64, f64)> = match range {
+        Some((lo, _)) => vec![(0.0, lo), (xmax, lo)],
+        None => Vec::new(),
     };
 
     let sma_fast_ds = Dataset::default()
-        .name(format!("SMA{}", crate::indicators::SMA_FAST))
         .marker(Marker::Braille)
         .graph_type(GraphType::Line)
         .style(Style::default().fg(t.accent))
         .data(&sma_fast_pts);
     let sma_slow_ds = Dataset::default()
-        .name(format!("SMA{}", crate::indicators::SMA_SLOW))
         .marker(Marker::Braille)
         .graph_type(GraphType::Line)
         .style(Style::default().fg(t.dim))
         .data(&sma_slow_pts);
     let hi_ds = Dataset::default()
-        .name("period hi")
         .marker(Marker::Braille)
         .graph_type(GraphType::Line)
         .style(Style::default().fg(t.up))
         .data(&hi_line);
     let lo_ds = Dataset::default()
-        .name("period lo")
         .marker(Marker::Braille)
         .graph_type(GraphType::Line)
         .style(Style::default().fg(t.down))
