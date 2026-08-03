@@ -2682,6 +2682,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_portfolio_value_series_caps_and_drops_oldest() {
+        let (mut app, _rx) = make_test_app();
+        app.market.portfolio_value_series = (0..PORTFOLIO_SERIES_CAP as u64)
+            .map(|i| i as f64)
+            .collect();
+        app.holdings = vec![holding_for("AAPL")];
+        app.handle_event(AppEvent::PageLoaded(vec![quote("AAPL", 110.0, 100.0)]));
+
+        app.tick(Duration::from_millis(100));
+
+        assert_eq!(app.market.portfolio_value_series.len(), PORTFOLIO_SERIES_CAP);
+        assert_eq!(app.market.portfolio_value_series.front(), Some(&1.0));
+        assert_eq!(app.market.portfolio_value_series.back(), Some(&1100.0));
+    }
+
+    #[tokio::test]
     async fn test_question_mark_opens_help_modal() {
         let (mut app, _rx) = make_test_app();
         app.handle_key(KeyCode::Char('?'));
