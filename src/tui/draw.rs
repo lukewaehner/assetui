@@ -172,24 +172,16 @@ fn move_arrow(value: f64) -> &'static str {
 }
 
 fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
-    let [
-        portfolio_area,
-        movers_area,
-        alerts_area,
-        breadth_area,
-        active_area,
-        status_area,
-        _rest,
-    ] = Layout::vertical([
-        Constraint::Length(5),
-        Constraint::Length(4),
-        Constraint::Length(4),
-        Constraint::Length(3),
-        Constraint::Length(3),
-        Constraint::Length(3),
-        Constraint::Min(0),
-    ])
-    .areas(area);
+    let [portfolio_area, movers_area, alerts_area, breadth_area, active_area, status_area] =
+        Layout::vertical([
+            Constraint::Length(5),
+            Constraint::Min(4),
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(3),
+        ])
+        .areas(area);
     draw_portfolio_cube(f, portfolio_area, app);
     draw_movers_cube(f, movers_area, app);
     draw_alerts_cube(f, alerts_area, app);
@@ -236,34 +228,37 @@ fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// Movers cube: the day's biggest gainer and biggest loser across tracked quotes.
+/// Movers cube: the day's biggest movers as a bar list, gainers first.
 fn draw_movers_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
-    let (gainer, loser) = top_movers(&app.market.dashboard.rows);
-    let lines = match gainer {
-        None => vec![dim_line("no quotes yet", &t)],
-        Some(g) => vec![
-            mover_line(&g, &t),
-            match &loser {
-                Some(l) => mover_line(l, &t),
-                None => dim_line("—", &t),
-            },
-        ],
-    };
-    f.render_widget(Paragraph::new(lines).block(cube_block("movers", &t)), area);
+    let block = cube_block("movers", &t);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let capacity = inner.height as usize;
+    let movers = ranked_movers(&app.market.dashboard.rows, capacity);
+    if movers.is_empty() {
+        f.render_widget(Paragraph::new(dim_line("no quotes yet", &t)), inner);
+        return;
+    }
+
+    let max_pct = movers.iter().map(|m| m.day_pct.abs()).fold(0.0_f64, f64::max);
+    let bar_width = (inner.width as usize).saturating_sub(6 + 1 + 7);
+    let lines: Vec<Line> = movers
+        .iter()
+        .map(|m| mover_bar_line(m, max_pct, bar_width, &t))
+        .collect();
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// One `TICKER ▲ +x.x%` mover row, coloured by the sign of its day move.
-fn mover_line(m: &Mover, t: &Theme) -> Line<'static> {
-    Line::from(Span::styled(
-        format!(
-            "{:<6}{} {:+.1}%",
-            m.ticker,
-            move_arrow(m.day_pct),
-            m.day_pct
-        ),
-        Style::default().fg(pnl_color(Some(m.day_pct), t)),
-    ))
+fn mover_bar_line(m: &Mover, max_pct: f64, bar_width: usize, t: &Theme) -> Line<'static> {
+    let color = pnl_color(Some(m.day_pct), t);
+    let bar = "█".repeat(bar_cells(m.day_pct, max_pct, bar_width));
+    Line::from(vec![
+        Span::styled(format!("{:<6} ", m.ticker), Style::default().fg(t.fg)),
+        Span::styled(format!("{bar:<bar_width$}"), Style::default().fg(color)),
+        Span::styled(format!(" {:+.1}%", m.day_pct), Style::default().fg(color)),
+    ])
 }
 
 /// Alerts cube: the active-alert count in the title and the alert nearest to firing in the body.
@@ -1507,6 +1502,14 @@ pub(crate) fn ranked_movers(rows: &[QuoteRecord], limit: usize) -> Vec<Mover> {
     movers
 }
 
+fn bar_cells(pct: f64, max_pct: f64, width: usize) -> usize {
+    if width == 0 || !(max_pct > 0.0) || !max_pct.is_finite() {
+        return 0;
+    }
+    let frac = (pct.abs() / max_pct).clamp(0.0, 1.0);
+    (frac * width as f64).round() as usize
+}
+
 /// The biggest gainer and biggest loser across `rows`, by day-change percent.
 pub(crate) fn top_movers(rows: &[QuoteRecord]) -> (Option<Mover>, Option<Mover>) {
     let movers = ranked_movers(rows, usize::MAX);
@@ -2028,6 +2031,27 @@ mod tests {
     #[test]
     fn ranked_movers_empty_input_is_empty() {
         assert!(ranked_movers(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn bar_cells_fills_width_for_the_max_mover() {
+        assert_eq!(bar_cells(6.0, 6.0, 10), 10);
+    }
+
+    #[test]
+    fn bar_cells_scales_proportionally() {
+        assert_eq!(bar_cells(3.0, 6.0, 10), 5);
+    }
+
+    #[test]
+    fn bar_cells_uses_absolute_value_for_losers() {
+        assert_eq!(bar_cells(-6.0, 6.0, 10), 10);
+    }
+
+    #[test]
+    fn bar_cells_is_zero_when_no_width_or_no_spread() {
+        assert_eq!(bar_cells(3.0, 6.0, 0), 0);
+        assert_eq!(bar_cells(3.0, 0.0, 10), 0);
     }
 
     fn watchlist(tickers: &[&str]) -> HashSet<String> {
