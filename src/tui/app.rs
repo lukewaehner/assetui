@@ -45,6 +45,9 @@ const TOAST_ANIMATION: Animation = Animation::Slide;
 const TOAST_SLIDE_DIRECTION: SlideDirection = SlideDirection::FromRight;
 const TOAST_DISMISS_AFTER: Duration = Duration::from_secs(5);
 
+/// The number of equity sectors the treemap fetches (the full `EquitySector` set).
+const SECTOR_COUNT: usize = 11;
+
 pub fn table_page_size(terminal_height: u16) -> usize {
     terminal_height.saturating_sub(5).max(1) as usize
 }
@@ -80,6 +83,15 @@ pub enum AppEvent {
     StreamStarted(StreamHandle),
     /// The macOS system appearance changed.
     ThemeChanged(Appearance),
+    /// One sector's screener results, mapped to treemap tiles.
+    // TODO(sectors-render): drop this #[allow] once the Sectors page wires up
+    #[allow(dead_code)]
+    SectorDataReady {
+        /// Which sector these tiles belong to.
+        sector: yfinance_rs::screener::EquitySector,
+        /// The sector's tiles (already sorted/truncated).
+        tiles: Vec<crate::sectors::SectorTile>,
+    },
     Error(String),
 }
 
@@ -247,6 +259,22 @@ pub struct ManageState {
     pub input: Option<ManageInput>,
 }
 
+#[derive(Default)]
+pub struct SectorState {
+    /// The treemap, filled in progressively as each sector's screener returns.
+    pub map: crate::sectors::SectorMap,
+    /// True while at least one sector query is outstanding.
+    pub loading: bool,
+    /// Selected tile index into the flattened tile order (see `draw_sectors_page`).
+    // TODO(sectors-render): drop this #[allow] once the Sectors page reads the
+    #[allow(dead_code)]
+    pub selected: usize,
+    /// Set once the first fetch is kicked off, so page entry doesn't refetch every frame.
+    // TODO(sectors-render): drop this #[allow] once page entry checks this to
+    #[allow(dead_code)]
+    pub requested: bool,
+}
+
 /// Top-level application state.
 pub struct App {
     /// Market-page state: input box, quotes table, and log panel.
@@ -278,6 +306,8 @@ pub struct App {
     pub page: Page,
     /// Manage-page state: section focus, selected row, and inline add/edit line.
     pub manage: ManageState,
+    /// Sectors-page state: the treemap and its selection.
+    pub sectors: SectorState,
     pub show_logs: bool,
 }
 
@@ -499,6 +529,7 @@ impl App {
                 selected: 0,
                 input: None,
             },
+            sectors: SectorState::default(),
             show_logs: false,
         }
     }
@@ -671,6 +702,12 @@ impl App {
             AppEvent::ThemeChanged(appearance) => {
                 self.appearance = appearance;
                 self.theme = Theme::for_appearance(appearance);
+            }
+            AppEvent::SectorDataReady { sector, tiles } => {
+                self.sectors.map.upsert(sector, tiles);
+                if self.sectors.map.groups.len() >= SECTOR_COUNT {
+                    self.sectors.loading = false;
+                }
             }
         }
     }
@@ -1424,6 +1461,29 @@ mod tests {
         assert_eq!(app.overlay, Overlay::None);
         assert_eq!(app.market.db_display.sort_mode, SortMode::ById);
         assert_eq!(app.market.db_display.sort_order, SortOrder::Descending);
+    }
+
+    #[tokio::test]
+    async fn test_sector_data_ready_upserts_group() {
+        use crate::sectors::SectorTile;
+        use yfinance_rs::screener::EquitySector;
+
+        let (mut app, _rx) = make_test_app();
+        let tiles = vec![
+            SectorTile { ticker: "AAPL".into(), name: "Apple".into(), market_cap: 100.0, day_pct: 1.0 },
+            SectorTile { ticker: "MSFT".into(), name: "Microsoft".into(), market_cap: 50.0, day_pct: -0.5 },
+        ];
+
+        app.handle_event(AppEvent::SectorDataReady {
+            sector: EquitySector::Technology,
+            tiles,
+        });
+
+        assert_eq!(app.sectors.map.groups.len(), 1);
+        let group = &app.sectors.map.groups[0];
+        assert_eq!(group.sector, EquitySector::Technology);
+        assert_eq!(group.total_market_cap, 150.0);
+        assert_eq!(group.tiles.len(), 2);
     }
 
     #[tokio::test]

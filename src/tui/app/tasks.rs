@@ -344,6 +344,95 @@ impl App {
                 });
         });
     }
+
+    // TODO(sectors-render): drop this #[allow] once the Sectors page calls this
+    #[allow(dead_code)]
+    pub(crate) fn spawn_sector_map(&self) {
+        use crate::sectors::{SECTOR_TOP_N, make_tile, rank_tiles};
+        use yfinance_rs::screener::{
+            EquityQuery, EquitySector, Region, ScreenerBuilder, equity_fields as eq,
+        };
+
+        const SECTORS: [EquitySector; 11] = [
+            EquitySector::Technology,
+            EquitySector::FinancialServices,
+            EquitySector::Healthcare,
+            EquitySector::ConsumerCyclical,
+            EquitySector::ConsumerDefensive,
+            EquitySector::CommunicationServices,
+            EquitySector::Industrials,
+            EquitySector::Energy,
+            EquitySector::Utilities,
+            EquitySector::RealEstate,
+            EquitySector::BasicMaterials,
+        ];
+
+        for sector in SECTORS {
+            let tx = self.services.event_tx.clone();
+            let client = self.services.client.clone();
+            tokio::spawn(async move {
+                let query = match EquityQuery::and(vec![
+                    eq::REGION.eq(Region::Us),
+                    eq::SECTOR.eq(sector),
+                ]) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        let _ = tx.send(AppEvent::Error(format!(
+                            "sector {}: {e}",
+                            sector_label(sector)
+                        )));
+                        return;
+                    }
+                };
+                match ScreenerBuilder::equity(&client, query).fetch().await {
+                    Ok(resp) => {
+                        let tiles = rank_tiles(
+                            resp.results
+                                .iter()
+                                .filter_map(|r| {
+                                    make_tile(
+                                        r.symbol.clone(),
+                                        r.name.clone(),
+                                        r.market_cap.as_ref().map(|m| m.amount().as_f64()),
+                                        r.regular_market_change_percent,
+                                    )
+                                })
+                                .collect(),
+                            SECTOR_TOP_N,
+                        );
+                        let _ = tx.send(AppEvent::SectorDataReady { sector, tiles });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AppEvent::Error(format!(
+                            "sector {}: {e}",
+                            sector_label(sector)
+                        )));
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// Human-readable label for a sector, for error messages.
+// TODO(sectors-render): drop this #[allow] once `spawn_sector_map` is called.
+#[allow(dead_code)]
+fn sector_label(s: yfinance_rs::screener::EquitySector) -> &'static str {
+    use yfinance_rs::screener::EquitySector::*;
+    match s {
+        Technology => "Technology",
+        FinancialServices => "Financial Services",
+        Healthcare => "Healthcare",
+        ConsumerCyclical => "Consumer Cyclical",
+        ConsumerDefensive => "Consumer Defensive",
+        CommunicationServices => "Communication Services",
+        Industrials => "Industrials",
+        Energy => "Energy",
+        Utilities => "Utilities",
+        RealEstate => "Real Estate",
+        BasicMaterials => "Basic Materials",
+        _ => "Other",
+    }
 }
 
 async fn reload_portfolio(
