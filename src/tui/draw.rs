@@ -1667,14 +1667,15 @@ pub(crate) fn flatten_tiles(map: &SectorMap, area: Rect) -> Vec<(Rect, String)> 
     let sector_rects = squarify(&sector_weights, area);
     let mut flat = Vec::new();
     for (group, srect) in map.groups.iter().zip(sector_rects) {
-        let inner = Rect {
-            x: srect.x,
-            y: srect.y.saturating_add(1),
-            width: srect.width,
-            height: srect.height.saturating_sub(1),
-        };
+        if srect.width < 3 || srect.height < 2 {
+            continue;
+        }
+        let inner = Block::default().borders(Borders::ALL).inner(srect);
         let tile_weights: Vec<f64> = group.tiles.iter().map(|t| t.market_cap).collect();
         for (tile, trect) in group.tiles.iter().zip(squarify(&tile_weights, inner)) {
+            if trect.width == 0 || trect.height == 0 {
+                continue;
+            }
             flat.push((trect, tile.ticker.clone()));
         }
     }
@@ -2142,6 +2143,27 @@ mod tests {
         assert_eq!(tickers, vec!["AAPL", "MSFT", "XOM"]);
         for (r, _) in &flat {
             assert!(r.x + r.width <= 80 && r.y + r.height <= 40);
+        }
+    }
+
+    #[test]
+    fn flatten_tiles_places_tiles_inside_the_sector_border() {
+        use crate::sectors::{SectorMap, SectorTile};
+        use yfinance_rs::screener::EquitySector;
+        let mut map = SectorMap::default();
+        map.upsert(
+            EquitySector::Technology,
+            vec![
+                SectorTile { ticker: "AAPL".into(), name: "Apple".into(), market_cap: 100.0, day_pct: 1.0 },
+                SectorTile { ticker: "MSFT".into(), name: "Microsoft".into(), market_cap: 50.0, day_pct: 0.2 },
+            ],
+        );
+        let area = Rect::new(0, 0, 40, 20);
+        let flat = flatten_tiles(&map, area);
+        assert!(!flat.is_empty());
+        for (r, _) in &flat {
+            assert!(r.x >= 1 && r.y >= 1, "tile {r:?} must be inside the top/left border");
+            assert!(r.x + r.width <= 39 && r.y + r.height <= 19, "tile {r:?} must be inside the bottom/right border");
         }
     }
 
