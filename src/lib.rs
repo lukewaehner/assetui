@@ -4,6 +4,7 @@ pub mod black_scholes;
 pub mod cli;
 pub mod db;
 pub mod fetch;
+pub mod indicators;
 pub mod models;
 pub mod portfolio;
 pub mod run;
