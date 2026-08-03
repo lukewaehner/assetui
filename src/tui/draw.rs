@@ -2058,6 +2058,23 @@ fn draw_chart_modal(f: &mut Frame, app: &mut App) {
     }
 }
 
+/// (min, max) of paired low/high series, or `None` when empty.
+fn range_of(lows: &[f64], highs: &[f64]) -> Option<(f64, f64)> {
+    if lows.is_empty() || highs.is_empty() {
+        return None;
+    }
+    let lo = lows.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = highs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    Some((lo, hi))
+}
+
+/// Period low/high across `candles` (min low, max high).
+fn price_range(candles: &[Candle]) -> Option<(f64, f64)> {
+    let lows: Vec<f64> = candles.iter().map(|c| c.ohlc.low.as_decimal().as_f64()).collect();
+    let highs: Vec<f64> = candles.iter().map(|c| c.ohlc.high.as_decimal().as_f64()).collect();
+    range_of(&lows, &highs)
+}
+
 fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str, t: &Theme) {
     if candles.is_empty() {
         f.render_widget(placeholder("No chart data.", t), area);
@@ -2133,11 +2150,59 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
             date_label(candles.len() - 1),
         ]);
 
+    let closes: Vec<f64> = data.iter().map(|(_, c)| *c).collect();
+    let sma_fast = crate::indicators::sma(&closes, crate::indicators::SMA_FAST);
+    let sma_slow = crate::indicators::sma(&closes, crate::indicators::SMA_SLOW);
+    let sma_points = |series: &[Option<f64>]| -> Vec<(f64, f64)> {
+        series
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.map(|y| (i as f64, y)))
+            .collect()
+    };
+    let sma_fast_pts = sma_points(&sma_fast);
+    let sma_slow_pts = sma_points(&sma_slow);
+
+    let range = price_range(candles);
+    let (hi_line, lo_line): (Vec<(f64, f64)>, Vec<(f64, f64)>) = match range {
+        Some((lo, hi)) => (vec![(0.0, hi), (xmax, hi)], vec![(0.0, lo), (xmax, lo)]),
+        None => (Vec::new(), Vec::new()),
+    };
+
+    let sma_fast_ds = Dataset::default()
+        .name(format!("SMA{}", crate::indicators::SMA_FAST))
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(t.accent))
+        .data(&sma_fast_pts);
+    let sma_slow_ds = Dataset::default()
+        .name(format!("SMA{}", crate::indicators::SMA_SLOW))
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(t.dim))
+        .data(&sma_slow_pts);
+    let hi_ds = Dataset::default()
+        .name("period hi")
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(t.up))
+        .data(&hi_line);
+    let lo_ds = Dataset::default()
+        .name("period lo")
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(t.down))
+        .data(&lo_line);
+
     let (ymin, ymax) = data
         .iter()
         .fold((f64::MAX, f64::MIN), |(min, max), (_, y)| {
             (min.min(*y), max.max(*y))
         });
+    let (ymin, ymax) = match range {
+        Some((lo, hi)) => (ymin.min(lo), ymax.max(hi)),
+        None => (ymin, ymax),
+    };
     let pad = ((ymax - ymin) * 0.04).max(0.01);
     let (ylo, yhi) = (ymin - pad, ymax + pad);
     let price_label = |v: f64| Line::from(Span::styled(format!("{v:.2}"), label_style));
@@ -2151,16 +2216,36 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
             price_label(yhi),
         ]);
 
-    let chart = Chart::new(vec![trend_line, up_dots, down_dots])
-        .x_axis(x_axis)
-        .y_axis(y_axis)
-        .legend_position(Some(LegendPosition::TopLeft));
+    let chart = Chart::new(vec![
+        trend_line,
+        up_dots,
+        down_dots,
+        sma_fast_ds,
+        sma_slow_ds,
+        hi_ds,
+        lo_ds,
+    ])
+    .x_axis(x_axis)
+    .y_axis(y_axis)
+    .legend_position(Some(LegendPosition::TopLeft));
     f.render_widget(chart, area);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn range_of_returns_min_low_and_max_high() {
+        let lows = vec![10.0, 8.0, 9.0];
+        let highs = vec![12.0, 15.0, 11.0];
+        assert_eq!(range_of(&lows, &highs), Some((8.0, 15.0)));
+    }
+
+    #[test]
+    fn range_of_empty_is_none() {
+        assert_eq!(range_of(&[], &[]), None);
+    }
 
     #[test]
     fn flatten_tiles_lists_every_tile_with_its_ticker() {
