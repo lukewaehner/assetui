@@ -49,7 +49,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     draw_status_bar(f, status_area, app);
 
-    if app.page == Page::Market {
+    if matches!(app.page, Page::Market | Page::Sectors) {
         match app.overlay {
             Overlay::Info => draw_stock_modal(f, app),
             Overlay::Chart => draw_chart_modal(f, app),
@@ -1682,7 +1682,50 @@ pub(crate) fn flatten_tiles(map: &SectorMap, area: Rect) -> Vec<(Rect, String)> 
     flat
 }
 
-fn draw_sectors_page(f: &mut Frame, area: Rect, app: &App) {
+/// A cardinal direction for treemap tile navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Dir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+pub(crate) fn nearest_in_direction(tiles: &[(Rect, String)], current: usize, dir: Dir) -> usize {
+    let Some((cur_rect, _)) = tiles.get(current) else {
+        return current;
+    };
+    let cx = f64::from(cur_rect.x) + f64::from(cur_rect.width) / 2.0;
+    let cy = f64::from(cur_rect.y) + f64::from(cur_rect.height) / 2.0;
+
+    let mut best = current;
+    let mut best_dist = f64::INFINITY;
+    for (i, (r, _)) in tiles.iter().enumerate() {
+        if i == current {
+            continue;
+        }
+        let x = f64::from(r.x) + f64::from(r.width) / 2.0;
+        let y = f64::from(r.y) + f64::from(r.height) / 2.0;
+        let lies_that_way = match dir {
+            Dir::Left => x < cx,
+            Dir::Right => x > cx,
+            Dir::Up => y < cy,
+            Dir::Down => y > cy,
+        };
+        if !lies_that_way {
+            continue;
+        }
+        let dist = (x - cx).powi(2) + (y - cy).powi(2);
+        if dist < best_dist {
+            best_dist = dist;
+            best = i;
+        }
+    }
+    best
+}
+
+fn draw_sectors_page(f: &mut Frame, area: Rect, app: &mut App) {
+    app.sectors.last_area = area;
     let t = app.theme;
     let map = &app.sectors.map;
 
@@ -2165,6 +2208,40 @@ mod tests {
             assert!(r.x >= 1 && r.y >= 1, "tile {r:?} must be inside the top/left border");
             assert!(r.x + r.width <= 39 && r.y + r.height <= 19, "tile {r:?} must be inside the bottom/right border");
         }
+    }
+
+    #[test]
+    fn nearest_in_direction_moves_right_to_adjacent_tile() {
+        let tiles = vec![
+            (Rect::new(0, 0, 10, 10), "A".to_string()),
+            (Rect::new(10, 0, 10, 10), "B".to_string()),
+            (Rect::new(20, 0, 10, 10), "C".to_string()),
+        ];
+        assert_eq!(nearest_in_direction(&tiles, 0, Dir::Right), 1);
+    }
+
+    #[test]
+    fn nearest_in_direction_moves_down() {
+        let tiles = vec![
+            (Rect::new(0, 0, 10, 5), "TOP".to_string()),
+            (Rect::new(0, 5, 10, 5), "BOTTOM".to_string()),
+        ];
+        assert_eq!(nearest_in_direction(&tiles, 0, Dir::Down), 1);
+    }
+
+    #[test]
+    fn nearest_in_direction_stays_when_nothing_that_way() {
+        let tiles = vec![
+            (Rect::new(0, 0, 10, 10), "A".to_string()),
+            (Rect::new(10, 0, 10, 10), "B".to_string()),
+        ];
+        assert_eq!(nearest_in_direction(&tiles, 1, Dir::Right), 1);
+    }
+
+    #[test]
+    fn nearest_in_direction_empty_or_oob_returns_current() {
+        let tiles: Vec<(Rect, String)> = vec![];
+        assert_eq!(nearest_in_direction(&tiles, 0, Dir::Left), 0);
     }
 
     #[test]

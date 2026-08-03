@@ -5,6 +5,7 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use crossterm::event::KeyCode;
+use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
 use ratatui_notifications::{
     Anchor, Animation, AutoDismiss, Level, Notification, Notifications, SlideDirection,
@@ -149,6 +150,8 @@ pub enum StatusMode {
     ManageInput,
     /// The Manage page is focused with no inline entry active.
     Manage,
+    /// The Sectors page is focused with no modal open.
+    Sectors,
     /// The options-chain modal is open.
     Options,
     /// The info or chart modal is open.
@@ -169,6 +172,7 @@ impl StatusMode {
         match self {
             StatusMode::Help => "HELP",
             StatusMode::ManageInput | StatusMode::Manage => "MANAGE",
+            StatusMode::Sectors => "SECTORS",
             StatusMode::Options | StatusMode::View => "VIEW",
             StatusMode::Search => "SEARCH",
             StatusMode::Input => "INPUT",
@@ -260,7 +264,6 @@ pub struct ManageState {
     pub input: Option<ManageInput>,
 }
 
-#[derive(Default)]
 pub struct SectorState {
     /// The treemap, filled in progressively as each sector's screener returns.
     pub map: crate::sectors::SectorMap,
@@ -270,6 +273,20 @@ pub struct SectorState {
     pub selected: usize,
     /// Set once the first fetch is kicked off, so page entry doesn't refetch every frame.
     pub requested: bool,
+    /// The body area `draw_sectors_page` last laid the treemap into.
+    pub last_area: Rect,
+}
+
+impl Default for SectorState {
+    fn default() -> Self {
+        Self {
+            map: crate::sectors::SectorMap::default(),
+            loading: false,
+            selected: 0,
+            requested: false,
+            last_area: Rect::new(0, 0, 80, 24),
+        }
+    }
 }
 
 /// Top-level application state.
@@ -605,6 +622,11 @@ impl App {
             (StatusMode::Options, "h/l expiry · esc close")
         } else if self.overlay == Overlay::Info || self.overlay == Overlay::Chart {
             (StatusMode::View, "s info · enter chart · esc close")
+        } else if self.page == Page::Sectors {
+            (
+                StatusMode::Sectors,
+                "h/j/k/l move · enter chart · r refresh · tab cycle · q quit",
+            )
         } else if self.market.input_mode.is_focused() && self.market.input_mode.is_fuzzy() {
             (StatusMode::Search, "type to filter · enter apply · esc cancel")
         } else if self.market.input_mode.is_focused() {
@@ -811,10 +833,56 @@ impl App {
     }
 
     fn handle_sectors_key(&mut self, code: KeyCode) {
-        if let KeyCode::Char('r') = code {
-            self.sectors.loading = true;
-            self.spawn_sector_map();
+        use super::draw::{Dir, flatten_tiles, nearest_in_direction};
+
+        if self.overlay != Overlay::None {
+            if code == KeyCode::Esc {
+                self.overlay = Overlay::None;
+            }
+            return;
         }
+
+        match code {
+            KeyCode::Char('r') => {
+                self.sectors.loading = true;
+                self.spawn_sector_map();
+            }
+            KeyCode::Enter => self.open_sector_modal(),
+            KeyCode::Char('h')
+            | KeyCode::Left
+            | KeyCode::Char('l')
+            | KeyCode::Right
+            | KeyCode::Char('j')
+            | KeyCode::Down
+            | KeyCode::Char('k')
+            | KeyCode::Up => {
+                let dir = match code {
+                    KeyCode::Char('h') | KeyCode::Left => Dir::Left,
+                    KeyCode::Char('l') | KeyCode::Right => Dir::Right,
+                    KeyCode::Char('j') | KeyCode::Down => Dir::Down,
+                    _ => Dir::Up,
+                };
+                let tiles = flatten_tiles(&self.sectors.map, self.sectors.last_area);
+                self.sectors.selected = nearest_in_direction(&tiles, self.sectors.selected, dir);
+            }
+            _ => {}
+        }
+    }
+
+    fn open_sector_modal(&mut self) {
+        use super::draw::flatten_tiles;
+
+        let tiles = flatten_tiles(&self.sectors.map, self.sectors.last_area);
+        let Some((_, ticker)) = tiles.get(self.sectors.selected) else {
+            return;
+        };
+        let ticker = ticker.clone();
+        self.stock_modal.stock = QuoteRecord {
+            ticker: Some(ticker.clone()),
+            ..Default::default()
+        };
+        self.overlay = Overlay::Chart;
+        self.spawn_chart_data(&ticker);
     }
 
     fn manage_move(&mut self, delta: isize) {
@@ -1527,6 +1595,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sectors_enter_opens_modal_for_selected_tile() {
+        use crate::sectors::SectorTile;
+        use yfinance_rs::screener::EquitySector;
+
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Sectors;
+        app.handle_event(AppEvent::SectorDataReady {
+            sector: EquitySector::Technology,
+            tiles: vec![SectorTile {
+                ticker: "AAPL".into(),
+                name: "Apple".into(),
+                market_cap: 100.0,
+                day_pct: 1.0,
+            }],
+        });
+        app.sectors.selected = 0;
+
+        app.handle_key(KeyCode::Enter);
+
+        assert_eq!(app.overlay, Overlay::Chart);
+        assert_eq!(app.stock_modal.stock.ticker.as_deref(), Some("AAPL"));
+    }
+
+    #[tokio::test]
     async fn status_mode_is_normal_with_hint_for_default_market_state() {
         // arrange
         let (app, _rx) = make_test_app();
@@ -1541,6 +1633,26 @@ mod tests {
                 StatusMode::Normal,
                 "NORMAL",
                 "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · q quit"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mode_is_sectors_with_its_own_hint_on_the_sectors_page() {
+        // arrange
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Sectors;
+
+        // act
+        let (mode, hint) = app.status_mode();
+
+        // assert
+        assert_eq!(
+            (mode, mode.label(), hint),
+            (
+                StatusMode::Sectors,
+                "SECTORS",
+                "h/j/k/l move · enter chart · r refresh · tab cycle · q quit"
             )
         );
     }
