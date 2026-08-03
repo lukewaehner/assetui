@@ -1510,14 +1510,6 @@ fn bar_cells(pct: f64, max_pct: f64, width: usize) -> usize {
     (frac * width as f64).round() as usize
 }
 
-/// The biggest gainer and biggest loser across `rows`, by day-change percent.
-pub(crate) fn top_movers(rows: &[QuoteRecord]) -> (Option<Mover>, Option<Mover>) {
-    let movers = ranked_movers(rows, usize::MAX);
-    let gainer = movers.first().cloned();
-    let loser = (movers.len() >= 2).then(|| movers.last().cloned()).flatten();
-    (gainer, loser)
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AlertProximity {
     /// The alert's ticker symbol.
@@ -1958,33 +1950,6 @@ mod tests {
             previous_close: Some(previous_close),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn top_movers_returns_highest_gainer_and_lowest_loser() {
-        // arrange
-        let rows = vec![
-            mover_row("GAIN", 110.0, 100.0),
-            mover_row("FLAT", 100.0, 100.0),
-            mover_row("LOSS", 95.0, 100.0),
-        ];
-
-        // act
-        let (gainer, loser) = top_movers(&rows);
-
-        // assert
-        assert_eq!(gainer.unwrap().ticker, "GAIN");
-        assert_eq!(loser.unwrap().ticker, "LOSS");
-    }
-
-    #[test]
-    fn top_movers_single_quote_has_no_loser() {
-        let rows = vec![mover_row("ONLY", 110.0, 100.0)];
-
-        let (gainer, loser) = top_movers(&rows);
-
-        assert_eq!(gainer.unwrap().ticker, "ONLY");
-        assert!(loser.is_none(), "one quote is never shown as both ends");
     }
 
     #[test]

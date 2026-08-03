@@ -2687,45 +2687,6 @@ mod tests {
     }
 
     #[test]
-    fn test_top_movers_picks_highest_gainer_and_lowest_loser() {
-        let rows = vec![
-            quote("MSFT", 105.0, 100.0),
-            quote("AAPL", 110.0, 100.0),
-            quote("TSLA", 90.0, 100.0),
-        ];
-
-        let (gainer, loser) = crate::tui::draw::top_movers(&rows);
-
-        assert_eq!(gainer.unwrap().ticker, "AAPL");
-        assert_eq!(loser.unwrap().ticker, "TSLA");
-    }
-
-    #[test]
-    fn test_top_movers_ignores_quotes_missing_price_data() {
-        let rows = vec![
-            quote("AAPL", 110.0, 100.0),
-            QuoteRecord {
-                ticker: Some("GOOG".to_string()),
-                price: Some(50.0),
-                previous_close: None,
-                ..Default::default()
-            },
-        ];
-
-        let (gainer, loser) = crate::tui::draw::top_movers(&rows);
-
-        assert_eq!(gainer.unwrap().ticker, "AAPL");
-        assert!(loser.is_none(), "a single rankable quote yields no loser");
-    }
-
-    #[test]
-    fn test_top_movers_is_empty_when_nothing_is_rankable() {
-        let rows = vec![named("AAPL", "Apple Inc.")];
-
-        assert_eq!(crate::tui::draw::top_movers(&rows), (None, None));
-    }
-
-    #[test]
     fn test_day_breadth_counts_advancers_and_decliners() {
         let rows = vec![
             quote("AAPL", 110.0, 100.0),
