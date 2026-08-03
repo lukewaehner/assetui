@@ -28,6 +28,8 @@ use crate::search::subseq_match_ci;
 
 use super::app::{App, ManageInput, ManageInputKind, ManageSection, Overlay, Page};
 use super::theme::Theme;
+use super::treemap::squarify;
+use crate::sectors::SectorMap;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let t = app.theme;
@@ -43,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.page {
         Page::Market => draw_market_body(f, body, app),
         Page::Manage => draw_manage_body(f, body, app),
-        Page::Sectors => {}
+        Page::Sectors => draw_sectors_page(f, body, app),
     }
     draw_status_bar(f, status_area, app);
 
@@ -1639,8 +1641,6 @@ fn pnl_cell(value: Option<f64>, t: &Theme) -> Cell<'static> {
 
 const HEAT_CAP_PCT: f64 = 3.0;
 
-// TODO(sectors-render): drop this #[allow] once draw_sectors_page calls heat_color.
-#[allow(dead_code)]
 pub(crate) fn heat_color(day_pct: f64, t: &Theme) -> Color {
     let frac = (day_pct / HEAT_CAP_PCT).clamp(-1.0, 1.0);
     let (from, to, amount) = if frac >= 0.0 {
@@ -1660,6 +1660,103 @@ fn lerp_rgb(from: Color, to: Color, amount: f64) -> Color {
         (f64::from(a) + (f64::from(b) - f64::from(a)) * amount).round() as u8
     };
     Color::Rgb(mix(fr, tr), mix(fg, tg), mix(fb, tb))
+}
+
+pub(crate) fn flatten_tiles(map: &SectorMap, area: Rect) -> Vec<(Rect, String)> {
+    let sector_weights: Vec<f64> = map.groups.iter().map(|g| g.total_market_cap).collect();
+    let sector_rects = squarify(&sector_weights, area);
+    let mut flat = Vec::new();
+    for (group, srect) in map.groups.iter().zip(sector_rects) {
+        let inner = Rect {
+            x: srect.x,
+            y: srect.y.saturating_add(1),
+            width: srect.width,
+            height: srect.height.saturating_sub(1),
+        };
+        let tile_weights: Vec<f64> = group.tiles.iter().map(|t| t.market_cap).collect();
+        for (tile, trect) in group.tiles.iter().zip(squarify(&tile_weights, inner)) {
+            flat.push((trect, tile.ticker.clone()));
+        }
+    }
+    flat
+}
+
+fn draw_sectors_page(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let map = &app.sectors.map;
+
+    if map.groups.is_empty() {
+        let msg = if app.sectors.loading { "loading sectors…" } else { "press r to load sectors" };
+        f.render_widget(placeholder(msg, &t), area);
+        return;
+    }
+
+    let sector_weights: Vec<f64> = map.groups.iter().map(|g| g.total_market_cap).collect();
+    for (group, srect) in map.groups.iter().zip(squarify(&sector_weights, area)) {
+        if srect.width < 3 || srect.height < 2 {
+            continue;
+        }
+        let block = Block::default()
+            .title(block_title(sector_label_short(group.sector), &t))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(t.border));
+        let inner = block.inner(srect);
+        f.render_widget(block, srect);
+
+        let tile_weights: Vec<f64> = group.tiles.iter().map(|ti| ti.market_cap).collect();
+        for (tile, trect) in group.tiles.iter().zip(squarify(&tile_weights, inner)) {
+            if trect.width == 0 || trect.height == 0 {
+                continue;
+            }
+            let bg = heat_color(tile.day_pct, &t);
+            f.render_widget(Block::default().style(Style::default().bg(bg)), trect);
+            if trect.width >= 4 && trect.height >= 1 {
+                let mut lines = vec![Line::from(Span::styled(
+                    tile.ticker.clone(),
+                    Style::default().fg(t.bg).add_modifier(Modifier::BOLD),
+                ))];
+                if trect.height >= 2 {
+                    lines.push(Line::from(Span::styled(
+                        format!("{:+.1}%", tile.day_pct),
+                        Style::default().fg(t.bg),
+                    )));
+                }
+                f.render_widget(Paragraph::new(lines), trect);
+            }
+        }
+    }
+
+    let flat = flatten_tiles(map, area);
+    if let Some((rect, _)) = flat.get(app.sectors.selected)
+        && rect.width >= 2
+        && rect.height >= 2
+    {
+        f.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD)),
+            *rect,
+        );
+    }
+}
+
+fn sector_label_short(s: yfinance_rs::screener::EquitySector) -> String {
+    use yfinance_rs::screener::EquitySector::*;
+    match s {
+        Technology => "Technology",
+        FinancialServices => "Financials",
+        Healthcare => "Healthcare",
+        ConsumerCyclical => "Cons Cyclical",
+        ConsumerDefensive => "Cons Defensive",
+        CommunicationServices => "Comm Services",
+        Industrials => "Industrials",
+        Energy => "Energy",
+        Utilities => "Utilities",
+        RealEstate => "Real Estate",
+        BasicMaterials => "Materials",
+        _ => "Other",
+    }
+    .to_string()
 }
 
 /// Renders the Manage page body: a Holdings section above an Alerts section.
@@ -2020,6 +2117,33 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flatten_tiles_lists_every_tile_with_its_ticker() {
+        use crate::sectors::{SectorMap, SectorTile};
+        use yfinance_rs::screener::EquitySector;
+
+        let mut map = SectorMap::default();
+        map.upsert(
+            EquitySector::Technology,
+            vec![
+                SectorTile { ticker: "AAPL".into(), name: "Apple".into(), market_cap: 100.0, day_pct: 1.0 },
+                SectorTile { ticker: "MSFT".into(), name: "Microsoft".into(), market_cap: 60.0, day_pct: 0.2 },
+            ],
+        );
+        map.upsert(
+            EquitySector::Energy,
+            vec![SectorTile { ticker: "XOM".into(), name: "Exxon".into(), market_cap: 40.0, day_pct: -1.0 }],
+        );
+
+        let flat = flatten_tiles(&map, Rect::new(0, 0, 80, 40));
+
+        let tickers: Vec<&str> = flat.iter().map(|(_, tk)| tk.as_str()).collect();
+        assert_eq!(tickers, vec!["AAPL", "MSFT", "XOM"]);
+        for (r, _) in &flat {
+            assert!(r.x + r.width <= 80 && r.y + r.height <= 40);
+        }
+    }
 
     #[test]
     fn spark_series_subtracts_the_minimum_before_scaling() {

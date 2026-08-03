@@ -267,8 +267,6 @@ pub struct SectorState {
     /// True while at least one sector query is outstanding.
     pub loading: bool,
     /// Selected tile index into the flattened tile order (see `draw_sectors_page`).
-    // TODO(sectors-render): drop this #[allow] once the Sectors page reads the
-    #[allow(dead_code)]
     pub selected: usize,
     /// Set once the first fetch is kicked off, so page entry doesn't refetch every frame.
     pub requested: bool,

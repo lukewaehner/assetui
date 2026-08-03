@@ -1,6 +1,5 @@
 use ratatui::layout::Rect;
 
-#[allow(dead_code)]
 pub(crate) fn squarify(weights: &[f64], area: Rect) -> Vec<Rect> {
     let n = weights.len();
     let mut out = vec![Rect::new(area.x, area.y, 0, 0); n];
