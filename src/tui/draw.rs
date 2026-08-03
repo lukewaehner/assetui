@@ -1636,6 +1636,31 @@ fn pnl_cell(value: Option<f64>, t: &Theme) -> Cell<'static> {
     opt_cell(value, |v| format!("{v:+.2}")).style(Style::default().fg(pnl_color(value, t)))
 }
 
+const HEAT_CAP_PCT: f64 = 3.0;
+
+// TODO(sectors-render): drop this #[allow] once draw_sectors_page calls heat_color.
+#[allow(dead_code)]
+pub(crate) fn heat_color(day_pct: f64, t: &Theme) -> Color {
+    let frac = (day_pct / HEAT_CAP_PCT).clamp(-1.0, 1.0);
+    let (from, to, amount) = if frac >= 0.0 {
+        (t.neutral, t.up_strong, frac)
+    } else {
+        (t.neutral, t.down_strong, -frac)
+    };
+    lerp_rgb(from, to, amount)
+}
+
+/// Linearly interpolates two `Color::Rgb` values by `amount` in `[0, 1]`.
+fn lerp_rgb(from: Color, to: Color, amount: f64) -> Color {
+    let (Color::Rgb(fr, fg, fb), Color::Rgb(tr, tg, tb)) = (from, to) else {
+        return to;
+    };
+    let mix = |a: u8, b: u8| -> u8 {
+        (f64::from(a) + (f64::from(b) - f64::from(a)) * amount).round() as u8
+    };
+    Color::Rgb(mix(fr, tr), mix(fg, tg), mix(fb, tb))
+}
+
 /// Renders the Manage page body: a Holdings section above an Alerts section.
 fn draw_manage_body(f: &mut Frame, body: Rect, app: &mut App) {
     let [holdings_area, alerts_area] =
@@ -2327,5 +2352,38 @@ mod tests {
     fn breadth_bar_is_zero_for_no_quotes_or_no_width() {
         assert_eq!(breadth_bar(0, 0, 10), (0, 0));
         assert_eq!(breadth_bar(5, 5, 0), (0, 0));
+    }
+
+    #[test]
+    fn heat_color_zero_is_neutral() {
+        let t = Theme::for_appearance(crate::tui::theme::Appearance::Dark);
+        assert_eq!(heat_color(0.0, &t), t.neutral);
+    }
+
+    #[test]
+    fn heat_color_saturates_up_beyond_cap() {
+        let t = Theme::for_appearance(crate::tui::theme::Appearance::Dark);
+        assert_eq!(heat_color(3.0, &t), t.up_strong);
+        assert_eq!(heat_color(9.9, &t), t.up_strong);
+    }
+
+    #[test]
+    fn heat_color_saturates_down_beyond_cap() {
+        let t = Theme::for_appearance(crate::tui::theme::Appearance::Dark);
+        assert_eq!(heat_color(-3.0, &t), t.down_strong);
+        assert_eq!(heat_color(-9.9, &t), t.down_strong);
+    }
+
+    #[test]
+    fn heat_color_midway_up_is_between_neutral_and_up_strong() {
+        let t = Theme::for_appearance(crate::tui::theme::Appearance::Dark);
+        let (Color::Rgb(nr, ng, nb), Color::Rgb(ur, ug, ub), Color::Rgb(mr, mg, mb)) =
+            (t.neutral, t.up_strong, heat_color(1.5, &t))
+        else {
+            panic!("theme colors are RGB");
+        };
+        assert!(mr >= nr.min(ur) && mr <= nr.max(ur));
+        assert!(mg >= ng.min(ug) && mg <= ng.max(ug));
+        assert!(mb >= nb.min(ub) && mb <= nb.max(ub));
     }
 }
