@@ -1,7 +1,7 @@
 //! Ratatui rendering for the TUI binary.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     time::Instant,
 };
 
@@ -13,7 +13,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, LegendPosition, Padding,
-        Paragraph, Row, Table, Wrap,
+        Paragraph, Row, Sparkline, Table, Wrap,
     },
 };
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
@@ -171,10 +171,27 @@ fn move_arrow(value: f64) -> &'static str {
     }
 }
 
+/// Maps a portfolio value series to `Sparkline` bar heights (0..=100).
+pub(crate) fn spark_series(values: &VecDeque<f64>) -> Vec<u64> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let span = max - min;
+    if span <= 0.0 {
+        return vec![0; values.len()];
+    }
+    values
+        .iter()
+        .map(|v| (((v - min) / span) * 100.0).round() as u64)
+        .collect()
+}
+
 fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
     let [portfolio_area, movers_area, alerts_area, breadth_area, active_area, status_area] =
         Layout::vertical([
-            Constraint::Length(5),
+            Constraint::Length(6),
             Constraint::Min(4),
             Constraint::Length(4),
             Constraint::Length(3),
@@ -194,6 +211,13 @@ fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
     let snap = &app.market.dashboard;
     let positions = portfolio_positions(&snap.holdings, &snap.rows);
+    let block = cube_block("portfolio", &t);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let [text_area, spark_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+
     let lines = if snap.holdings.is_empty() {
         vec![dim_line("no holdings", &t)]
     } else if !positions.iter().any(|p| p.market_value.is_some()) {
@@ -222,10 +246,19 @@ fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
             ]),
         ]
     };
-    f.render_widget(
-        Paragraph::new(lines).block(cube_block("portfolio", &t)),
-        area,
-    );
+    f.render_widget(Paragraph::new(lines), text_area);
+
+    if app.market.portfolio_value_series.len() < 2 {
+        f.render_widget(Paragraph::new(dim_line("collecting…", &t)), spark_area);
+    } else {
+        let data = spark_series(&app.market.portfolio_value_series);
+        f.render_widget(
+            Sparkline::default()
+                .data(&data)
+                .style(Style::default().fg(t.accent)),
+            spark_area,
+        );
+    }
 }
 
 /// Movers cube: the day's biggest movers as a bar list, gainers first.
@@ -1961,6 +1994,25 @@ fn draw_stock_chart(f: &mut Frame, area: Rect, candles: &[Candle], ticker: &str,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn spark_series_subtracts_the_minimum_before_scaling() {
+        let values: VecDeque<f64> = [100.0, 150.0, 200.0].into_iter().collect();
+        assert_eq!(spark_series(&values), vec![0, 50, 100]);
+    }
+
+    #[test]
+    fn spark_series_flat_series_is_all_baseline() {
+        let values: VecDeque<f64> = [500.0, 500.0, 500.0].into_iter().collect();
+        assert_eq!(spark_series(&values), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn spark_series_empty_is_empty() {
+        let values: VecDeque<f64> = VecDeque::new();
+        assert!(spark_series(&values).is_empty());
+    }
 
     fn mover_row(ticker: &str, price: f64, previous_close: f64) -> QuoteRecord {
         QuoteRecord {

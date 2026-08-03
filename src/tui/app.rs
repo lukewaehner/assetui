@@ -34,6 +34,9 @@ const BLINK_INTERVAL: Duration = Duration::from_millis(500);
 /// How often the Market dashboard cubes re-snapshot their data.
 const DASHBOARD_REFRESH: Duration = Duration::from_secs(3);
 
+/// How many portfolio-value samples the dashboard sparkline retains.
+const PORTFOLIO_SERIES_CAP: usize = 120;
+
 /// Maximum number of lines retained in the log panel.
 const MAX_LOG_LINES: usize = 500;
 
@@ -218,6 +221,7 @@ pub struct MarketState {
     pub dashboard: DashboardSnapshot,
     /// Time accumulated since [`Self::dashboard`] last refreshed.
     pub dashboard_age: Duration,
+    pub portfolio_value_series: VecDeque<f64>,
 }
 
 /// A point-in-time copy of the inputs the Market dashboard cubes render from.
@@ -459,6 +463,7 @@ impl App {
                 logs: VecDeque::new(),
                 dashboard: DashboardSnapshot::default(),
                 dashboard_age: DASHBOARD_REFRESH,
+                portfolio_value_series: VecDeque::new(),
             },
             should_quit: false,
             services: Services {
@@ -536,6 +541,23 @@ impl App {
             tracked: self.subscribed_symbols.len(),
         };
         self.market.dashboard = snapshot;
+        self.sample_portfolio_value();
+    }
+
+    fn sample_portfolio_value(&mut self) {
+        let positions = crate::portfolio::portfolio_positions(
+            &self.holdings,
+            &self.market.db_display.all_rows,
+        );
+        if !positions.iter().any(|p| p.market_value.is_some()) {
+            return;
+        }
+        let value = crate::portfolio::summarize(&positions).total_market_value;
+        let series = &mut self.market.portfolio_value_series;
+        series.push_back(value);
+        while series.len() > PORTFOLIO_SERIES_CAP {
+            series.pop_front();
+        }
     }
 
     pub fn status_mode(&self) -> (StatusMode, &'static str) {
@@ -2635,6 +2657,28 @@ mod tests {
 
         app.tick(Duration::from_secs(2));
         assert_eq!(dashboard_market_value(&app), Some(1500.0), "10 shares * $150");
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_refresh_samples_priced_portfolio_value() {
+        let (mut app, _rx) = make_test_app();
+        app.holdings = vec![holding_for("AAPL")];
+        app.handle_event(AppEvent::PageLoaded(vec![quote("AAPL", 110.0, 100.0)]));
+
+        app.tick(Duration::from_millis(100));
+
+        assert_eq!(app.market.portfolio_value_series.len(), 1);
+        assert_eq!(app.market.portfolio_value_series[0], 1100.0);
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_refresh_skips_unpriced_portfolio() {
+        let (mut app, _rx) = make_test_app();
+        app.holdings = vec![holding_for("AAPL")];
+
+        app.tick(Duration::from_millis(100));
+
+        assert!(app.market.portfolio_value_series.is_empty());
     }
 
     #[tokio::test]
