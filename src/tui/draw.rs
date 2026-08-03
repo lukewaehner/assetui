@@ -296,26 +296,35 @@ fn draw_alerts_cube(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines).block(cube_block(&title, &t)), area);
 }
 
-/// Breadth cube: how many tracked quotes are up versus down on the day.
 fn draw_breadth_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
     let (advancers, decliners) = day_breadth(&app.market.dashboard.rows);
-    let lines = if advancers == 0 && decliners == 0 {
-        vec![dim_line("no quotes yet", &t)]
-    } else {
-        vec![Line::from(vec![
-            Span::styled(
-                format!("{} {advancers}", direction_arrow(Direction::Up)),
-                Style::default().fg(direction_color(Direction::Up, &t)),
-            ),
-            Span::raw("    "),
-            Span::styled(
-                format!("{} {decliners}", direction_arrow(Direction::Down)),
-                Style::default().fg(direction_color(Direction::Down, &t)),
-            ),
-        ])]
-    };
-    f.render_widget(Paragraph::new(lines).block(cube_block("breadth", &t)), area);
+    let block = cube_block("breadth", &t);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if advancers == 0 && decliners == 0 {
+        f.render_widget(Paragraph::new(dim_line("no quotes yet", &t)), inner);
+        return;
+    }
+
+    let up_color = direction_color(Direction::Up, &t);
+    let down_color = direction_color(Direction::Down, &t);
+    let left = format!("{} {advancers} ", direction_arrow(Direction::Up));
+    let right = format!(" {} {decliners}", direction_arrow(Direction::Down));
+    let bar_width = (inner.width as usize)
+        .saturating_sub(left.chars().count() + right.chars().count());
+    let (up, down) = breadth_bar(advancers, decliners, bar_width);
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(left, Style::default().fg(up_color)),
+            Span::styled("█".repeat(up), Style::default().fg(up_color)),
+            Span::styled("█".repeat(down), Style::default().fg(down_color)),
+            Span::styled(right, Style::default().fg(down_color)),
+        ])),
+        inner,
+    );
 }
 
 /// Most-active cube: the most-traded tracked quote by day volume.
@@ -1564,6 +1573,16 @@ pub(crate) fn day_breadth(rows: &[QuoteRecord]) -> (usize, usize) {
     (advancers, decliners)
 }
 
+pub(crate) fn breadth_bar(adv: usize, dec: usize, width: usize) -> (usize, usize) {
+    let total = adv + dec;
+    if width == 0 || total == 0 {
+        return (0, 0);
+    }
+    let up = adv * width / total;
+    let down = width - up;
+    (up, down)
+}
+
 /// The most-traded quote in `rows` by day volume: its ticker and share volume.
 pub(crate) fn most_active(rows: &[QuoteRecord]) -> Option<(String, f64)> {
     rows.iter()
@@ -2231,5 +2250,31 @@ mod tests {
     #[test]
     fn fmt_news_meta_empty_when_both_absent() {
         assert_eq!(fmt_news_meta(None, None), "");
+    }
+
+    #[test]
+    fn breadth_bar_splits_evenly_for_equal_counts() {
+        assert_eq!(breadth_bar(5, 5, 10), (5, 5));
+    }
+
+    #[test]
+    fn breadth_bar_all_advancers_fills_up_side() {
+        assert_eq!(breadth_bar(3, 0, 10), (10, 0));
+    }
+
+    #[test]
+    fn breadth_bar_all_decliners_fills_down_side() {
+        assert_eq!(breadth_bar(0, 3, 10), (0, 10));
+    }
+
+    #[test]
+    fn breadth_bar_gives_rounding_remainder_to_decliners() {
+        assert_eq!(breadth_bar(1, 2, 9), (3, 6));
+    }
+
+    #[test]
+    fn breadth_bar_is_zero_for_no_quotes_or_no_width() {
+        assert_eq!(breadth_bar(0, 0, 10), (0, 0));
+        assert_eq!(breadth_bar(5, 5, 0), (0, 0));
     }
 }
