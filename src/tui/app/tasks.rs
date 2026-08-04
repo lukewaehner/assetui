@@ -345,6 +345,38 @@ impl App {
         });
     }
 
+    pub(crate) fn spawn_portfolio_history(&self) {
+        use crate::portfolio::reconstruct_value_series;
+
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
+        let holdings = self.holdings.clone();
+        let cost_basis: f64 = holdings.iter().map(|h| h.shares * h.avg_cost).sum();
+
+        tokio::spawn(async move {
+            let mut holdings_closes: Vec<(f64, Vec<(chrono::NaiveDate, f64)>)> = Vec::new();
+            for h in &holdings {
+                match fetch_chart_data(&client, &h.ticker).await {
+                    Ok(candles) => {
+                        let closes = candles
+                            .iter()
+                            .map(|c| (c.ts.date_naive(), c.ohlc.close.as_decimal().as_f64()))
+                            .collect();
+                        holdings_closes.push((h.shares, closes));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AppEvent::Error(format!(
+                            "portfolio history {}: {e}",
+                            h.ticker
+                        )));
+                    }
+                }
+            }
+            let series = reconstruct_value_series(&holdings_closes);
+            let _ = tx.send(AppEvent::PortfolioHistoryReady { series, cost_basis });
+        });
+    }
+
     pub(crate) fn spawn_sector_map(&self) {
         use crate::sectors::{SECTOR_TOP_N, make_tile, rank_tiles};
         use yfinance_rs::screener::{

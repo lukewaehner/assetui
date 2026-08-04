@@ -91,6 +91,11 @@ pub enum AppEvent {
         /// The sector's tiles (already sorted/truncated).
         tiles: Vec<crate::sectors::SectorTile>,
     },
+    /// The reconstructed portfolio value series and its cost basis.
+    PortfolioHistoryReady {
+        series: Vec<(chrono::NaiveDate, f64)>,
+        cost_basis: f64,
+    },
     Error(String),
 }
 
@@ -135,6 +140,8 @@ pub enum Overlay {
     Chart,
     /// The options-chain modal.
     Options,
+    /// The portfolio performance modal.
+    Portfolio,
     /// The keybinding help modal.
     Help,
 }
@@ -299,6 +306,8 @@ pub struct App {
     pub animations: Animations,
     /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
+    /// Overlay modal showing the portfolio value history and return.
+    pub portfolio_modal: PortfolioModal,
     /// The single overlay currently on top of the page, if any.
     pub overlay: Overlay,
     /// Slide-in error notifications shown top-right.
@@ -467,6 +476,13 @@ pub struct StockInfoModal {
     pub show_rsi: bool,
 }
 
+#[derive(Default)]
+pub struct PortfolioModal {
+    pub series: Option<Vec<(chrono::NaiveDate, f64)>>,
+    pub cost_basis: f64,
+    pub loading: bool,
+}
+
 fn sort_mode_for_key(key: char) -> Option<SortMode> {
     Some(match key {
         'd' => SortMode::ById,
@@ -533,6 +549,7 @@ impl App {
                 show_volume: true,
                 show_rsi: true,
             },
+            portfolio_modal: PortfolioModal::default(),
             overlay: Overlay::None,
             notifications: Notifications::new(),
             appearance,
@@ -733,6 +750,11 @@ impl App {
                 if self.sectors.map.groups.len() >= SECTOR_COUNT {
                     self.sectors.loading = false;
                 }
+            }
+            AppEvent::PortfolioHistoryReady { series, cost_basis } => {
+                self.portfolio_modal.series = Some(series);
+                self.portfolio_modal.cost_basis = cost_basis;
+                self.portfolio_modal.loading = false;
             }
         }
     }
@@ -1102,6 +1124,7 @@ impl App {
                 }
                 return;
             }
+            Overlay::Portfolio => return,
             Overlay::None => {}
         }
         if let Some(mode) = sort_mode_for_key(key) {
@@ -1506,6 +1529,21 @@ impl App {
             self.stock_modal.selected_expiry = 0;
             self.spawn_option_chain(t);
         }
+    }
+
+    /// Opens the portfolio performance modal and kicks off the history fetch.
+    // TODO(portfolio-keys): drop this allow once Task 4 wires the `P` key to
+    #[allow(dead_code)]
+    fn open_portfolio_modal(&mut self) {
+        self.overlay = Overlay::Portfolio;
+        self.portfolio_modal.series = None;
+        self.portfolio_modal.loading = true;
+        self.portfolio_modal.cost_basis = self
+            .holdings
+            .iter()
+            .map(|h| h.shares * h.avg_cost)
+            .sum();
+        self.spawn_portfolio_history();
     }
 
     fn cycle_expiry(&mut self, delta: isize) {
@@ -2427,6 +2465,23 @@ mod tests {
         app.handle_event(AppEvent::PortfolioLoaded(vec![holding_for("AAPL")]));
         app.handle_event(AppEvent::PortfolioLoaded(vec![]));
         assert!(app.holdings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_portfolio_history_ready_populates_modal() {
+        use chrono::NaiveDate;
+        let (mut app, _rx) = make_test_app();
+        app.portfolio_modal.loading = true;
+        let series = vec![
+            (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 100.0),
+            (NaiveDate::from_ymd_opt(2026, 1, 2).unwrap(), 110.0),
+        ];
+
+        app.handle_event(AppEvent::PortfolioHistoryReady { series: series.clone(), cost_basis: 90.0 });
+
+        assert_eq!(app.portfolio_modal.series, Some(series));
+        assert_eq!(app.portfolio_modal.cost_basis, 90.0);
+        assert!(!app.portfolio_modal.loading);
     }
 
     fn price_tick(ticker: &str, price: Option<f64>) -> crate::models::QuoteTick {
