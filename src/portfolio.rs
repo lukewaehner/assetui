@@ -2,6 +2,8 @@
 
 use crate::models::QuoteRecord;
 use crate::models::ticker::split_ticker_entry;
+use chrono::NaiveDate;
+use std::collections::BTreeMap;
 
 /// Why a user's holding spec (`shares avg_cost`, e.g. `10 150.5`) could not be parsed.
 #[derive(Debug, Clone, PartialEq)]
@@ -167,9 +169,117 @@ pub(crate) fn portfolio_positions(holdings: &[Holding], rows: &[QuoteRecord]) ->
         .collect()
 }
 
+/// A portfolio value series' return vs a flat cost basis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesReturn {
+    /// Most recent total value (0.0 when the series is empty).
+    pub latest_value: f64,
+    /// `latest_value - cost_basis`.
+    pub total_pnl: f64,
+    pub total_pnl_pct: Option<f64>,
+}
+
+/// Reconstructs a portfolio value series from each holding's dated closes.
+pub fn reconstruct_value_series(
+    holdings_closes: &[(f64, Vec<(NaiveDate, f64)>)],
+) -> Vec<(NaiveDate, f64)> {
+    let mut dates: BTreeMap<NaiveDate, ()> = BTreeMap::new();
+    for (_, closes) in holdings_closes {
+        for (date, _) in closes {
+            dates.insert(*date, ());
+        }
+    }
+    if dates.is_empty() {
+        return Vec::new();
+    }
+
+    let sorted: Vec<(f64, BTreeMap<NaiveDate, f64>)> = holdings_closes
+        .iter()
+        .map(|(shares, closes)| (*shares, closes.iter().map(|(d, c)| (*d, *c)).collect()))
+        .collect();
+
+    dates
+        .keys()
+        .map(|date| {
+            let total: f64 = sorted
+                .iter()
+                .filter_map(|(shares, closes)| {
+                    closes
+                        .range(..=*date)
+                        .next_back()
+                        .map(|(_, close)| shares * close)
+                })
+                .sum();
+            (*date, total)
+        })
+        .collect()
+}
+
+/// Start→end return of `series` against a flat `cost_basis`.
+pub fn series_return(series: &[(NaiveDate, f64)], cost_basis: f64) -> SeriesReturn {
+    let latest_value = series.last().map_or(0.0, |(_, v)| *v);
+    let total_pnl = latest_value - cost_basis;
+    let total_pnl_pct = if cost_basis != 0.0 {
+        Some(total_pnl / cost_basis * 100.0)
+    } else {
+        None
+    };
+    SeriesReturn { latest_value, total_pnl, total_pnl_pct }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn d(day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 1, day).unwrap()
+    }
+
+    #[test]
+    fn reconstruct_single_holding_is_shares_times_closes() {
+        let closes = vec![(d(1), 10.0), (d(2), 11.0), (d(3), 12.0)];
+        let series = reconstruct_value_series(&[(2.0, closes)]);
+        assert_eq!(series, vec![(d(1), 20.0), (d(2), 22.0), (d(3), 24.0)]);
+    }
+
+    #[test]
+    fn reconstruct_sums_two_aligned_holdings() {
+        let a = vec![(d(1), 10.0), (d(2), 12.0)];
+        let b = vec![(d(1), 5.0), (d(2), 6.0)];
+        let series = reconstruct_value_series(&[(1.0, a), (3.0, b)]);
+        assert_eq!(series, vec![(d(1), 25.0), (d(2), 30.0)]);
+    }
+
+    #[test]
+    fn reconstruct_forward_fills_and_delays_a_late_holding() {
+        let a = vec![(d(1), 10.0), (d(2), 10.0), (d(3), 10.0)];
+        let b = vec![(d(2), 4.0)];
+        let series = reconstruct_value_series(&[(1.0, a), (2.0, b)]);
+        assert_eq!(series, vec![(d(1), 10.0), (d(2), 18.0), (d(3), 18.0)]);
+    }
+
+    #[test]
+    fn reconstruct_empty_inputs_are_empty() {
+        assert!(reconstruct_value_series(&[]).is_empty());
+        assert!(reconstruct_value_series(&[(1.0, Vec::new())]).is_empty());
+    }
+
+    #[test]
+    fn series_return_computes_pnl_vs_cost_basis() {
+        let series = vec![(d(1), 100.0), (d(2), 130.0)];
+        let r = series_return(&series, 120.0);
+        assert_eq!(r.latest_value, 130.0);
+        assert_eq!(r.total_pnl, 10.0);
+        assert_eq!(r.total_pnl_pct, Some(10.0 / 120.0 * 100.0));
+    }
+
+    #[test]
+    fn series_return_zero_basis_or_empty_is_none_pct() {
+        assert_eq!(series_return(&[(d(1), 5.0)], 0.0).total_pnl_pct, None);
+        let empty = series_return(&[], 100.0);
+        assert_eq!(empty.latest_value, 0.0);
+        assert_eq!(empty.total_pnl_pct, Some(-100.0));
+    }
 
     fn holding(shares: f64, avg_cost: f64) -> Holding {
         Holding {
