@@ -637,7 +637,7 @@ impl App {
         } else if self.page == Page::Manage {
             (
                 StatusMode::Manage,
-                "j/k move · a add · e edit · d delete · tab market · q quit",
+                "j/k move · a add · e edit · d delete · tab market · P perf · q quit",
             )
         } else if self.overlay == Overlay::Options {
             (StatusMode::Options, "h/l expiry · esc close")
@@ -662,7 +662,7 @@ impl App {
         } else {
             (
                 StatusMode::Normal,
-                "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · q quit",
+                "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · P perf · q quit",
             )
         }
     }
@@ -958,6 +958,12 @@ impl App {
             }
             return;
         }
+        if self.overlay != Overlay::None {
+            if code == KeyCode::Esc {
+                self.overlay = Overlay::None;
+            }
+            return;
+        }
         match code {
             KeyCode::Esc => self.page = Page::Market,
             KeyCode::Char('q') => self.should_quit = true,
@@ -967,6 +973,7 @@ impl App {
             KeyCode::Char('a') => self.start_manage_add(),
             KeyCode::Char('e') => self.start_manage_edit(),
             KeyCode::Char('d') => self.delete_selected_manage(),
+            KeyCode::Char('P') => self.open_portfolio_modal(),
             _ => {}
         }
     }
@@ -1138,6 +1145,7 @@ impl App {
             '?' => self.open_help_modal(),
             'w' => self.toggle_watchlist(),
             'x' => self.open_options_modal(),
+            'P' => self.open_portfolio_modal(),
             'L' => self.show_logs = !self.show_logs,
             'W' => {
                 self.market.db_display.watchlist_only = !self.market.db_display.watchlist_only;
@@ -1532,8 +1540,6 @@ impl App {
     }
 
     /// Opens the portfolio performance modal and kicks off the history fetch.
-    // TODO(portfolio-keys): drop this allow once Task 4 wires the `P` key to
-    #[allow(dead_code)]
     fn open_portfolio_modal(&mut self) {
         self.overlay = Overlay::Portfolio;
         self.portfolio_modal.series = None;
@@ -1730,7 +1736,7 @@ mod tests {
             (
                 StatusMode::Normal,
                 "NORMAL",
-                "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · q quit"
+                "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · P perf · q quit"
             )
         );
     }
@@ -2482,6 +2488,30 @@ mod tests {
         assert_eq!(app.portfolio_modal.series, Some(series));
         assert_eq!(app.portfolio_modal.cost_basis, 90.0);
         assert!(!app.portfolio_modal.loading);
+    }
+
+    #[tokio::test]
+    async fn test_capital_p_opens_portfolio_modal_from_market() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_key(KeyCode::Char('P'));
+        assert_eq!(app.overlay, Overlay::Portfolio);
+    }
+
+    #[tokio::test]
+    async fn test_capital_p_opens_portfolio_modal_from_manage() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+        app.handle_key(KeyCode::Char('P'));
+        assert_eq!(app.overlay, Overlay::Portfolio);
+    }
+
+    #[tokio::test]
+    async fn test_esc_closes_portfolio_modal_on_manage() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+        app.overlay = Overlay::Portfolio;
+        app.handle_key(KeyCode::Esc);
+        assert_eq!(app.overlay, Overlay::None);
     }
 
     fn price_tick(ticker: &str, price: Option<f64>) -> crate::models::QuoteTick {
