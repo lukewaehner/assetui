@@ -270,15 +270,19 @@ mod tests {
         let r = series_return(&series, 120.0);
         assert_eq!(r.latest_value, 130.0);
         assert_eq!(r.total_pnl, 10.0);
-        assert_eq!(r.total_pnl_pct, Some(10.0 / 120.0 * 100.0));
+        assert_eq!(r.total_pnl_pct, Some(8.333333333333332));
     }
 
     #[test]
-    fn series_return_zero_basis_or_empty_is_none_pct() {
+    fn series_return_zero_cost_basis_yields_none_pct() {
         assert_eq!(series_return(&[(d(1), 5.0)], 0.0).total_pnl_pct, None);
-        let empty = series_return(&[], 100.0);
-        assert_eq!(empty.latest_value, 0.0);
-        assert_eq!(empty.total_pnl_pct, Some(-100.0));
+    }
+
+    #[test]
+    fn series_return_empty_series_has_zero_value_and_full_loss_pct() {
+        let r = series_return(&[], 100.0);
+        assert_eq!(r.latest_value, 0.0);
+        assert_eq!(r.total_pnl_pct, Some(-100.0));
     }
 
     fn holding(shares: f64, avg_cost: f64) -> Holding {
