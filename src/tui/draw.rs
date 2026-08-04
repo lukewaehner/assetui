@@ -785,7 +785,8 @@ fn draw_portfolio_modal(f: &mut Frame, app: &App) {
     f.render_widget(block, area);
 
     if series.len() < 2 {
-        f.render_widget(placeholder("not enough history", &t), inner);
+        let msg = if app.holdings.is_empty() { "no holdings" } else { "not enough history" };
+        f.render_widget(placeholder(msg, &t), inner);
         return;
     }
 
