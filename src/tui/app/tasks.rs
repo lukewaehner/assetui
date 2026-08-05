@@ -114,6 +114,25 @@ impl App {
         );
     }
 
+    pub(crate) fn spawn_news_feed(&self, tickers: Vec<String>) {
+        for ticker in tickers {
+            let tx = self.services.event_tx.clone();
+            let client = self.services.client.clone();
+            tokio::spawn(async move {
+                let items = match fetch_news(&client, &ticker).await {
+                    Ok(news) => news.items,
+                    Err(e) => {
+                        let _ = tx.send(AppEvent::LogLine(format!(
+                            "[WARN] news for {ticker} unavailable: {e}"
+                        )));
+                        Vec::new()
+                    }
+                };
+                let _ = tx.send(AppEvent::NewsFeedItemReady { ticker, items });
+            });
+        }
+    }
+
     pub(crate) fn spawn_chart_data(&self, symbol: &str) {
         self.spawn_client_fetch(
             symbol.to_owned(),

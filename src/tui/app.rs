@@ -19,6 +19,7 @@ use crate::{
         Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
         QuoteRecordStatistics, QuoteTick, StockNews, Ticker, crosses, parse_alert_entry,
     },
+    news_feed::{NewsFeedState, feed_source_tickers, merge_feed},
     portfolio::{Holding, parse_holding_entry},
     sort::{SortMode, SortOrder},
 };
@@ -95,6 +96,10 @@ pub enum AppEvent {
     PortfolioHistoryReady {
         series: Vec<(chrono::NaiveDate, f64)>,
         cost_basis: f64,
+    },
+    NewsFeedItemReady {
+        ticker: String,
+        items: Vec<crate::models::quote::NewsItem>,
     },
     Error(String),
 }
@@ -244,6 +249,8 @@ pub struct MarketState {
     /// Time accumulated since [`Self::dashboard`] last refreshed.
     pub dashboard_age: Duration,
     pub portfolio_value_series: VecDeque<f64>,
+    /// The merged watchlist news feed and its load bookkeeping.
+    pub news_feed: NewsFeedState,
 }
 
 /// A point-in-time copy of the inputs the Market dashboard cubes render from.
@@ -526,6 +533,7 @@ impl App {
                 dashboard: DashboardSnapshot::default(),
                 dashboard_age: DASHBOARD_REFRESH,
                 portfolio_value_series: VecDeque::new(),
+                news_feed: NewsFeedState::default(),
             },
             should_quit: false,
             services: Services {
@@ -700,6 +708,7 @@ impl App {
             }
             AppEvent::WatchlistLoaded(tickers) => {
                 self.market.db_display.watchlist = tickers.into_iter().collect();
+                self.ensure_news_feed_requested();
             }
             AppEvent::AlertsLoaded(alerts) => {
                 self.alerts = alerts;
@@ -749,6 +758,14 @@ impl App {
                 self.sectors.map.upsert(sector, tiles);
                 if self.sectors.map.groups.len() >= SECTOR_COUNT {
                     self.sectors.loading = false;
+                }
+            }
+            AppEvent::NewsFeedItemReady { ticker, items } => {
+                let existing = std::mem::take(&mut self.market.news_feed.items);
+                self.market.news_feed.items = merge_feed(existing, &ticker, items);
+                self.market.news_feed.pending = self.market.news_feed.pending.saturating_sub(1);
+                if self.market.news_feed.pending == 0 {
+                    self.market.news_feed.loading = false;
                 }
             }
             AppEvent::PortfolioHistoryReady { series, cost_basis } => {
@@ -858,6 +875,23 @@ impl App {
             self.sectors.loading = true;
             self.spawn_sector_map();
         }
+    }
+
+    /// Kicks off the news-feed fetch for the current watchlist the first time it is needed.
+    fn ensure_news_feed_requested(&mut self) {
+        if !self.market.news_feed.requested {
+            self.refresh_news_feed();
+        }
+    }
+
+    /// (Re)fetches news for the (sorted, capped) watchlist tickers, replacing the current feed.
+    fn refresh_news_feed(&mut self) {
+        let tickers = feed_source_tickers(&self.market.db_display.watchlist);
+        self.market.news_feed.requested = true;
+        self.market.news_feed.items.clear();
+        self.market.news_feed.pending = tickers.len();
+        self.market.news_feed.loading = !tickers.is_empty();
+        self.spawn_news_feed(tickers);
     }
 
     fn handle_sectors_key(&mut self, code: KeyCode) {
@@ -2406,6 +2440,29 @@ mod tests {
         app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
         app.handle_event(AppEvent::WatchlistLoaded(vec![]));
         assert!(app.market.db_display.watchlist.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_news_feed_item_ready_merges_and_clears_loading() {
+        use crate::models::quote::NewsItem;
+        let (mut app, _rx) = make_test_app();
+        app.market.news_feed.pending = 1;
+        app.market.news_feed.loading = true;
+
+        app.handle_event(AppEvent::NewsFeedItemReady {
+            ticker: "AAPL".into(),
+            items: vec![NewsItem {
+                title: "Apple thing".into(),
+                publisher: None,
+                published_at: None,
+                link: Some("http://a".into()),
+            }],
+        });
+
+        assert_eq!(app.market.news_feed.items.len(), 1);
+        assert_eq!(app.market.news_feed.items[0].ticker, "AAPL");
+        assert_eq!(app.market.news_feed.pending, 0);
+        assert!(!app.market.news_feed.loading, "loading clears at pending 0");
     }
 
     fn alert_for(id: i32, ticker: &str) -> crate::models::Alert {
