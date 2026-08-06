@@ -194,10 +194,11 @@ pub(crate) fn spark_series(values: &VecDeque<f64>) -> Vec<u64> {
 }
 
 fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
-    let [portfolio_area, movers_area, alerts_area, breadth_area, active_area, status_area] =
+    let [portfolio_area, movers_area, news_area, alerts_area, breadth_area, active_area, status_area] =
         Layout::vertical([
             Constraint::Length(6),
-            Constraint::Min(4),
+            Constraint::Length(5),
+            Constraint::Min(0),
             Constraint::Length(4),
             Constraint::Length(3),
             Constraint::Length(3),
@@ -206,6 +207,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
         .areas(area);
     draw_portfolio_cube(f, portfolio_area, app);
     draw_movers_cube(f, movers_area, app);
+    draw_news_cube(f, news_area, app);
     draw_alerts_cube(f, alerts_area, app);
     draw_breadth_cube(f, breadth_area, app);
     draw_active_cube(f, active_area, app);
@@ -266,15 +268,13 @@ fn draw_portfolio_cube(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// Movers cube: the day's biggest movers as a bar list, gainers first.
 fn draw_movers_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
     let block = cube_block("movers", &t);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let capacity = inner.height as usize;
-    let movers = ranked_movers(&app.market.dashboard.rows, capacity);
+    let movers = ranked_movers(&app.market.dashboard.rows, 3);
     if movers.is_empty() {
         f.render_widget(Paragraph::new(dim_line("no quotes yet", &t)), inner);
         return;
@@ -296,6 +296,42 @@ fn mover_bar_line(m: &Mover, max_pct: f64, bar_width: usize, t: &Theme) -> Line<
         Span::styled(format!("{:<6} ", m.ticker), Style::default().fg(t.fg)),
         Span::styled(format!("{bar:<bar_width$}"), Style::default().fg(color)),
         Span::styled(format!(" {:+.1}%", m.day_pct), Style::default().fg(color)),
+    ])
+}
+
+fn draw_news_cube(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let block = cube_block("news", &t);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let feed = &app.market.news_feed;
+    if feed.items.is_empty() {
+        let msg = if feed.loading {
+            "loading news…"
+        } else {
+            "watchlist empty — press w"
+        };
+        f.render_widget(Paragraph::new(dim_line(msg, &t)), inner);
+        return;
+    }
+
+    let width = inner.width as usize;
+    let lines: Vec<Line> = feed
+        .items
+        .iter()
+        .take(inner.height as usize)
+        .map(|fi| news_snippet_line(&fi.ticker, &fi.item.title, width, &t))
+        .collect();
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn news_snippet_line(ticker: &str, title: &str, width: usize, t: &Theme) -> Line<'static> {
+    let prefix = format!("{ticker} ");
+    let remaining = width.saturating_sub(prefix.chars().count());
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(t.accent)),
+        Span::styled(truncate_ellipsis(title, remaining), Style::default().fg(t.fg)),
     ])
 }
 
@@ -909,6 +945,19 @@ fn section_heading(text: &'static str, meta: Option<String>, t: &Theme) -> Line<
 /// A dimmed "Loading…"-style placeholder paragraph.
 fn placeholder(text: &'static str, t: &Theme) -> Paragraph<'static> {
     Paragraph::new(Span::styled(text, Style::default().fg(t.dim)))
+}
+
+/// Truncates `s` to at most `max` display columns, appending `…` when it would overflow.
+fn truncate_ellipsis(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out: String = s.chars().take(max - 1).collect();
+    out.push('…');
+    out
 }
 
 /// Formats an optional dollar amount, showing `-` when absent.
@@ -2421,6 +2470,28 @@ mod tests {
     #[test]
     fn ranked_movers_empty_input_is_empty() {
         assert!(ranked_movers(&[], 10).is_empty());
+    }
+
+    #[test]
+    fn truncate_ellipsis_adds_ellipsis_only_when_overflowing() {
+        assert_eq!(truncate_ellipsis("short", 10), "short");
+        assert_eq!(truncate_ellipsis("abcdef", 4), "abc…");
+        assert_eq!(truncate_ellipsis("abc", 0), "");
+    }
+
+    #[test]
+    fn ranked_movers_caps_at_three() {
+        let rows: Vec<QuoteRecord> = ["A", "B", "C", "D", "E"]
+            .iter()
+            .enumerate()
+            .map(|(i, tk)| QuoteRecord {
+                ticker: Some((*tk).into()),
+                price: Some(100.0),
+                previous_close: Some(100.0 - i as f64),
+                ..Default::default()
+            })
+            .collect();
+        assert_eq!(ranked_movers(&rows, 3).len(), 3);
     }
 
     #[test]
