@@ -29,7 +29,6 @@ use crate::search::subseq_match_ci;
 use super::app::{App, ManageInput, ManageInputKind, ManageSection, Overlay, Page};
 use super::theme::Theme;
 use super::treemap::squarify;
-use crate::sectors::SectorMap;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let t = app.theme;
@@ -49,7 +48,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     draw_status_bar(f, status_area, app);
 
-    if matches!(app.page, Page::Market | Page::Sectors) {
+    if app.page == Page::Market {
         match app.overlay {
             Overlay::Info => draw_stock_modal(f, app),
             Overlay::Chart => draw_chart_modal(f, app),
@@ -1746,70 +1745,7 @@ fn lerp_rgb(from: Color, to: Color, amount: f64) -> Color {
     Color::Rgb(mix(fr, tr), mix(fg, tg), mix(fb, tb))
 }
 
-pub(crate) fn flatten_tiles(map: &SectorMap, area: Rect) -> Vec<(Rect, String)> {
-    let sector_weights: Vec<f64> = map.groups.iter().map(|g| g.total_market_cap).collect();
-    let sector_rects = squarify(&sector_weights, area);
-    let mut flat = Vec::new();
-    for (group, srect) in map.groups.iter().zip(sector_rects) {
-        if srect.width < 3 || srect.height < 2 {
-            continue;
-        }
-        let inner = Block::default().borders(Borders::ALL).inner(srect);
-        let tile_weights: Vec<f64> = group.tiles.iter().map(|t| t.market_cap).collect();
-        for (tile, trect) in group.tiles.iter().zip(squarify(&tile_weights, inner)) {
-            if trect.width == 0 || trect.height == 0 {
-                continue;
-            }
-            flat.push((trect, tile.ticker.clone()));
-        }
-    }
-    flat
-}
-
-/// A cardinal direction for treemap tile navigation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Dir {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
-pub(crate) fn nearest_in_direction(tiles: &[(Rect, String)], current: usize, dir: Dir) -> usize {
-    let Some((cur_rect, _)) = tiles.get(current) else {
-        return current;
-    };
-    let cx = f64::from(cur_rect.x) + f64::from(cur_rect.width) / 2.0;
-    let cy = f64::from(cur_rect.y) + f64::from(cur_rect.height) / 2.0;
-
-    let mut best = current;
-    let mut best_dist = f64::INFINITY;
-    for (i, (r, _)) in tiles.iter().enumerate() {
-        if i == current {
-            continue;
-        }
-        let x = f64::from(r.x) + f64::from(r.width) / 2.0;
-        let y = f64::from(r.y) + f64::from(r.height) / 2.0;
-        let lies_that_way = match dir {
-            Dir::Left => x < cx,
-            Dir::Right => x > cx,
-            Dir::Up => y < cy,
-            Dir::Down => y > cy,
-        };
-        if !lies_that_way {
-            continue;
-        }
-        let dist = (x - cx).powi(2) + (y - cy).powi(2);
-        if dist < best_dist {
-            best_dist = dist;
-            best = i;
-        }
-    }
-    best
-}
-
 fn draw_sectors_page(f: &mut Frame, area: Rect, app: &mut App) {
-    app.sectors.last_area = area;
     let t = app.theme;
     let map = &app.sectors.map;
 
@@ -1852,19 +1788,6 @@ fn draw_sectors_page(f: &mut Frame, area: Rect, app: &mut App) {
                 f.render_widget(Paragraph::new(lines), trect);
             }
         }
-    }
-
-    let flat = flatten_tiles(map, area);
-    if let Some((rect, _)) = flat.get(app.sectors.selected)
-        && rect.width >= 2
-        && rect.height >= 2
-    {
-        f.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD)),
-            *rect,
-        );
     }
 }
 
@@ -2425,88 +2348,6 @@ mod tests {
     #[test]
     fn range_of_empty_is_none() {
         assert_eq!(range_of(&[], &[]), None);
-    }
-
-    #[test]
-    fn flatten_tiles_lists_every_tile_with_its_ticker() {
-        use crate::sectors::{SectorMap, SectorTile};
-        use yfinance_rs::screener::EquitySector;
-
-        let mut map = SectorMap::default();
-        map.upsert(
-            EquitySector::Technology,
-            vec![
-                SectorTile { ticker: "AAPL".into(), name: "Apple".into(), market_cap: 100.0, day_pct: 1.0 },
-                SectorTile { ticker: "MSFT".into(), name: "Microsoft".into(), market_cap: 60.0, day_pct: 0.2 },
-            ],
-        );
-        map.upsert(
-            EquitySector::Energy,
-            vec![SectorTile { ticker: "XOM".into(), name: "Exxon".into(), market_cap: 40.0, day_pct: -1.0 }],
-        );
-
-        let flat = flatten_tiles(&map, Rect::new(0, 0, 80, 40));
-
-        let tickers: Vec<&str> = flat.iter().map(|(_, tk)| tk.as_str()).collect();
-        assert_eq!(tickers, vec!["AAPL", "MSFT", "XOM"]);
-        for (r, _) in &flat {
-            assert!(r.x + r.width <= 80 && r.y + r.height <= 40);
-        }
-    }
-
-    #[test]
-    fn flatten_tiles_places_tiles_inside_the_sector_border() {
-        use crate::sectors::{SectorMap, SectorTile};
-        use yfinance_rs::screener::EquitySector;
-        let mut map = SectorMap::default();
-        map.upsert(
-            EquitySector::Technology,
-            vec![
-                SectorTile { ticker: "AAPL".into(), name: "Apple".into(), market_cap: 100.0, day_pct: 1.0 },
-                SectorTile { ticker: "MSFT".into(), name: "Microsoft".into(), market_cap: 50.0, day_pct: 0.2 },
-            ],
-        );
-        let area = Rect::new(0, 0, 40, 20);
-        let flat = flatten_tiles(&map, area);
-        assert!(!flat.is_empty());
-        for (r, _) in &flat {
-            assert!(r.x >= 1 && r.y >= 1, "tile {r:?} must be inside the top/left border");
-            assert!(r.x + r.width <= 39 && r.y + r.height <= 19, "tile {r:?} must be inside the bottom/right border");
-        }
-    }
-
-    #[test]
-    fn nearest_in_direction_moves_right_to_adjacent_tile() {
-        let tiles = vec![
-            (Rect::new(0, 0, 10, 10), "A".to_string()),
-            (Rect::new(10, 0, 10, 10), "B".to_string()),
-            (Rect::new(20, 0, 10, 10), "C".to_string()),
-        ];
-        assert_eq!(nearest_in_direction(&tiles, 0, Dir::Right), 1);
-    }
-
-    #[test]
-    fn nearest_in_direction_moves_down() {
-        let tiles = vec![
-            (Rect::new(0, 0, 10, 5), "TOP".to_string()),
-            (Rect::new(0, 5, 10, 5), "BOTTOM".to_string()),
-        ];
-        assert_eq!(nearest_in_direction(&tiles, 0, Dir::Down), 1);
-    }
-
-    #[test]
-    fn nearest_in_direction_stays_when_nothing_that_way() {
-        let tiles = vec![
-            (Rect::new(0, 0, 10, 10), "A".to_string()),
-            (Rect::new(10, 0, 10, 10), "B".to_string()),
-        ];
-        assert_eq!(nearest_in_direction(&tiles, 1, Dir::Right), 1);
-    }
-
-    #[test]
-    fn nearest_in_direction_empty_or_oob_returns_current() {
-        let tiles: Vec<(Rect, String)> = vec![];
-        assert_eq!(nearest_in_direction(&tiles, 0, Dir::Left), 0);
     }
 
     #[test]

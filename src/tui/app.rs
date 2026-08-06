@@ -5,7 +5,6 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use crossterm::event::KeyCode;
-use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
 use ratatui_notifications::{
     Anchor, Animation, AutoDismiss, Level, Notification, Notifications, SlideDirection,
@@ -276,29 +275,14 @@ pub struct ManageState {
     pub input: Option<ManageInput>,
 }
 
+#[derive(Default)]
 pub struct SectorState {
     /// The treemap, filled in progressively as each sector's screener returns.
     pub map: crate::sectors::SectorMap,
     /// True while at least one sector query is outstanding.
     pub loading: bool,
-    /// Selected tile index into the flattened tile order (see `draw_sectors_page`).
-    pub selected: usize,
     /// Set once the first fetch is kicked off, so page entry doesn't refetch every frame.
     pub requested: bool,
-    /// The body area `draw_sectors_page` last laid the treemap into.
-    pub last_area: Rect,
-}
-
-impl Default for SectorState {
-    fn default() -> Self {
-        Self {
-            map: crate::sectors::SectorMap::default(),
-            loading: false,
-            selected: 0,
-            requested: false,
-            last_area: Rect::new(0, 0, 80, 24),
-        }
-    }
 }
 
 /// Top-level application state.
@@ -656,7 +640,7 @@ impl App {
         } else if self.page == Page::Sectors {
             (
                 StatusMode::Sectors,
-                "h/j/k/l move · enter chart · r refresh · tab cycle · q quit",
+                "r refresh · tab cycle · q quit",
             )
         } else if self.market.input_mode.is_focused() && self.market.input_mode.is_fuzzy() {
             (StatusMode::Search, "type to filter · enter apply · esc cancel")
@@ -894,60 +878,16 @@ impl App {
         self.spawn_news_feed(tickers);
     }
 
+    /// Handles keys on the Sectors page: `r` refetches, `q` quits.
     fn handle_sectors_key(&mut self, code: KeyCode) {
-        use super::draw::{Dir, flatten_tiles, nearest_in_direction};
-
-        if self.overlay != Overlay::None {
-            if code == KeyCode::Esc {
-                self.overlay = Overlay::None;
-            } else if let KeyCode::Char(c) = code {
-                self.toggle_chart_panel(c);
-            }
-            return;
-        }
-
         match code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('r') => {
                 self.sectors.loading = true;
                 self.spawn_sector_map();
             }
-            KeyCode::Enter => self.open_sector_modal(),
-            KeyCode::Char('h')
-            | KeyCode::Left
-            | KeyCode::Char('l')
-            | KeyCode::Right
-            | KeyCode::Char('j')
-            | KeyCode::Down
-            | KeyCode::Char('k')
-            | KeyCode::Up => {
-                let dir = match code {
-                    KeyCode::Char('h') | KeyCode::Left => Dir::Left,
-                    KeyCode::Char('l') | KeyCode::Right => Dir::Right,
-                    KeyCode::Char('j') | KeyCode::Down => Dir::Down,
-                    _ => Dir::Up,
-                };
-                let tiles = flatten_tiles(&self.sectors.map, self.sectors.last_area);
-                self.sectors.selected = nearest_in_direction(&tiles, self.sectors.selected, dir);
-            }
             _ => {}
         }
-    }
-
-    fn open_sector_modal(&mut self) {
-        use super::draw::flatten_tiles;
-
-        let tiles = flatten_tiles(&self.sectors.map, self.sectors.last_area);
-        let Some((_, ticker)) = tiles.get(self.sectors.selected) else {
-            return;
-        };
-        let ticker = ticker.clone();
-        self.stock_modal.stock = QuoteRecord {
-            ticker: Some(ticker.clone()),
-            ..Default::default()
-        };
-        self.overlay = Overlay::Chart;
-        self.spawn_chart_data(&ticker);
     }
 
     fn manage_move(&mut self, delta: isize) {
@@ -1703,30 +1643,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sectors_enter_opens_modal_for_selected_tile() {
-        use crate::sectors::SectorTile;
-        use yfinance_rs::screener::EquitySector;
-
-        let (mut app, _rx) = make_test_app();
-        app.page = Page::Sectors;
-        app.handle_event(AppEvent::SectorDataReady {
-            sector: EquitySector::Technology,
-            tiles: vec![SectorTile {
-                ticker: "AAPL".into(),
-                name: "Apple".into(),
-                market_cap: 100.0,
-                day_pct: 1.0,
-            }],
-        });
-        app.sectors.selected = 0;
-
-        app.handle_key(KeyCode::Enter);
-
-        assert_eq!(app.overlay, Overlay::Chart);
-        assert_eq!(app.stock_modal.stock.ticker.as_deref(), Some("AAPL"));
-    }
-
-    #[tokio::test]
     async fn test_v_toggles_volume_in_chart_modal() {
         let (mut app, _rx) = make_test_app();
         app.overlay = Overlay::Chart;
@@ -1790,7 +1706,7 @@ mod tests {
             (
                 StatusMode::Sectors,
                 "SECTORS",
-                "h/j/k/l move · enter chart · r refresh · tab cycle · q quit"
+                "r refresh · tab cycle · q quit"
             )
         );
     }
