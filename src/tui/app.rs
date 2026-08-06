@@ -1375,6 +1375,8 @@ impl App {
             self.apply_filter();
             self.resubscribe_stream();
         }
+
+        self.refresh_news_feed();
     }
 
     /// Sets the sort column and re-fetches the table.
@@ -2453,6 +2455,37 @@ mod tests {
         app.handle_event(AppEvent::WatchlistLoaded(vec!["AAPL".to_string()]));
         app.handle_event(AppEvent::WatchlistLoaded(vec![]));
         assert!(app.market.db_display.watchlist.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_toggle_watchlist_refreshes_news_feed() {
+        use crate::models::quote::NewsItem;
+        let mut app = app_with_three_stocks();
+
+        app.market.news_feed.requested = true;
+        app.market.news_feed.pending = 1;
+        app.handle_event(AppEvent::NewsFeedItemReady {
+            ticker: "STALE".into(),
+            items: vec![NewsItem {
+                title: "old headline".into(),
+                publisher: None,
+                published_at: None,
+                link: Some("http://old".into()),
+            }],
+        });
+        assert!(!app.market.news_feed.items.is_empty(), "feed pre-seeded before the toggle");
+
+        app.handle_key(KeyCode::Char('w'));
+
+        assert!(app.market.db_display.watchlist.contains("AAPL"));
+        assert!(
+            app.market.news_feed.items.is_empty(),
+            "toggling the watchlist should refresh the feed, clearing stale items"
+        );
+        assert_eq!(
+            app.market.news_feed.pending, 1,
+            "refresh should re-fetch for the new (one-ticker) watchlist"
+        );
     }
 
     #[tokio::test]

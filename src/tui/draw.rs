@@ -304,6 +304,20 @@ fn mover_bar_line(m: &Mover, max_pct: f64, bar_width: usize, t: &Theme) -> Line<
     ])
 }
 
+fn news_empty_message(watchlist_empty: bool, loading: bool, page: bool) -> &'static str {
+    if loading {
+        "loading news…"
+    } else if watchlist_empty {
+        if page {
+            "watchlist empty — press w on a quote to follow it"
+        } else {
+            "watchlist empty — press w"
+        }
+    } else {
+        "no headlines yet"
+    }
+}
+
 fn draw_news_cube(f: &mut Frame, area: Rect, app: &App) {
     let t = app.theme;
     let block = cube_block("news", &t);
@@ -312,11 +326,7 @@ fn draw_news_cube(f: &mut Frame, area: Rect, app: &App) {
 
     let feed = &app.market.news_feed;
     if feed.items.is_empty() {
-        let msg = if feed.loading {
-            "loading news…"
-        } else {
-            "watchlist empty — press w"
-        };
+        let msg = news_empty_message(app.market.db_display.watchlist.is_empty(), feed.loading, false);
         f.render_widget(Paragraph::new(dim_line(msg, &t)), inner);
         return;
     }
@@ -1908,11 +1918,7 @@ fn draw_news_page(f: &mut Frame, area: Rect, app: &mut App) {
 
     let feed = &app.market.news_feed;
     if feed.items.is_empty() {
-        let msg = if feed.loading {
-            "loading news…"
-        } else {
-            "watchlist empty — press w on a quote to follow it"
-        };
+        let msg = news_empty_message(app.market.db_display.watchlist.is_empty(), feed.loading, true);
         f.render_widget(placeholder(msg, &t), inner);
         return;
     }
@@ -2634,6 +2640,26 @@ mod tests {
     fn missing_ticker_is_not_starred() {
         let wl = watchlist(&["AAPL"]);
         assert!(!is_watchlisted(None, &wl));
+    }
+
+    #[test]
+    fn news_empty_message_prioritizes_loading() {
+        assert_eq!(news_empty_message(true, true, false), "loading news…");
+    }
+
+    #[test]
+    fn news_empty_message_prompts_to_follow_when_watchlist_is_empty() {
+        assert_eq!(news_empty_message(true, false, false), "watchlist empty — press w");
+        assert_eq!(
+            news_empty_message(true, false, true),
+            "watchlist empty — press w on a quote to follow it"
+        );
+    }
+
+    #[test]
+    fn news_empty_message_distinguishes_no_headlines_from_empty_watchlist() {
+        assert_eq!(news_empty_message(false, false, false), "no headlines yet");
+        assert_eq!(news_empty_message(false, false, true), "no headlines yet");
     }
 
     fn alert_on(ticker: &str) -> Alert {
