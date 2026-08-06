@@ -150,6 +150,15 @@ pub enum Overlay {
     Portfolio,
     /// The keybinding help modal.
     Help,
+    PagePicker,
+}
+
+/// The page order used by the picker and its highlight movement.
+pub(crate) const PAGE_ORDER: [Page; 4] = [Page::Market, Page::Manage, Page::Sectors, Page::News];
+
+#[derive(Default)]
+pub struct PagePickerState {
+    pub highlighted: Page,
 }
 
 /// The interaction mode reflected in the status bar.
@@ -157,6 +166,8 @@ pub enum Overlay {
 pub enum StatusMode {
     /// The help overlay is open.
     Help,
+    /// The page-picker modal is open.
+    Picker,
     /// The Manage page's inline entry line is being typed.
     ManageInput,
     /// The Manage page is focused with no inline entry active.
@@ -184,6 +195,7 @@ impl StatusMode {
     pub fn label(&self) -> &'static str {
         match self {
             StatusMode::Help => "HELP",
+            StatusMode::Picker => "PAGES",
             StatusMode::ManageInput | StatusMode::Manage => "MANAGE",
             StatusMode::Sectors => "SECTORS",
             StatusMode::News => "NEWS",
@@ -333,6 +345,7 @@ pub struct App {
     pub sectors: SectorState,
     /// News-page state: the cursor into the shared watchlist feed.
     pub news_page: NewsPageState,
+    pub page_picker: PagePickerState,
     pub show_logs: bool,
 }
 
@@ -571,6 +584,7 @@ impl App {
             },
             sectors: SectorState::default(),
             news_page: NewsPageState::default(),
+            page_picker: PagePickerState::default(),
             show_logs: false,
         }
     }
@@ -633,7 +647,9 @@ impl App {
     }
 
     pub fn status_mode(&self) -> (StatusMode, &'static str) {
-        if self.overlay == Overlay::Help {
+        if self.overlay == Overlay::PagePicker {
+            (StatusMode::Picker, "j/k move · enter go · tab/esc cancel")
+        } else if self.overlay == Overlay::Help {
             (StatusMode::Help, "esc close")
         } else if self.manage.input.is_some() {
             (
@@ -643,7 +659,7 @@ impl App {
         } else if self.page == Page::Manage {
             (
                 StatusMode::Manage,
-                "j/k move · a add · e edit · d delete · tab market · P perf · q quit",
+                "j/k move · a add · e edit · d delete · tab pages · P perf · q quit",
             )
         } else if self.overlay == Overlay::Options {
             (StatusMode::Options, "h/l expiry · esc close")
@@ -654,7 +670,7 @@ impl App {
         } else if self.page == Page::Sectors {
             (
                 StatusMode::Sectors,
-                "r refresh · tab cycle · q quit",
+                "r refresh · tab pages · q quit",
             )
         } else if self.page == Page::News {
             (
@@ -673,7 +689,7 @@ impl App {
         } else {
             (
                 StatusMode::Normal,
-                "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · P perf · q quit",
+                "j/k move · h/l page · s info · enter chart · x options · tab pages · w ★ · i query · / search · o order · ? help · P perf · q quit",
             )
         }
     }
@@ -838,10 +854,11 @@ impl App {
     /// Routes a raw terminal key press, dispatching by the current page.
     pub fn handle_key(&mut self, code: KeyCode) {
         if matches!(code, KeyCode::Tab | KeyCode::BackTab) && self.manage.input.is_none() {
-            match code {
-                KeyCode::Tab => self.next_page(),
-                _ => self.prev_page(),
-            }
+            self.toggle_page_picker();
+            return;
+        }
+        if self.overlay == Overlay::PagePicker {
+            self.handle_page_picker_key(code);
             return;
         }
         match self.page {
@@ -852,25 +869,44 @@ impl App {
         }
     }
 
-    /// Advances the page forward: Market → Manage → Sectors → News → Market.
-    fn next_page(&mut self) {
-        self.page = match self.page {
-            Page::Market => Page::Manage,
-            Page::Manage => Page::Sectors,
-            Page::Sectors => Page::News,
-            Page::News => Page::Market,
-        };
-        self.on_page_entered();
+    fn toggle_page_picker(&mut self) {
+        if self.overlay == Overlay::PagePicker {
+            self.overlay = Overlay::None;
+        } else {
+            self.page_picker.highlighted = self.page;
+            self.overlay = Overlay::PagePicker;
+        }
     }
 
-    /// Advances the page backward: the reverse of [`Self::next_page`].
-    fn prev_page(&mut self) {
-        self.page = match self.page {
-            Page::Market => Page::News,
-            Page::Manage => Page::Market,
-            Page::Sectors => Page::Manage,
-            Page::News => Page::Sectors,
-        };
+    fn handle_page_picker_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => self.overlay = Overlay::None,
+            KeyCode::Char('j') | KeyCode::Down => self.picker_move(1),
+            KeyCode::Char('k') | KeyCode::Up => self.picker_move(-1),
+            KeyCode::Enter => {
+                let target = self.page_picker.highlighted;
+                self.overlay = Overlay::None;
+                self.goto_page(target);
+            }
+            KeyCode::Char('q') => self.should_quit = true,
+            _ => {}
+        }
+    }
+
+    /// Moves the picker highlight through `PAGE_ORDER`, wrapping.
+    fn picker_move(&mut self, delta: isize) {
+        let idx = PAGE_ORDER
+            .iter()
+            .position(|&p| p == self.page_picker.highlighted)
+            .unwrap_or(0) as isize;
+        let n = PAGE_ORDER.len() as isize;
+        let next = (idx + delta).rem_euclid(n) as usize;
+        self.page_picker.highlighted = PAGE_ORDER[next];
+    }
+
+    /// Switches to `page`, running its lazy page-entry effects.
+    fn goto_page(&mut self, page: Page) {
+        self.page = page;
         self.on_page_entered();
     }
 
@@ -1166,6 +1202,7 @@ impl App {
                 return;
             }
             Overlay::Portfolio => return,
+            Overlay::PagePicker => return,
             Overlay::None => {}
         }
         if let Some(mode) = sort_mode_for_key(key) {
@@ -1746,7 +1783,7 @@ mod tests {
             (
                 StatusMode::Normal,
                 "NORMAL",
-                "j/k move · h/l page · s info · enter chart · x options · tab manage · w ★ · i query · / search · o order · ? help · P perf · q quit"
+                "j/k move · h/l page · s info · enter chart · x options · tab pages · w ★ · i query · / search · o order · ? help · P perf · q quit"
             )
         );
     }
@@ -1766,7 +1803,7 @@ mod tests {
             (
                 StatusMode::Sectors,
                 "SECTORS",
-                "r refresh · tab cycle · q quit"
+                "r refresh · tab pages · q quit"
             )
         );
     }
@@ -2808,38 +2845,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tab_cycles_forward_through_all_pages() {
+    async fn test_tab_opens_and_toggles_the_page_picker() {
         let (mut app, _rx) = make_test_app();
-        assert_eq!(app.page, Page::Market, "starts on Market");
+        assert_eq!(app.overlay, Overlay::None);
 
         app.handle_key(KeyCode::Tab);
-        assert_eq!(app.page, Page::Manage);
+        assert_eq!(app.overlay, Overlay::PagePicker, "tab opens the picker");
+        assert_eq!(app.page_picker.highlighted, Page::Market, "seeded to current page");
+        assert_eq!(app.page, Page::Market, "page unchanged while picking");
 
         app.handle_key(KeyCode::Tab);
-        assert_eq!(app.page, Page::Sectors);
-
-        app.handle_key(KeyCode::Tab);
-        assert_eq!(app.page, Page::News);
-
-        app.handle_key(KeyCode::Tab);
-        assert_eq!(app.page, Page::Market, "wraps back to Market");
+        assert_eq!(app.overlay, Overlay::None, "tab again cancels");
+        assert_eq!(app.page, Page::Market, "still on the original page");
     }
 
     #[tokio::test]
-    async fn test_backtab_cycles_backward_through_all_pages() {
+    async fn test_picker_move_wraps_both_directions() {
         let (mut app, _rx) = make_test_app();
+        app.handle_key(KeyCode::Tab);
+        app.handle_key(KeyCode::Char('k'));
+        assert_eq!(app.page_picker.highlighted, Page::News);
+        app.handle_key(KeyCode::Char('j'));
+        assert_eq!(app.page_picker.highlighted, Page::Market);
+    }
 
-        app.handle_key(KeyCode::BackTab);
-        assert_eq!(app.page, Page::News, "back from Market wraps to News");
-
-        app.handle_key(KeyCode::BackTab);
-        assert_eq!(app.page, Page::Sectors);
-
-        app.handle_key(KeyCode::BackTab);
+    #[tokio::test]
+    async fn test_picker_enter_switches_page_and_closes() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_key(KeyCode::Tab);
+        app.handle_key(KeyCode::Char('j'));
+        app.handle_key(KeyCode::Enter);
         assert_eq!(app.page, Page::Manage);
+        assert_eq!(app.overlay, Overlay::None);
+    }
 
-        app.handle_key(KeyCode::BackTab);
-        assert_eq!(app.page, Page::Market);
+    #[tokio::test]
+    async fn test_picker_esc_cancels_on_current_page() {
+        let (mut app, _rx) = make_test_app();
+        app.handle_key(KeyCode::Tab);
+        app.handle_key(KeyCode::Char('j'));
+        app.handle_key(KeyCode::Esc);
+        assert_eq!(app.overlay, Overlay::None);
+        assert_eq!(app.page, Page::Market, "esc keeps the current page");
+    }
+
+    #[tokio::test]
+    async fn test_tab_ignored_while_manage_entry_active() {
+        let (mut app, _rx) = make_test_app();
+        app.page = Page::Manage;
+        app.handle_key(KeyCode::Char('a'));
+        assert!(app.manage.input.is_some(), "entry is active");
+        app.handle_key(KeyCode::Tab);
+        assert_eq!(app.overlay, Overlay::None, "tab does not open the picker mid-entry");
+    }
+
+    #[tokio::test]
+    async fn test_goto_news_requests_the_feed() {
+        let (mut app, _rx) = make_test_app();
+        assert!(!app.market.news_feed.requested);
+        app.handle_key(KeyCode::Tab);
+        app.handle_key(KeyCode::Char('k'));
+        app.handle_key(KeyCode::Enter);
+        assert_eq!(app.page, Page::News);
+        assert!(app.market.news_feed.requested, "entering News lazily fetches");
     }
 
     #[tokio::test]

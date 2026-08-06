@@ -64,6 +64,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.overlay == Overlay::Portfolio {
         draw_portfolio_modal(f, app);
     }
+    if app.overlay == Overlay::PagePicker {
+        draw_page_picker(f, app);
+    }
 
     let area = f.area();
     app.notifications.render(f, area);
@@ -762,7 +765,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         help_row("w / r", "add / remove favourite (★)", &t),
         Line::raw(""),
         section_heading("MANAGE PAGE", None, &t),
-        help_row("tab", "switch between the Market and Manage pages", &t),
+        help_row("tab", "open the page picker (j/k move, enter go)", &t),
         help_row("a / e / d", "add / edit / delete a holding or alert", &t),
         Line::from(Span::styled(
             "  alerts fire once for on-screen tickers only",
@@ -869,6 +872,38 @@ fn draw_portfolio_modal(f: &mut Frame, app: &App) {
                 ]),
         );
     f.render_widget(chart, inner);
+}
+
+fn draw_page_picker(f: &mut Frame, app: &App) {
+    use crate::tui::app::PAGE_ORDER;
+    let t = app.theme;
+    let title = block_title("go to page".into(), &t);
+    let (content, _footer) = modal_frame(f, 30, 34, title, &t);
+
+    let lines: Vec<Line> = PAGE_ORDER
+        .iter()
+        .map(|&p| {
+            let selected = p == app.page_picker.highlighted;
+            let caret = if selected { "› " } else { "  " };
+            let style = if selected {
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(t.fg)
+            };
+            Line::from(Span::styled(format!("{caret}{}", page_label(p)), style))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), content);
+}
+
+/// Human label for a page, shown in the picker.
+fn page_label(p: Page) -> &'static str {
+    match p {
+        Page::Market => "Market",
+        Page::Manage => "Manage",
+        Page::Sectors => "Sectors",
+        Page::News => "News",
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
