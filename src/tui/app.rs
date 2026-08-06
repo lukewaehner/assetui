@@ -913,6 +913,7 @@ impl App {
             KeyCode::Char('r') => self.refresh_news_feed(),
             KeyCode::Char('j') | KeyCode::Down => self.news_move(1),
             KeyCode::Char('k') | KeyCode::Up => self.news_move(-1),
+            KeyCode::Enter => self.open_selected_news(),
             _ => {}
         }
     }
@@ -924,6 +925,17 @@ impl App {
         }
         let cur = self.news_page.selected.min(len - 1) as isize;
         self.news_page.selected = (cur + delta).clamp(0, len as isize - 1) as usize;
+    }
+
+    /// Opens the highlighted headline's link in the browser.
+    fn open_selected_news(&mut self) {
+        let Some(feed_item) = self.market.news_feed.items.get(self.news_page.selected) else {
+            return;
+        };
+        match feed_item.item.link.clone() {
+            Some(link) if !link.is_empty() => self.spawn_open_url(link),
+            _ => self.push_toast(Level::Info, "News", "NEWS", "no link for this headline".into()),
+        }
     }
 
     /// Handles keys on the Sectors page: `r` refetches, `q` quits.
@@ -2461,6 +2473,30 @@ mod tests {
         app.page = Page::News;
         app.on_page_entered();
         assert!(app.market.news_feed.requested);
+    }
+
+    #[tokio::test]
+    async fn test_enter_on_linkless_headline_notifies() {
+        use crate::models::quote::NewsItem;
+        let (mut app, _rx) = make_test_app();
+        app.handle_event(AppEvent::NewsFeedItemReady {
+            ticker: "AAPL".into(),
+            items: vec![NewsItem {
+                title: "No link here".into(),
+                publisher: None,
+                published_at: None,
+                link: None,
+            }],
+        });
+        app.page = Page::News;
+        app.news_page.selected = 0;
+
+        app.handle_key(KeyCode::Enter);
+
+        assert!(
+            app.market.logs.iter().any(|l| l.contains("[NEWS]")),
+            "linkless open should log a NEWS notice"
+        );
     }
 
     fn alert_for(id: i32, ticker: &str) -> crate::models::Alert {

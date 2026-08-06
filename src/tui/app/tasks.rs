@@ -396,6 +396,35 @@ impl App {
         });
     }
 
+    /// Opens `url` in the platform browser via the OS opener, as a detached task.
+    pub(crate) fn spawn_open_url(&self, url: String) {
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            let mut cmd = if cfg!(target_os = "macos") {
+                let mut c = tokio::process::Command::new("open");
+                c.arg(&url);
+                c
+            } else if cfg!(target_os = "windows") {
+                let mut c = tokio::process::Command::new("cmd");
+                c.args(["/C", "start", "", &url]);
+                c
+            } else {
+                let mut c = tokio::process::Command::new("xdg-open");
+                c.arg(&url);
+                c
+            };
+            match cmd.status().await {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    let _ = tx.send(AppEvent::Error(format!("browser opener exited: {status}")));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("could not open browser: {e}")));
+                }
+            }
+        });
+    }
+
     pub(crate) fn spawn_sector_map(&self) {
         use crate::sectors::{SECTOR_TOP_N, make_tile, rank_tiles};
         use yfinance_rs::screener::{
