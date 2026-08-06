@@ -130,6 +130,8 @@ pub enum Page {
     /// User-owned data management: holdings and alerts.
     Manage,
     Sectors,
+    /// The watchlist news feed: headlines that open in the browser.
+    News,
 }
 
 /// The single overlay currently on top of the page, if any.
@@ -161,6 +163,8 @@ pub enum StatusMode {
     Manage,
     /// The Sectors page is focused with no modal open.
     Sectors,
+    /// The News page is focused.
+    News,
     /// The options-chain modal is open.
     Options,
     /// The info or chart modal is open.
@@ -182,6 +186,7 @@ impl StatusMode {
             StatusMode::Help => "HELP",
             StatusMode::ManageInput | StatusMode::Manage => "MANAGE",
             StatusMode::Sectors => "SECTORS",
+            StatusMode::News => "NEWS",
             StatusMode::Options | StatusMode::View => "VIEW",
             StatusMode::Search => "SEARCH",
             StatusMode::Input => "INPUT",
@@ -285,6 +290,12 @@ pub struct SectorState {
     pub requested: bool,
 }
 
+/// News-page state: the cursor into the shared `market.news_feed.items`.
+#[derive(Default)]
+pub struct NewsPageState {
+    pub selected: usize,
+}
+
 /// Top-level application state.
 pub struct App {
     /// Market-page state: input box, quotes table, and log panel.
@@ -320,6 +331,8 @@ pub struct App {
     pub manage: ManageState,
     /// Sectors-page state: the treemap and its selection.
     pub sectors: SectorState,
+    /// News-page state: the cursor into the shared watchlist feed.
+    pub news_page: NewsPageState,
     pub show_logs: bool,
 }
 
@@ -557,6 +570,7 @@ impl App {
                 input: None,
             },
             sectors: SectorState::default(),
+            news_page: NewsPageState::default(),
             show_logs: false,
         }
     }
@@ -641,6 +655,11 @@ impl App {
             (
                 StatusMode::Sectors,
                 "r refresh · tab cycle · q quit",
+            )
+        } else if self.page == Page::News {
+            (
+                StatusMode::News,
+                "enter open · j/k move · r refresh · tab pages · q quit",
             )
         } else if self.market.input_mode.is_focused() && self.market.input_mode.is_fuzzy() {
             (StatusMode::Search, "type to filter · enter apply · esc cancel")
@@ -829,15 +848,17 @@ impl App {
             Page::Market => self.handle_market_key(code),
             Page::Manage => self.handle_manage_key(code),
             Page::Sectors => self.handle_sectors_key(code),
+            Page::News => self.handle_news_key(code),
         }
     }
 
-    /// Advances the page forward: Market → Manage → Sectors → Market.
+    /// Advances the page forward: Market → Manage → Sectors → News → Market.
     fn next_page(&mut self) {
         self.page = match self.page {
             Page::Market => Page::Manage,
             Page::Manage => Page::Sectors,
-            Page::Sectors => Page::Market,
+            Page::Sectors => Page::News,
+            Page::News => Page::Market,
         };
         self.on_page_entered();
     }
@@ -845,19 +866,27 @@ impl App {
     /// Advances the page backward: the reverse of [`Self::next_page`].
     fn prev_page(&mut self) {
         self.page = match self.page {
-            Page::Market => Page::Sectors,
+            Page::Market => Page::News,
             Page::Manage => Page::Market,
             Page::Sectors => Page::Manage,
+            Page::News => Page::Sectors,
         };
         self.on_page_entered();
     }
 
     /// Runs page-entry side effects.
     fn on_page_entered(&mut self) {
-        if self.page == Page::Sectors && !self.sectors.requested {
-            self.sectors.requested = true;
-            self.sectors.loading = true;
-            self.spawn_sector_map();
+        match self.page {
+            Page::Sectors if !self.sectors.requested => {
+                self.sectors.requested = true;
+                self.sectors.loading = true;
+                self.spawn_sector_map();
+            }
+            Page::News => {
+                self.news_page.selected = 0;
+                self.ensure_news_feed_requested();
+            }
+            _ => {}
         }
     }
 
@@ -876,6 +905,25 @@ impl App {
         self.market.news_feed.pending = tickers.len();
         self.market.news_feed.loading = !tickers.is_empty();
         self.spawn_news_feed(tickers);
+    }
+
+    fn handle_news_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('r') => self.refresh_news_feed(),
+            KeyCode::Char('j') | KeyCode::Down => self.news_move(1),
+            KeyCode::Char('k') | KeyCode::Up => self.news_move(-1),
+            _ => {}
+        }
+    }
+
+    fn news_move(&mut self, delta: isize) {
+        let len = self.market.news_feed.items.len();
+        if len == 0 {
+            return;
+        }
+        let cur = self.news_page.selected.min(len - 1) as isize;
+        self.news_page.selected = (cur + delta).clamp(0, len as isize - 1) as usize;
     }
 
     /// Handles keys on the Sectors page: `r` refetches, `q` quits.
@@ -2381,6 +2429,40 @@ mod tests {
         assert!(!app.market.news_feed.loading, "loading clears at pending 0");
     }
 
+    #[tokio::test]
+    async fn test_news_move_clamps_within_bounds() {
+        use crate::models::quote::NewsItem;
+        let (mut app, _rx) = make_test_app();
+        for i in 0..3 {
+            app.handle_event(AppEvent::NewsFeedItemReady {
+                ticker: format!("T{i}"),
+                items: vec![NewsItem {
+                    title: format!("h{i}"),
+                    publisher: None,
+                    published_at: chrono::DateTime::from_timestamp(i, 0),
+                    link: Some(format!("http://{i}")),
+                }],
+            });
+        }
+        app.page = Page::News;
+
+        app.handle_key(KeyCode::Char('k'));
+        assert_eq!(app.news_page.selected, 0);
+        app.handle_key(KeyCode::Char('j'));
+        app.handle_key(KeyCode::Char('j'));
+        app.handle_key(KeyCode::Char('j'));
+        assert_eq!(app.news_page.selected, 2);
+    }
+
+    #[tokio::test]
+    async fn test_entering_news_page_requests_the_feed() {
+        let (mut app, _rx) = make_test_app();
+        assert!(!app.market.news_feed.requested);
+        app.page = Page::News;
+        app.on_page_entered();
+        assert!(app.market.news_feed.requested);
+    }
+
     fn alert_for(id: i32, ticker: &str) -> crate::models::Alert {
         crate::models::Alert {
             id,
@@ -2701,6 +2783,9 @@ mod tests {
         assert_eq!(app.page, Page::Sectors);
 
         app.handle_key(KeyCode::Tab);
+        assert_eq!(app.page, Page::News);
+
+        app.handle_key(KeyCode::Tab);
         assert_eq!(app.page, Page::Market, "wraps back to Market");
     }
 
@@ -2709,7 +2794,10 @@ mod tests {
         let (mut app, _rx) = make_test_app();
 
         app.handle_key(KeyCode::BackTab);
-        assert_eq!(app.page, Page::Sectors, "back from Market wraps to Sectors");
+        assert_eq!(app.page, Page::News, "back from Market wraps to News");
+
+        app.handle_key(KeyCode::BackTab);
+        assert_eq!(app.page, Page::Sectors);
 
         app.handle_key(KeyCode::BackTab);
         assert_eq!(app.page, Page::Manage);

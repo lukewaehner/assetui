@@ -23,6 +23,7 @@ use crate::models::{
     Alert, AlertDirection, FLASH_TTL, OptionChain, OptionContract, QuoteRecord,
     QuoteRecordAnalysis, QuoteRecordStatistics, StockNews, Ticker, day_change_pct,
 };
+use crate::models::quote::NewsItem;
 use crate::portfolio::{portfolio_positions, resolve_price, summarize};
 use crate::search::subseq_match_ci;
 
@@ -45,6 +46,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Page::Market => draw_market_body(f, body, app),
         Page::Manage => draw_manage_body(f, body, app),
         Page::Sectors => draw_sectors_page(f, body, app),
+        Page::News => draw_news_page(f, body, app),
     }
     draw_status_bar(f, status_area, app);
 
@@ -1857,6 +1859,62 @@ fn sector_label_short(s: yfinance_rs::screener::EquitySector) -> String {
         _ => "Other",
     }
     .to_string()
+}
+
+/// Renders the News page: the merged watchlist feed as a selectable list.
+fn draw_news_page(f: &mut Frame, area: Rect, app: &mut App) {
+    let t = app.theme;
+    let block = Block::default()
+        .title(block_title("news".into(), &t))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.border));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let feed = &app.market.news_feed;
+    if feed.items.is_empty() {
+        let msg = if feed.loading {
+            "loading news…"
+        } else {
+            "watchlist empty — press w on a quote to follow it"
+        };
+        f.render_widget(placeholder(msg, &t), inner);
+        return;
+    }
+
+    let selected = app.news_page.selected.min(feed.items.len() - 1);
+    let height = inner.height.max(1) as usize;
+    let start = if selected >= height { selected + 1 - height } else { 0 };
+    let width = inner.width as usize;
+    let lines: Vec<Line> = feed
+        .items
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(height)
+        .map(|(i, fi)| news_row_line(i == selected, &fi.ticker, &fi.item, width, &t))
+        .collect();
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn news_row_line(selected: bool, ticker: &str, item: &NewsItem, width: usize, t: &Theme) -> Line<'static> {
+    let caret = if selected { "› " } else { "  " };
+    let ticker_field = format!("{ticker:<6} ");
+    let meta = fmt_news_meta(item.publisher.as_deref(), item.published_at);
+    let meta_field = if meta.is_empty() { String::new() } else { format!("  {meta}") };
+    let used = caret.chars().count() + ticker_field.chars().count() + meta_field.chars().count();
+    let title = truncate_ellipsis(&item.title, width.saturating_sub(used));
+    let title_style = if selected {
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(t.fg)
+    };
+    Line::from(vec![
+        Span::styled(caret.to_string(), Style::default().fg(t.accent)),
+        Span::styled(ticker_field, Style::default().fg(t.dim)),
+        Span::styled(title, title_style),
+        Span::styled(meta_field, Style::default().fg(t.dim)),
+    ])
 }
 
 /// Renders the Manage page body: a Holdings section above an Alerts section.
