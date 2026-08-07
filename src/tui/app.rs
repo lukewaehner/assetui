@@ -785,6 +785,13 @@ impl App {
                 let name = record.ticker.as_deref().unwrap_or("?");
                 self.market.db_display.status = format!("stored {name}");
                 self.push_log(format!("[SUCCESS] stored {name}"));
+                if let Some(tk) = record.ticker.as_deref() {
+                    let up = tk.to_ascii_uppercase();
+                    self.market
+                        .db_display
+                        .all_rows
+                        .retain(|r| r.ticker.as_deref().map(str::to_ascii_uppercase) != Some(up.clone()));
+                }
                 self.market.db_display.all_rows.insert(0, record);
                 self.apply_filter();
             }
@@ -1993,6 +2000,35 @@ mod tests {
         assert_eq!(app.market.db_display.rows.len(), 1);
         assert_eq!(app.market.logs.len(), 1);
         assert!(app.market.logs[0].contains("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_replaces_existing_row_for_same_ticker() {
+        let (mut app, _rx) = make_test_app();
+        let stale = QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(100.0),
+            ..Default::default()
+        };
+        app.handle_event(AppEvent::PageLoaded(vec![stale]));
+
+        let fresh = QuoteRecord {
+            ticker: Some("AAPL".to_string()),
+            price: Some(200.0),
+            ..Default::default()
+        };
+        app.handle_event(AppEvent::FetchCompleted(fresh));
+
+        let aapl_rows: Vec<_> = app
+            .market
+            .db_display
+            .all_rows
+            .iter()
+            .filter(|r| r.ticker.as_deref() == Some("AAPL"))
+            .collect();
+        assert_eq!(aapl_rows.len(), 1);
+        assert_eq!(aapl_rows[0].price, Some(200.0));
+        assert_eq!(app.market.db_display.all_rows[0].price, Some(200.0));
     }
 
     #[tokio::test]

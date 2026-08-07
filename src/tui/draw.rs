@@ -636,8 +636,9 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let trend = spark_text(series, 12);
-        let trend_color = match (series.first(), series.last()) {
-            (Some(a), Some(b)) => pnl_color(Some(b - a), &t),
+        let shown = &series[series.len().saturating_sub(12)..];
+        let trend_color = match (shown.first(), shown.last()) {
+            (Some(a), Some(b)) if shown.len() >= 2 => pnl_color(Some(b - a), &t),
             _ => t.dim,
         };
         let trend_cell = Cell::from(Span::styled(trend, Style::default().fg(trend_color)));
