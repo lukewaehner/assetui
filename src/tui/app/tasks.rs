@@ -16,7 +16,8 @@ use crate::portfolio::Holding;
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
     fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_latest_per_ticker, fetch_news,
-    fetch_option_chain, fetch_option_chain_for_expiry, fetch_quote_and_store, fetch_spark_series,
+    fetch_option_chain, fetch_option_chain_for_expiry, fetch_quote_and_store, fetch_return_history,
+    fetch_spark_series,
 };
 use crate::models::{QuoteRecord, QuoteTick};
 use crate::tui::stream::start_quote_stream;
@@ -409,6 +410,27 @@ impl App {
             }
             let series = reconstruct_value_series(&holdings_closes);
             let _ = tx.send(AppEvent::PortfolioHistoryReady { series, cost_basis });
+        });
+    }
+
+    pub(crate) fn spawn_optimizer_data(&self) {
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
+        let holdings = self.holdings.clone();
+        tokio::spawn(async move {
+            let mut histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)> = Vec::new();
+            for h in &holdings {
+                match fetch_return_history(&client, &h.ticker).await {
+                    Ok(closes) => histories.push((h.ticker.clone(), closes)),
+                    Err(e) => {
+                        let _ = tx.send(AppEvent::LogLine(format!(
+                            "[WARN] optimizer history for {} unavailable: {e}",
+                            h.ticker
+                        )));
+                    }
+                }
+            }
+            let _ = tx.send(AppEvent::OptimizerDataReady { histories });
         });
     }
 

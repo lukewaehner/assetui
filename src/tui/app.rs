@@ -102,6 +102,10 @@ pub enum AppEvent {
         series: Vec<(chrono::NaiveDate, f64)>,
         cost_basis: f64,
     },
+    /// Per-holding one-year close histories for the optimizer, ready to compute.
+    OptimizerDataReady {
+        histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)>,
+    },
     NewsFeedItemReady {
         ticker: String,
         items: Vec<crate::models::quote::NewsItem>,
@@ -331,7 +335,6 @@ pub struct OptimizerPageState {
     /// Whether a fetch is in flight.
     pub loading: bool,
     /// Per-holding `(ticker, (date, close)…)` histories from the last fetch.
-    #[allow(dead_code)]
     pub histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)>,
     /// The last computed result, if any.
     pub result: Option<crate::optimizer::OptimizerResult>,
@@ -923,6 +926,32 @@ impl App {
                 self.portfolio_modal.cost_basis = cost_basis;
                 self.portfolio_modal.loading = false;
             }
+            AppEvent::OptimizerDataReady { histories } => {
+                use crate::optimizer::{MC_SAMPLES, MC_SEED, RISK_FREE_ANNUAL, compute_optimization};
+                use crate::portfolio::portfolio_positions;
+                self.optimizer.loading = false;
+                let total = histories.len();
+                self.optimizer.histories = histories;
+                let rows = &self.market.db_display.all_rows;
+                let market_values: std::collections::HashMap<String, f64> =
+                    portfolio_positions(&self.holdings, rows)
+                        .into_iter()
+                        .filter_map(|p| p.market_value.map(|mv| (p.holding.ticker.clone(), mv)))
+                        .collect();
+                self.optimizer.result = compute_optimization(
+                    &self.optimizer.histories,
+                    &market_values,
+                    RISK_FREE_ANNUAL,
+                    MC_SAMPLES,
+                    MC_SEED,
+                );
+                if self.optimizer.result.is_none() && total < 2 {
+                    self.optimizer.error =
+                        Some("Add at least 2 holdings with price history to optimize.".to_string());
+                } else {
+                    self.optimizer.error = None;
+                }
+            }
         }
     }
 
@@ -1054,6 +1083,11 @@ impl App {
                 self.news_page.selected = 0;
                 self.ensure_news_feed_requested();
             }
+            Page::Optimizer if !self.optimizer.requested => {
+                self.optimizer.requested = true;
+                self.optimizer.loading = true;
+                self.spawn_optimizer_data();
+            }
             _ => {}
         }
     }
@@ -1106,10 +1140,15 @@ impl App {
         }
     }
 
+    /// Handles keys on the Optimizer page: `r` refetches history and recomputes, `q` quits.
     fn handle_optimizer_key(&mut self, code: KeyCode) {
-        if let KeyCode::Char('r') = code {
-            self.optimizer.requested = false;
-            self.on_page_entered();
+        match code {
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('r') => {
+                self.optimizer.requested = false;
+                self.on_page_entered();
+            }
+            _ => {}
         }
     }
 
