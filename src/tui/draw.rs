@@ -198,6 +198,31 @@ pub(crate) fn spark_series(values: &VecDeque<f64>) -> Vec<u64> {
         .collect()
 }
 
+/// The eight block characters used to draw a text sparkline, low→high.
+const SPARK_BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// A unicode block-character sparkline of the last `width` values, scaled to their own min/max band.
+fn spark_text(values: &[f64], width: usize) -> String {
+    let start = values.len().saturating_sub(width);
+    let vals = &values[start..];
+    if vals.len() < 2 {
+        return String::new();
+    }
+    let min = vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let span = max - min;
+    vals.iter()
+        .map(|v| {
+            let idx = if span <= 0.0 {
+                0
+            } else {
+                (((v - min) / span) * 7.0).round() as usize
+            };
+            SPARK_BARS[idx.min(7)]
+        })
+        .collect()
+}
+
 fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
     let [portfolio_area, movers_area, news_area, alerts_area, breadth_area, active_area, status_area] =
         Layout::vertical([
@@ -563,11 +588,11 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     let header = Row::new(vec![
         Cell::from(""),
         Cell::from(""),
-        hcell("ID ", "(d)"),
         hcell("Ticker ", "(t)"),
         hcell("Name", "(n)"),
         hcell("Price ", "(p)"),
         hcell("Chg%", ""),
+        hcell("Trend", ""),
         hcell("Prev Close ", "(c)"),
         hcell("Volume ", "(v)"),
         hcell("As Of ", "(a)"),
@@ -604,10 +629,22 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
         } else {
             Cell::from("")
         };
+        let series = q
+            .ticker
+            .as_deref()
+            .and_then(|tk| app.market.db_display.spark_series.get(tk))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let trend = spark_text(series, 12);
+        let trend_color = match (series.first(), series.last()) {
+            (Some(a), Some(b)) => pnl_color(Some(b - a), &t),
+            _ => t.dim,
+        };
+        let trend_cell = Cell::from(Span::styled(trend, Style::default().fg(trend_color)));
+
         Row::new(vec![
             star,
             bell,
-            opt_cell(q.id, |id| id.to_string()),
             fuzzy_cell(q.ticker.as_deref(), query, searching, &t),
             fuzzy_cell(q.name.as_deref(), query, searching, &t),
             opt_cell(q.price, |p| format!("{p:.2}")).style(
@@ -621,6 +658,7 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
                 &app.animations.row_flash_map,
                 &t,
             ))),
+            trend_cell,
             opt_cell(q.previous_close, |p| format!("{p:.2}")),
             opt_cell(q.day_volume, fmt_volume),
             opt_cell(q.as_of, |dt| dt.format("%Y-%m-%d").to_string()),
@@ -630,11 +668,11 @@ fn draw_quotes_table(f: &mut Frame, area: Rect, app: &mut App, border_color: Col
     let widths = [
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(6),
         Constraint::Length(10),
         Constraint::Length(24),
         Constraint::Length(11),
         Constraint::Length(9),
+        Constraint::Length(12),
         Constraint::Length(15),
         Constraint::Length(13),
         Constraint::Length(12),
@@ -788,7 +826,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         Line::raw(""),
         section_heading("SORT", None, &t),
         help_row("o", "toggle ascending / descending", &t),
-        help_row("d t n p c v a", "sort by column", &t),
+        help_row("t n p c v a", "sort by column", &t),
         Line::raw(""),
         section_heading("GENERAL", None, &t),
         help_row("esc", "close modal / cancel", &t),
@@ -2514,6 +2552,27 @@ mod tests {
     fn spark_series_empty_is_empty() {
         let values: VecDeque<f64> = VecDeque::new();
         assert!(spark_series(&values).is_empty());
+    }
+
+    #[test]
+    fn spark_text_is_empty_below_two_points() {
+        assert_eq!(spark_text(&[], 8), "");
+        assert_eq!(spark_text(&[5.0], 8), "");
+    }
+
+    #[test]
+    fn spark_text_maps_low_to_low_bar_and_high_to_full_bar() {
+        let s = spark_text(&[1.0, 2.0, 3.0], 8);
+        let chars: Vec<char> = s.chars().collect();
+        assert_eq!(chars.len(), 3);
+        assert_eq!(chars[0], '▁', "min maps to the lowest bar");
+        assert_eq!(chars[2], '█', "max maps to the full bar");
+    }
+
+    #[test]
+    fn spark_text_takes_the_last_width_points() {
+        let vals: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        assert_eq!(spark_text(&vals, 4).chars().count(), 4);
     }
 
     fn mover_row(ticker: &str, price: f64, previous_close: f64) -> QuoteRecord {
