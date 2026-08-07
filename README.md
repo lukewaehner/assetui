@@ -49,7 +49,8 @@ cargo run
 | `h` / `l` | Previous / next page |
 | `s` | Open the info modal |
 | `x` | Open the options modal (chain, IV, and Greeks) for the selected row |
-| `Tab` | Switch between the Market and Manage pages |
+| `Tab` | Open the page picker (Market / Manage / Sectors / News / Optimizer) |
+| `r` | On the Optimizer page: refetch history and recompute |
 | `?` | Open the help modal |
 | `Enter` | Open the chart modal (price history) for the selected row |
 | `Esc` | Close modal, cancel search, or exit input mode |
@@ -67,6 +68,10 @@ Press `Tab` to switch from the Market page (quotes) to the Manage page, where yo
 **Holdings** show one row per position — shares, average cost, current price, market value, unrealized P&L (\$ and %), and day-change — with a totals line, coloured green/red by gain/loss. Prices come from the quotes already in memory, so a holding whose ticker isn't loaded shows `-` rather than a misleading `$0`, and P&L updates live as ticks land. This is a manual, display-only tracker — no brokerage connection, unrealized P&L only, single-currency.
 
 **Alerts** fire once when a live tick crosses the threshold (`>150` / `<100`): a toast pops and the alert clears itself. Armed tickers show a `!` in the Market gutter. Two limitations: alerts are evaluated only against the live stream, which covers the tickers on the **current page**, so an off-screen ticker's alert won't fire until it's visible and streaming; and ticks only flow while the market is open.
+
+### The Optimizer page
+
+The **Optimizer** page turns your holdings into a mean-variance analysis: a Monte Carlo cloud of thousands of random long-only portfolios plotted in risk/return space, with the analytical tangency (max-Sharpe, `★`) and minimum-variance (`◇`) portfolios overlaid and your current allocation (`●`) marked, plus a correlation heatmap across your holdings. All the math is a pure, dependency-free core (hand-rolled covariance inverse and a seeded, reproducible sampler).
 
 ### Fuzzy search
 
