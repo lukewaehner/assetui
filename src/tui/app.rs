@@ -140,6 +140,8 @@ pub enum Page {
     Sectors,
     /// The watchlist news feed: headlines that open in the browser.
     News,
+    /// The portfolio optimizer: efficient frontier and correlation heatmap.
+    Optimizer,
 }
 
 /// The single overlay currently on top of the page, if any.
@@ -162,7 +164,8 @@ pub enum Overlay {
 }
 
 /// The page order used by the picker and its highlight movement.
-pub(crate) const PAGE_ORDER: [Page; 4] = [Page::Market, Page::Manage, Page::Sectors, Page::News];
+pub(crate) const PAGE_ORDER: [Page; 5] =
+    [Page::Market, Page::Manage, Page::Sectors, Page::News, Page::Optimizer];
 
 #[derive(Default)]
 pub struct PagePickerState {
@@ -184,6 +187,8 @@ pub enum StatusMode {
     Sectors,
     /// The News page is focused.
     News,
+    /// The Optimizer page is focused.
+    Optimizer,
     /// The options-chain modal is open.
     Options,
     /// The info or chart modal is open.
@@ -207,6 +212,7 @@ impl StatusMode {
             StatusMode::ManageInput | StatusMode::Manage => "MANAGE",
             StatusMode::Sectors => "SECTORS",
             StatusMode::News => "NEWS",
+            StatusMode::Optimizer => "OPTIMIZE",
             StatusMode::Options | StatusMode::View => "VIEW",
             StatusMode::Search => "SEARCH",
             StatusMode::Input => "INPUT",
@@ -318,6 +324,22 @@ pub struct NewsPageState {
     pub selected: usize,
 }
 
+#[derive(Default)]
+pub struct OptimizerPageState {
+    /// Whether the one-time history fetch has been kicked off.
+    pub requested: bool,
+    /// Whether a fetch is in flight.
+    pub loading: bool,
+    /// Per-holding `(ticker, (date, close)…)` histories from the last fetch.
+    #[allow(dead_code)]
+    pub histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)>,
+    /// The last computed result, if any.
+    pub result: Option<crate::optimizer::OptimizerResult>,
+    /// A load error to surface, if any.
+    #[allow(dead_code)]
+    pub error: Option<String>,
+}
+
 /// Top-level application state.
 pub struct App {
     /// Market-page state: input box, quotes table, and log panel.
@@ -355,6 +377,8 @@ pub struct App {
     pub sectors: SectorState,
     /// News-page state: the cursor into the shared watchlist feed.
     pub news_page: NewsPageState,
+    /// Optimizer-page state.
+    pub optimizer: OptimizerPageState,
     pub page_picker: PagePickerState,
     pub show_logs: bool,
 }
@@ -643,6 +667,7 @@ impl App {
             },
             sectors: SectorState::default(),
             news_page: NewsPageState::default(),
+            optimizer: OptimizerPageState::default(),
             page_picker: PagePickerState::default(),
             show_logs: false,
         }
@@ -763,6 +788,8 @@ impl App {
                 StatusMode::News,
                 "enter open · j/k move · r refresh · tab pages · q quit",
             )
+        } else if self.page == Page::Optimizer {
+            (StatusMode::Optimizer, "r refresh · tab pages")
         } else if self.market.input_mode.is_focused() && self.market.input_mode.is_fuzzy() {
             (StatusMode::Search, "type to filter · enter apply · esc cancel")
         } else if self.market.input_mode.is_focused() {
@@ -970,6 +997,7 @@ impl App {
             Page::Manage => self.handle_manage_key(code),
             Page::Sectors => self.handle_sectors_key(code),
             Page::News => self.handle_news_key(code),
+            Page::Optimizer => self.handle_optimizer_key(code),
         }
     }
 
@@ -1075,6 +1103,13 @@ impl App {
         match feed_item.item.link.clone() {
             Some(link) if !link.is_empty() => self.spawn_open_url(link),
             _ => self.push_toast(Level::Info, "News", "NEWS", "no link for this headline".into()),
+        }
+    }
+
+    fn handle_optimizer_key(&mut self, code: KeyCode) {
+        if let KeyCode::Char('r') = code {
+            self.optimizer.requested = false;
+            self.on_page_entered();
         }
     }
 
@@ -3125,7 +3160,7 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.handle_key(KeyCode::Tab);
         app.handle_key(KeyCode::Char('k'));
-        assert_eq!(app.page_picker.highlighted, Page::News);
+        assert_eq!(app.page_picker.highlighted, Page::Optimizer);
         app.handle_key(KeyCode::Char('j'));
         assert_eq!(app.page_picker.highlighted, Page::Market);
     }
@@ -3165,6 +3200,7 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         assert!(!app.market.news_feed.requested);
         app.handle_key(KeyCode::Tab);
+        app.handle_key(KeyCode::Char('k'));
         app.handle_key(KeyCode::Char('k'));
         app.handle_key(KeyCode::Enter);
         assert_eq!(app.page, Page::News);

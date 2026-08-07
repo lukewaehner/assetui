@@ -47,6 +47,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Page::Manage => draw_manage_body(f, body, app),
         Page::Sectors => draw_sectors_page(f, body, app),
         Page::News => draw_news_page(f, body, app),
+        Page::Optimizer => draw_optimizer_page(f, body, app),
     }
     draw_status_bar(f, status_area, app);
 
@@ -952,6 +953,7 @@ fn page_label(p: Page) -> &'static str {
         Page::Manage => "Manage",
         Page::Sectors => "Sectors",
         Page::News => "News",
+        Page::Optimizer => "Optimizer",
     }
 }
 
@@ -1995,6 +1997,23 @@ fn news_row_line(selected: bool, ticker: &str, item: &NewsItem, width: usize, t:
         Span::styled(title, title_style),
         Span::styled(meta_field, Style::default().fg(t.dim)),
     ])
+}
+
+fn draw_optimizer_page(f: &mut Frame, area: Rect, app: &mut App) {
+    let t = &app.theme;
+    let msg = if app.optimizer.loading {
+        "Optimizing…"
+    } else if app.optimizer.result.is_some() {
+        "Optimizer ready"
+    } else {
+        "Add at least 2 holdings with price history to optimize."
+    };
+    let block = Block::default().borders(Borders::ALL).title(" Optimizer ");
+    let p = Paragraph::new(msg)
+        .block(block)
+        .style(Style::default().fg(t.fg))
+        .alignment(Alignment::Center);
+    f.render_widget(p, area);
 }
 
 /// Renders the Manage page body: a Holdings section above an Alerts section.
