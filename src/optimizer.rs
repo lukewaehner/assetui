@@ -103,6 +103,111 @@ pub fn aligned_returns(
     (tickers, returns)
 }
 
+/// A point in risk/return space with its Sharpe ratio.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PortfolioPoint {
+    /// Annualized standard deviation (`sqrt(wᵀΣw)`).
+    pub risk: f64,
+    /// Annualized expected return (`wᵀμ`).
+    pub ret: f64,
+    /// `(ret - rf) / risk`.
+    pub sharpe: f64,
+}
+
+/// A weighted portfolio and where it lands in risk/return space.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Portfolio {
+    /// Per-asset weights, index-aligned with the analysis' ticker list.
+    pub weights: Vec<f64>,
+    /// The portfolio's risk/return/Sharpe.
+    pub point: PortfolioPoint,
+}
+
+/// Risk, return, and Sharpe for `weights` given annualized `mean`/`cov` and a risk-free rate `rf`.
+pub fn portfolio_stats(weights: &[f64], mean: &[f64], cov: &[Vec<f64>], rf: f64) -> PortfolioPoint {
+    let ret: f64 = weights.iter().zip(mean).map(|(w, m)| w * m).sum();
+    let var: f64 = (0..weights.len())
+        .map(|i| (0..weights.len()).map(|j| weights[i] * weights[j] * cov[i][j]).sum::<f64>())
+        .sum();
+    let risk = var.max(0.0).sqrt();
+    let sharpe = if risk > 0.0 { (ret - rf) / risk } else { 0.0 };
+    PortfolioPoint { risk, ret, sharpe }
+}
+
+/// Inverse of a square matrix via Gauss-Jordan elimination with partial pivoting.
+fn invert(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+    let n = mat.len();
+    let mut a: Vec<Vec<f64>> = mat
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mut r = row.clone();
+            r.extend((0..n).map(|j| if i == j { 1.0 } else { 0.0 }));
+            r
+        })
+        .collect();
+    for col in 0..n {
+        let mut pivot = col;
+        for r in (col + 1)..n {
+            if a[r][col].abs() > a[pivot][col].abs() {
+                pivot = r;
+            }
+        }
+        if a[pivot][col].abs() < 1e-12 {
+            return None;
+        }
+        a.swap(col, pivot);
+        let d = a[col][col];
+        for j in 0..2 * n {
+            a[col][j] /= d;
+        }
+        for r in 0..n {
+            if r == col {
+                continue;
+            }
+            let f = a[r][col];
+            if f != 0.0 {
+                for j in 0..2 * n {
+                    a[r][j] -= f * a[col][j];
+                }
+            }
+        }
+    }
+    Some(a.iter().map(|row| row[n..].to_vec()).collect())
+}
+
+/// Matrix-vector product `mat · v`.
+fn mat_vec(mat: &[Vec<f64>], v: &[f64]) -> Vec<f64> {
+    mat.iter().map(|row| row.iter().zip(v).map(|(a, b)| a * b).sum()).collect()
+}
+
+/// Analytical global minimum-variance portfolio: `w = Σ⁻¹·1 / (1ᵀΣ⁻¹1)`.
+pub fn min_variance(cov: &[Vec<f64>], mean: &[f64], rf: f64) -> Option<Portfolio> {
+    let inv = invert(cov)?;
+    let ones = vec![1.0; cov.len()];
+    let z = mat_vec(&inv, &ones);
+    let denom: f64 = z.iter().sum();
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    let weights: Vec<f64> = z.iter().map(|x| x / denom).collect();
+    let point = portfolio_stats(&weights, mean, cov, rf);
+    Some(Portfolio { weights, point })
+}
+
+pub fn tangency(mean: &[f64], cov: &[Vec<f64>], rf: f64) -> Option<Portfolio> {
+    let inv = invert(cov)?;
+    let excess: Vec<f64> = mean.iter().map(|m| m - rf).collect();
+    let z = mat_vec(&inv, &excess);
+    let denom: f64 = z.iter().sum();
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    let weights: Vec<f64> = z.iter().map(|x| x / denom).collect();
+    let point = portfolio_stats(&weights, mean, cov, rf);
+    Some(Portfolio { weights, point })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +302,58 @@ mod tests {
         assert_eq!(returns.len(), 2);
         assert_eq!(returns[0].len(), 30);
         assert_eq!(returns[1].len(), 30);
+    }
+
+    #[test]
+    fn invert_2x2_diagonal() {
+        let inv = invert(&[vec![4.0, 0.0], vec![0.0, 9.0]]).unwrap();
+        approx(inv[0][0], 0.25);
+        approx(inv[1][1], 1.0 / 9.0);
+        approx(inv[0][1], 0.0);
+    }
+
+    #[test]
+    fn invert_singular_matrix_is_none() {
+        assert!(invert(&[vec![1.0, 1.0], vec![1.0, 1.0]]).is_none());
+    }
+
+    #[test]
+    fn portfolio_stats_known_two_asset_case() {
+        let cov = vec![vec![0.04, 0.0], vec![0.0, 0.09]];
+        let p = portfolio_stats(&[0.6, 0.4], &[0.10, 0.15], &cov, 0.0);
+        approx(p.ret, 0.12);
+        approx(p.risk, 0.16970562748477142);
+        approx(p.sharpe, 0.7071067811865475);
+    }
+
+    #[test]
+    fn portfolio_stats_zero_risk_gives_zero_sharpe_not_nan() {
+        let cov = vec![vec![0.0, 0.0], vec![0.0, 0.0]];
+        let p = portfolio_stats(&[0.5, 0.5], &[0.10, 0.10], &cov, 0.02);
+        assert_eq!(p.risk, 0.0);
+        assert_eq!(p.sharpe, 0.0);
+    }
+
+    #[test]
+    fn min_variance_weights_are_inverse_variance_normalized() {
+        let cov = vec![vec![0.04, 0.0], vec![0.0, 0.09]];
+        let mv = min_variance(&cov, &[0.10, 0.15], 0.0).unwrap();
+        approx(mv.weights[0], 0.6923076923076923);
+        approx(mv.weights[1], 0.3076923076923077);
+    }
+
+    #[test]
+    fn tangency_weights_known_two_asset_case() {
+        let cov = vec![vec![0.04, 0.0], vec![0.0, 0.09]];
+        let t = tangency(&[0.10, 0.15], &cov, 0.0).unwrap();
+        approx(t.weights[0], 0.6);
+        approx(t.weights[1], 0.4);
+    }
+
+    #[test]
+    fn min_variance_and_tangency_none_on_singular_covariance() {
+        let cov = vec![vec![1.0, 1.0], vec![1.0, 1.0]];
+        assert!(min_variance(&cov, &[0.1, 0.1], 0.0).is_none());
+        assert!(tangency(&[0.1, 0.1], &cov, 0.0).is_none());
     }
 }
