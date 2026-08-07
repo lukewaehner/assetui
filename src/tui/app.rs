@@ -107,6 +107,8 @@ pub enum AppEvent {
         items: Vec<crate::models::quote::NewsItem>,
     },
     Error(String),
+    /// Per-ticker price series for the quotes-table sparklines.
+    SparkSeriesLoaded(HashMap<String, Vec<f64>>),
 }
 
 /// Why a quote fetch was requested.
@@ -429,6 +431,8 @@ pub struct DbDisplay {
     pub page: usize,
     /// Number of rows per page.
     pub page_size: usize,
+    /// Per-ticker price series (oldest→newest) for the Trend sparkline column.
+    pub spark_series: HashMap<String, Vec<f64>>,
 }
 
 impl DbDisplay {
@@ -546,6 +550,14 @@ fn snapshot_records(
         .collect()
 }
 
+pub(crate) fn group_spark_series(rows: Vec<(String, f64)>) -> HashMap<String, Vec<f64>> {
+    let mut map: HashMap<String, Vec<f64>> = HashMap::new();
+    for (ticker, price) in rows {
+        map.entry(ticker).or_default().push(price);
+    }
+    map
+}
+
 impl App {
     /// Creates a new `App` with sensible defaults.
     pub fn new(
@@ -571,6 +583,7 @@ impl App {
                     sort_order: SortOrder::Descending,
                     page: 0,
                     page_size: 25,
+                    spark_series: HashMap::new(),
                 },
                 logs: VecDeque::new(),
                 dashboard: DashboardSnapshot::default(),
@@ -761,6 +774,9 @@ impl App {
                 self.market.db_display.all_rows = rows;
                 self.apply_filter();
                 self.resubscribe_stream();
+            }
+            AppEvent::SparkSeriesLoaded(series) => {
+                self.market.db_display.spark_series = series;
             }
             AppEvent::FetchSpawned(symbol) => {
                 self.market.db_display.status = format!("fetching {symbol}…");
@@ -1756,6 +1772,19 @@ mod tests {
         assert_eq!(snapshot_records(&rows, &subscribed, Utc::now()).len(), 1);
     }
 
+    #[test]
+    fn group_spark_series_groups_prices_by_ticker_in_order() {
+        let rows = vec![
+            ("AAPL".to_string(), 1.0),
+            ("AAPL".to_string(), 2.0),
+            ("MSFT".to_string(), 9.0),
+            ("AAPL".to_string(), 3.0),
+        ];
+        let map = group_spark_series(rows);
+        assert_eq!(map.get("AAPL"), Some(&vec![1.0, 2.0, 3.0]));
+        assert_eq!(map.get("MSFT"), Some(&vec![9.0]));
+    }
+
     fn named(ticker: &str, name: &str) -> QuoteRecord {
         QuoteRecord {
             ticker: Some(ticker.to_string()),
@@ -1933,6 +1962,17 @@ mod tests {
         assert_eq!(app.market.db_display.rows.len(), 1);
         assert!(app.market.db_display.status.is_empty());
         assert_eq!(app.market.db_display.table_state.selected(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn spark_series_loaded_event_populates_state() {
+        let (mut app, _rx) = make_test_app();
+        let mut series = HashMap::new();
+        series.insert("AAPL".to_string(), vec![1.0, 2.0]);
+
+        app.handle_event(AppEvent::SparkSeriesLoaded(series));
+
+        assert_eq!(app.market.db_display.spark_series.get("AAPL"), Some(&vec![1.0, 2.0]));
     }
 
     #[tokio::test]
