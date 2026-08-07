@@ -1,6 +1,8 @@
-use chrono::{DateTime, Utc};
-use assetui::db::quotes::{dump_table_to_csv, fetch_all_quotes, store_quote_to_db};
+use assetui::db::quotes::{
+    dump_table_to_csv, fetch_all_quotes, prune_quotes_history, store_quote_to_db,
+};
 use assetui::models::QuoteRecord;
+use chrono::{DateTime, TimeZone, Utc};
 
 fn make_quote(ticker: &str) -> QuoteRecord {
     QuoteRecord {
@@ -11,6 +13,15 @@ fn make_quote(ticker: &str) -> QuoteRecord {
         previous_close: Some(148.0),
         day_volume: Some(1_000_000.0),
         as_of: Some(Utc::now()),
+    }
+}
+
+fn quote_at(ticker: &str, price: f64, secs: i64) -> QuoteRecord {
+    QuoteRecord {
+        ticker: Some(ticker.into()),
+        price: Some(price),
+        as_of: Some(Utc.timestamp_opt(secs, 0).unwrap()),
+        ..Default::default()
     }
 }
 
@@ -132,4 +143,29 @@ async fn test_dump_to_csv_writes_to_given_path(pool: sqlx::PgPool) {
     assert!(bytes > 0, "the CSV file should be non-empty");
 
     let _ = std::fs::remove_file(&out);
+}
+
+#[sqlx::test]
+async fn prune_keeps_only_the_most_recent_rows(pool: sqlx::PgPool) {
+    for i in 0..5 {
+        store_quote_to_db(&quote_at("AAPL", 100.0 + i as f64, 1_000 + i), &pool)
+            .await
+            .unwrap();
+    }
+    let deleted = prune_quotes_history(&pool, "AAPL", 2).await.unwrap();
+    assert_eq!(deleted, 3);
+
+    let remaining: Vec<f64> =
+        sqlx::query_scalar("SELECT price FROM quotes WHERE ticker = 'AAPL' ORDER BY as_of ASC")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, vec![103.0, 104.0]);
+}
+
+#[sqlx::test]
+async fn prune_is_a_noop_when_under_the_cap(pool: sqlx::PgPool) {
+    store_quote_to_db(&quote_at("MSFT", 400.0, 2_000), &pool).await.unwrap();
+    let deleted = prune_quotes_history(&pool, "MSFT", 200).await.unwrap();
+    assert_eq!(deleted, 0);
 }

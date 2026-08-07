@@ -37,6 +37,32 @@ pub async fn store_quote_to_db(quote: &QuoteRecord, p: &Pool<Postgres>) -> Resul
     Ok(id)
 }
 
+/// Deletes a ticker's oldest quote rows, retaining the most recent `keep`.
+#[instrument(skip(p))]
+pub async fn prune_quotes_history(
+    p: &Pool<Postgres>,
+    ticker: &str,
+    keep: i64,
+) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "
+        DELETE FROM quotes
+        WHERE ticker = $1
+          AND as_of < (
+            SELECT as_of FROM quotes
+            WHERE ticker = $1
+            ORDER BY as_of DESC
+            OFFSET $2 - 1 LIMIT 1
+          )
+        ",
+    )
+    .bind(ticker)
+    .bind(keep)
+    .execute(p)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Returns every row in the `quotes` table with no ordering applied.
 #[instrument(skip(p))]
 pub async fn fetch_all_quotes(p: &Pool<Postgres>) -> Result<Vec<QuoteRecord>, AppError> {
