@@ -2005,9 +2005,14 @@ fn draw_optimizer_page(f: &mut Frame, area: Rect, app: &mut App) {
     if app.optimizer.loading {
         return draw_optimizer_note(f, area, "Optimizing…", &t);
     }
-    let Some(result) = app.optimizer.result.clone() else {
+    let Some(result) = &app.optimizer.result else {
         let msg = app.optimizer.error.clone().unwrap_or_else(|| {
-            "Add at least 2 holdings with price history to optimize.".to_string()
+            if app.holdings.len() < 2 {
+                "Add at least 2 holdings with price history to optimize.".to_string()
+            } else {
+                "Not enough overlapping price history across your holdings to optimize."
+                    .to_string()
+            }
         });
         return draw_optimizer_note(f, area, &msg, &t);
     };
@@ -2017,9 +2022,9 @@ fn draw_optimizer_page(f: &mut Frame, area: Rect, app: &mut App) {
     let [weights_area, heatmap_area] =
         Layout::vertical([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(right);
 
-    draw_frontier_panel(f, left, &result, &t);
-    draw_weights_panel(f, weights_area, &result, &t);
-    draw_correlation_panel(f, heatmap_area, &result, &t);
+    draw_frontier_panel(f, left, result, &t);
+    draw_weights_panel(f, weights_area, result, &t);
+    draw_correlation_panel(f, heatmap_area, result, &t);
 }
 
 /// Small centered single-line note inside a titled block.
