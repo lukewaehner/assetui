@@ -76,6 +76,18 @@ pub fn correlation_matrix(cov: &[Vec<f64>]) -> Vec<Vec<f64>> {
     corr
 }
 
+/// Maps a correlation in `[-1, 1]` to an RGB triple: blue (negative) → grey (zero) → red (positive).
+pub fn correlation_rgb(corr: f64) -> (u8, u8, u8) {
+    let c = corr.clamp(-1.0, 1.0);
+    if c >= 0.0 {
+        let g = (200.0 * (1.0 - c)) as u8;
+        (200, g, g)
+    } else {
+        let g = (200.0 * (1.0 + c)) as u8;
+        (g, g, 200)
+    }
+}
+
 pub fn aligned_returns(
     histories: &[(String, Vec<(NaiveDate, f64)>)],
 ) -> (Vec<String>, Vec<Vec<f64>>) {
@@ -434,6 +446,13 @@ mod tests {
         approx(corr[1][1], 1.0);
         approx(corr[0][1], 0.2);
         assert!(corr[0][1] >= -1.0 && corr[0][1] <= 1.0);
+    }
+
+    #[test]
+    fn correlation_rgb_endpoints_and_zero() {
+        assert_eq!(correlation_rgb(1.0), (200, 0, 0));
+        assert_eq!(correlation_rgb(-1.0), (0, 0, 200));
+        assert_eq!(correlation_rgb(0.0), (200, 200, 200));
     }
 
     #[test]
