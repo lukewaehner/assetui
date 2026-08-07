@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeZone, Utc};
 use assetui::db::quotes::{dump_table_to_csv, fetch_all_quotes, store_quote_to_db};
-use assetui::fetch::fetch_sorted;
+use assetui::fetch::fetch_latest_per_ticker;
 use assetui::models::QuoteRecord;
 use assetui::sort::{SortMode, SortOrder};
 
@@ -82,9 +82,9 @@ async fn test_historical_tracking_same_ticker_two_timestamps(pool: sqlx::PgPool)
         "expected 2 rows for same ticker at different timestamps"
     );
 
-    let recent = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 1)
+    let recent = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 1)
         .await
-        .expect("fetch_sorted failed");
+        .expect("fetch_latest_per_ticker failed");
     assert_eq!(recent.len(), 1, "limit of 1 should return exactly 1 row");
     assert_eq!(recent[0].as_of, Some(t2), "most-recent row should be t2");
     assert_eq!(
@@ -154,7 +154,7 @@ async fn test_csv_export_content_matches_stored_data(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn test_fetch_sorted_remaining_modes(pool: sqlx::PgPool) {
+async fn test_fetch_latest_per_ticker_remaining_modes(pool: sqlx::PgPool) {
     let t1 = Utc.with_ymd_and_hms(2024, 8, 1, 9, 0, 0).unwrap();
     let t2 = Utc.with_ymd_and_hms(2024, 8, 1, 9, 0, 1).unwrap();
     let t3 = Utc.with_ymd_and_hms(2024, 8, 1, 9, 0, 2).unwrap();
@@ -169,9 +169,9 @@ async fn test_fetch_sorted_remaining_modes(pool: sqlx::PgPool) {
         .await
         .expect("store GAMMA failed");
 
-    let by_name_asc = fetch_sorted(&pool, SortMode::ByName, SortOrder::Ascending, 10)
+    let by_name_asc = fetch_latest_per_ticker(&pool, SortMode::ByName, SortOrder::Ascending, 10)
         .await
-        .expect("fetch_sorted ByName ASC failed");
+        .expect("fetch_latest_per_ticker ByName ASC failed");
     assert_eq!(by_name_asc.len(), 3);
     assert_eq!(
         by_name_asc[0].name.as_deref(),
@@ -189,9 +189,9 @@ async fn test_fetch_sorted_remaining_modes(pool: sqlx::PgPool) {
         "ByName ASC: third should be GAMMA Corporation"
     );
 
-    let by_prev_close_asc = fetch_sorted(&pool, SortMode::ByPrevClose, SortOrder::Ascending, 10)
+    let by_prev_close_asc = fetch_latest_per_ticker(&pool, SortMode::ByPrevClose, SortOrder::Ascending, 10)
         .await
-        .expect("fetch_sorted ByPrevClose ASC failed");
+        .expect("fetch_latest_per_ticker ByPrevClose ASC failed");
     assert_eq!(by_prev_close_asc.len(), 3);
     assert_eq!(
         by_prev_close_asc[0].previous_close,
@@ -209,9 +209,9 @@ async fn test_fetch_sorted_remaining_modes(pool: sqlx::PgPool) {
         "ByPrevClose ASC: third should be 80.0 (BETA)"
     );
 
-    let by_volume_desc = fetch_sorted(&pool, SortMode::ByVolume, SortOrder::Descending, 10)
+    let by_volume_desc = fetch_latest_per_ticker(&pool, SortMode::ByVolume, SortOrder::Descending, 10)
         .await
-        .expect("fetch_sorted ByVolume DESC failed");
+        .expect("fetch_latest_per_ticker ByVolume DESC failed");
     assert_eq!(by_volume_desc.len(), 3);
     assert_eq!(
         by_volume_desc[0].day_volume,
@@ -229,9 +229,9 @@ async fn test_fetch_sorted_remaining_modes(pool: sqlx::PgPool) {
         "ByVolume DESC: third should be 1000.0 (ALPHA)"
     );
 
-    let by_as_of_desc = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 10)
+    let by_as_of_desc = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 10)
         .await
-        .expect("fetch_sorted ByAsOf DESC failed");
+        .expect("fetch_latest_per_ticker ByAsOf DESC failed");
     assert_eq!(by_as_of_desc.len(), 3);
     assert_eq!(
         by_as_of_desc[0].ticker.as_deref(),
@@ -249,9 +249,9 @@ async fn test_fetch_sorted_remaining_modes(pool: sqlx::PgPool) {
         "ByAsOf DESC: third should be ALPHA"
     );
 
-    let by_id_asc = fetch_sorted(&pool, SortMode::ById, SortOrder::Ascending, 10)
+    let by_id_asc = fetch_latest_per_ticker(&pool, SortMode::ById, SortOrder::Ascending, 10)
         .await
-        .expect("fetch_sorted ById ASC failed");
+        .expect("fetch_latest_per_ticker ById ASC failed");
     assert_eq!(by_id_asc.len(), 3);
     assert_eq!(
         by_id_asc[0].ticker.as_deref(),
@@ -261,7 +261,7 @@ async fn test_fetch_sorted_remaining_modes(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn test_fetch_sorted_descending_by_name(pool: sqlx::PgPool) {
+async fn test_fetch_latest_per_ticker_descending_by_name(pool: sqlx::PgPool) {
     let t1 = Utc.with_ymd_and_hms(2024, 9, 1, 10, 0, 0).unwrap();
     let t2 = Utc.with_ymd_and_hms(2024, 9, 1, 10, 0, 1).unwrap();
 
@@ -272,9 +272,9 @@ async fn test_fetch_sorted_descending_by_name(pool: sqlx::PgPool) {
         .await
         .expect("store ZZZZ failed");
 
-    let desc = fetch_sorted(&pool, SortMode::ByName, SortOrder::Descending, 10)
+    let desc = fetch_latest_per_ticker(&pool, SortMode::ByName, SortOrder::Descending, 10)
         .await
-        .expect("fetch_sorted ByName DESC failed");
+        .expect("fetch_latest_per_ticker ByName DESC failed");
     assert_eq!(desc.len(), 2);
     assert_eq!(
         desc[0].name.as_deref(),
@@ -287,9 +287,9 @@ async fn test_fetch_sorted_descending_by_name(pool: sqlx::PgPool) {
         "ByName DESC: second should be AAAA Corporation"
     );
 
-    let asc = fetch_sorted(&pool, SortMode::ByName, SortOrder::Ascending, 10)
+    let asc = fetch_latest_per_ticker(&pool, SortMode::ByName, SortOrder::Ascending, 10)
         .await
-        .expect("fetch_sorted ByName ASC failed");
+        .expect("fetch_latest_per_ticker ByName ASC failed");
     assert_eq!(asc.len(), 2);
     assert_eq!(
         asc[0].name.as_deref(),
@@ -314,30 +314,30 @@ async fn test_store_many_then_paginate(pool: sqlx::PgPool) {
         .expect("fetch_all_quotes failed");
     assert_eq!(all.len(), 15, "expected 15 rows after storing 15 quotes");
 
-    let page_5 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 5)
+    let page_5 = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 5)
         .await
-        .expect("fetch_sorted(5) failed");
+        .expect("fetch_latest_per_ticker(5) failed");
     assert_eq!(
         page_5.len(),
         5,
-        "fetch_sorted(5) should return exactly 5 rows"
+        "fetch_latest_per_ticker(5) should return exactly 5 rows"
     );
 
-    let page_15 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 15)
+    let page_15 = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 15)
         .await
-        .expect("fetch_sorted(15) failed");
+        .expect("fetch_latest_per_ticker(15) failed");
     assert_eq!(
         page_15.len(),
         15,
-        "fetch_sorted(15) should return all 15 rows"
+        "fetch_latest_per_ticker(15) should return all 15 rows"
     );
 
-    let page_20 = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 20)
+    let page_20 = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 20)
         .await
-        .expect("fetch_sorted(20) failed");
+        .expect("fetch_latest_per_ticker(20) failed");
     assert_eq!(
         page_20.len(),
         15,
-        "fetch_sorted(20) should return all 15 rows when limit exceeds count"
+        "fetch_latest_per_ticker(20) should return all 15 rows when limit exceeds count"
     );
 }

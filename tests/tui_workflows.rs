@@ -1,6 +1,6 @@
 use chrono::{TimeZone, Utc};
 use assetui::db::quotes::store_quote_to_db;
-use assetui::fetch::fetch_sorted;
+use assetui::fetch::fetch_latest_per_ticker;
 use assetui::models::QuoteRecord;
 use assetui::sort::{SortMode, SortOrder};
 
@@ -26,7 +26,7 @@ async fn test_tui_initial_load_returns_recent_200(pool: sqlx::PgPool) {
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
         .await
         .unwrap();
 
@@ -54,7 +54,7 @@ async fn test_tui_new_fetch_appears_at_top_of_recent(pool: sqlx::PgPool) {
     let new_quote = tui_quote("NEWT", 999.0, 100);
     store_quote_to_db(&new_quote, &pool).await.unwrap();
 
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
         .await
         .unwrap();
 
@@ -78,7 +78,7 @@ async fn test_tui_sort_change_reloads_correctly(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    let by_ticker = fetch_sorted(&pool, SortMode::ByTicker, SortOrder::Ascending, 200)
+    let by_ticker = fetch_latest_per_ticker(&pool, SortMode::ByTicker, SortOrder::Ascending, 200)
         .await
         .unwrap();
 
@@ -99,7 +99,7 @@ async fn test_tui_sort_change_reloads_correctly(pool: sqlx::PgPool) {
         "MANGO last alphabetically"
     );
 
-    let by_price_desc = fetch_sorted(&pool, SortMode::ByPrice, SortOrder::Descending, 200)
+    let by_price_desc = fetch_latest_per_ticker(&pool, SortMode::ByPrice, SortOrder::Descending, 200)
         .await
         .unwrap();
 
@@ -129,7 +129,7 @@ async fn test_tui_sort_toggle_reverses_order(pool: sqlx::PgPool) {
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let asc = fetch_sorted(&pool, SortMode::ByPrice, SortOrder::Ascending, 10)
+    let asc = fetch_latest_per_ticker(&pool, SortMode::ByPrice, SortOrder::Ascending, 10)
         .await
         .unwrap();
 
@@ -141,7 +141,7 @@ async fn test_tui_sort_toggle_reverses_order(pool: sqlx::PgPool) {
         "ascending price order"
     );
 
-    let desc = fetch_sorted(&pool, SortMode::ByPrice, SortOrder::Descending, 10)
+    let desc = fetch_latest_per_ticker(&pool, SortMode::ByPrice, SortOrder::Descending, 10)
         .await
         .unwrap();
 
@@ -175,14 +175,14 @@ async fn test_tui_page_limit_matches_startup(pool: sqlx::PgPool) {
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 200)
         .await
         .unwrap();
 
     assert_eq!(
         rows.len(),
         200,
-        "fetch_sorted must respect the 200-row limit"
+        "fetch_latest_per_ticker must respect the 200-row limit"
     );
 
     assert_eq!(

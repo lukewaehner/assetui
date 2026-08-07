@@ -61,28 +61,46 @@ pub fn prepare_tickers(s: &[String], c: &YfClient) -> Vec<(String, Ticker)> {
     s.iter().map(|t| (t.clone(), Ticker::new(c, t))).collect()
 }
 
-/// Returns up to `limit` quotes sorted by `mode` in the given `order`.
-pub async fn fetch_sorted(
+/// Returns up to `limit` quotes.
+pub async fn fetch_latest_per_ticker(
     pool: &sqlx::PgPool,
     mode: SortMode,
     order: SortOrder,
     limit: i64,
 ) -> sqlx::Result<Vec<QuoteRecord>> {
-    debug!(?mode, ?order, "fetching sorted quotes");
     let column = mode.column();
     let direction = order.keyword();
-
     let query = format!(
         "SELECT id, ticker, name, price, previous_close, day_volume, as_of
-              FROM quotes
-              ORDER BY {column} {direction}, id DESC
-              LIMIT $1"
+         FROM (
+             SELECT DISTINCT ON (ticker)
+                 id, ticker, name, price, previous_close, day_volume, as_of
+             FROM quotes
+             ORDER BY ticker, as_of DESC
+         ) latest
+         ORDER BY {column} {direction}, ticker ASC
+         LIMIT $1"
     );
-
     sqlx::query_as::<_, QuoteRecord>(sqlx::AssertSqlSafe(query))
         .bind(limit)
         .fetch_all(pool)
         .await
+}
+
+/// Returns `(ticker, price)` for the given tickers, ordered oldest→newest per ticker.
+pub async fn fetch_spark_series(
+    pool: &sqlx::PgPool,
+    tickers: &[String],
+) -> sqlx::Result<Vec<(String, f64)>> {
+    sqlx::query_as::<_, (String, f64)>(
+        "SELECT ticker, price
+         FROM quotes
+         WHERE ticker = ANY($1) AND price IS NOT NULL
+         ORDER BY ticker, as_of ASC",
+    )
+    .bind(tickers)
+    .fetch_all(pool)
+    .await
 }
 
 /// Whether an instrument's asset class carries sell-side analyst coverage.

@@ -15,14 +15,17 @@ use crate::models::AlertDirection;
 use crate::portfolio::Holding;
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
-    fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_news, fetch_option_chain,
-    fetch_option_chain_for_expiry, fetch_quote_and_store, fetch_sorted,
+    fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_latest_per_ticker, fetch_news,
+    fetch_option_chain, fetch_option_chain_for_expiry, fetch_quote_and_store, fetch_spark_series,
 };
 use crate::models::{QuoteRecord, QuoteTick};
 use crate::tui::stream::start_quote_stream;
 use crate::tui::theme::{Appearance, parse_appearance};
 
-use super::{App, AppEvent, FetchOrigin, PAGE_FETCH_LIMIT, SNAPSHOT_RETENTION, fetch_failure_event};
+use super::{
+    App, AppEvent, FetchOrigin, PAGE_FETCH_LIMIT, SNAPSHOT_RETENTION, fetch_failure_event,
+    group_spark_series,
+};
 
 impl App {
     pub(crate) fn spawn_reload(&self) {
@@ -31,9 +34,21 @@ impl App {
         let mode = self.market.db_display.sort_mode;
         let order = self.market.db_display.sort_order;
         tokio::spawn(async move {
-            match fetch_sorted(&pool, mode, order, PAGE_FETCH_LIMIT).await {
+            match fetch_latest_per_ticker(&pool, mode, order, PAGE_FETCH_LIMIT).await {
                 Ok(rows) => {
+                    let tickers: Vec<String> =
+                        rows.iter().filter_map(|r| r.ticker.clone()).collect();
                     let _ = tx.send(AppEvent::PageLoaded(rows));
+                    match fetch_spark_series(&pool, &tickers).await {
+                        Ok(series) => {
+                            let _ = tx.send(AppEvent::SparkSeriesLoaded(group_spark_series(series)));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::LogLine(format!(
+                                "[WARN] spark series load failed: {e}"
+                            )));
+                        }
+                    }
                 }
                 Err(e) => {
                     let _ = tx.send(AppEvent::Error(format!("Failed to fetch quotes: {e}")));

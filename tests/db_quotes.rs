@@ -1,7 +1,9 @@
 use assetui::db::quotes::{
     dump_table_to_csv, fetch_all_quotes, prune_quotes_history, store_quote_to_db,
 };
+use assetui::fetch::{fetch_latest_per_ticker, fetch_spark_series};
 use assetui::models::QuoteRecord;
+use assetui::sort::{SortMode, SortOrder};
 use chrono::{DateTime, TimeZone, Utc};
 
 fn make_quote(ticker: &str) -> QuoteRecord {
@@ -168,4 +170,31 @@ async fn prune_is_a_noop_when_under_the_cap(pool: sqlx::PgPool) {
     store_quote_to_db(&quote_at("MSFT", 400.0, 2_000), &pool).await.unwrap();
     let deleted = prune_quotes_history(&pool, "MSFT", 200).await.unwrap();
     assert_eq!(deleted, 0);
+}
+
+#[sqlx::test]
+async fn latest_per_ticker_returns_one_row_per_ticker(pool: sqlx::PgPool) {
+    store_quote_to_db(&quote_at("AAPL", 100.0, 1), &pool).await.unwrap();
+    store_quote_to_db(&quote_at("AAPL", 110.0, 2), &pool).await.unwrap();
+    store_quote_to_db(&quote_at("MSFT", 400.0, 1), &pool).await.unwrap();
+
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByTicker, SortOrder::Ascending, 200)
+        .await
+        .unwrap();
+
+    let pairs: Vec<(String, f64)> = rows
+        .iter()
+        .map(|r| (r.ticker.clone().unwrap(), r.price.unwrap()))
+        .collect();
+    assert_eq!(pairs, vec![("AAPL".into(), 110.0), ("MSFT".into(), 400.0)]);
+}
+
+#[sqlx::test]
+async fn spark_series_returns_prices_oldest_first(pool: sqlx::PgPool) {
+    store_quote_to_db(&quote_at("AAPL", 100.0, 1), &pool).await.unwrap();
+    store_quote_to_db(&quote_at("AAPL", 105.0, 2), &pool).await.unwrap();
+
+    let series = fetch_spark_series(&pool, &["AAPL".to_string()]).await.unwrap();
+
+    assert_eq!(series, vec![("AAPL".into(), 100.0), ("AAPL".into(), 105.0)]);
 }

@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeZone, Utc};
 use assetui::db::quotes::store_quote_to_db;
-use assetui::fetch::fetch_sorted;
+use assetui::fetch::fetch_latest_per_ticker;
 use assetui::models::QuoteRecord;
 use assetui::sort::{SortMode, SortOrder};
 
@@ -17,29 +17,29 @@ fn make_quote(ticker: &str, price: f64, as_of: DateTime<Utc>) -> QuoteRecord {
 }
 
 #[sqlx::test]
-async fn test_fetch_sorted_recent_empty(pool: sqlx::PgPool) {
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 10)
+async fn test_fetch_latest_per_ticker_recent_empty(pool: sqlx::PgPool) {
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 10)
         .await
         .unwrap();
     assert!(rows.is_empty(), "expected empty vec from fresh DB");
 }
 
 #[sqlx::test]
-async fn test_fetch_sorted_recent_respects_limit(pool: sqlx::PgPool) {
+async fn test_fetch_latest_per_ticker_recent_respects_limit(pool: sqlx::PgPool) {
     for i in 0..5_u32 {
         let ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, i).unwrap();
         let q = make_quote(&format!("TICK{i}"), 100.0 + f64::from(i), ts);
         store_quote_to_db(&q, &pool).await.unwrap();
     }
 
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 3)
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 3)
         .await
         .unwrap();
-    assert_eq!(rows.len(), 3, "fetch_sorted should respect the limit of 3");
+    assert_eq!(rows.len(), 3, "fetch_latest_per_ticker should respect the limit of 3");
 }
 
 #[sqlx::test]
-async fn test_fetch_sorted_recent_ordering(pool: sqlx::PgPool) {
+async fn test_fetch_latest_per_ticker_recent_ordering(pool: sqlx::PgPool) {
     let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
     let t2 = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 1).unwrap();
     let t3 = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 2).unwrap();
@@ -54,7 +54,7 @@ async fn test_fetch_sorted_recent_ordering(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    let rows = fetch_sorted(&pool, SortMode::ByAsOf, SortOrder::Descending, 3)
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 3)
         .await
         .unwrap();
     assert_eq!(rows.len(), 3);
@@ -64,7 +64,7 @@ async fn test_fetch_sorted_recent_ordering(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn test_fetch_sorted_by_price_asc(pool: sqlx::PgPool) {
+async fn test_fetch_latest_per_ticker_by_price_asc(pool: sqlx::PgPool) {
     let ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
 
     store_quote_to_db(&make_quote("MID", 100.0, ts), &pool)
@@ -79,7 +79,7 @@ async fn test_fetch_sorted_by_price_asc(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    let rows = fetch_sorted(&pool, SortMode::ByPrice, SortOrder::Ascending, 10)
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByPrice, SortOrder::Ascending, 10)
         .await
         .unwrap();
 
@@ -90,7 +90,7 @@ async fn test_fetch_sorted_by_price_asc(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn test_fetch_sorted_by_price_desc(pool: sqlx::PgPool) {
+async fn test_fetch_latest_per_ticker_by_price_desc(pool: sqlx::PgPool) {
     let ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
 
     store_quote_to_db(&make_quote("MID", 100.0, ts), &pool)
@@ -105,7 +105,7 @@ async fn test_fetch_sorted_by_price_desc(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    let rows = fetch_sorted(&pool, SortMode::ByPrice, SortOrder::Descending, 10)
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByPrice, SortOrder::Descending, 10)
         .await
         .unwrap();
 
@@ -116,7 +116,7 @@ async fn test_fetch_sorted_by_price_desc(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn test_fetch_sorted_by_ticker_asc(pool: sqlx::PgPool) {
+async fn test_fetch_latest_per_ticker_by_ticker_asc(pool: sqlx::PgPool) {
     let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
     let t2 = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 1).unwrap();
 
@@ -127,7 +127,7 @@ async fn test_fetch_sorted_by_ticker_asc(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    let rows = fetch_sorted(&pool, SortMode::ByTicker, SortOrder::Ascending, 10)
+    let rows = fetch_latest_per_ticker(&pool, SortMode::ByTicker, SortOrder::Ascending, 10)
         .await
         .unwrap();
 
