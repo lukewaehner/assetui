@@ -245,6 +245,22 @@ pub async fn fetch_chart_data(client: &YfClient, symbol: &str) -> Result<Vec<Can
     Ok(history)
 }
 
+/// Fetches one year of daily closes for `symbol`, as `(date, close)` pairs ascending.
+pub async fn fetch_return_history(
+    client: &YfClient,
+    symbol: &str,
+) -> Result<Vec<(chrono::NaiveDate, f64)>, AppError> {
+    let history = HistoryBuilder::new(client, symbol)
+        .range(Range::Y1)
+        .interval(Interval::D1)
+        .fetch()
+        .await?;
+    Ok(history
+        .iter()
+        .map(|c| (c.ts.date_naive(), c.ohlc.close.as_decimal().as_f64()))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{has_analyst_coverage, map_option_contract, prepare_tickers};
