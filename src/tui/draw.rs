@@ -2000,20 +2000,219 @@ fn news_row_line(selected: bool, ticker: &str, item: &NewsItem, width: usize, t:
 }
 
 fn draw_optimizer_page(f: &mut Frame, area: Rect, app: &mut App) {
-    let t = &app.theme;
-    let msg = if app.optimizer.loading {
-        "Optimizing…"
-    } else if app.optimizer.result.is_some() {
-        "Optimizer ready"
-    } else {
-        "Add at least 2 holdings with price history to optimize."
+    let t = app.theme;
+
+    if app.optimizer.loading {
+        return draw_optimizer_note(f, area, "Optimizing…", &t);
+    }
+    let Some(result) = app.optimizer.result.clone() else {
+        let msg = app.optimizer.error.clone().unwrap_or_else(|| {
+            "Add at least 2 holdings with price history to optimize.".to_string()
+        });
+        return draw_optimizer_note(f, area, &msg, &t);
     };
+
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area);
+    let [weights_area, heatmap_area] =
+        Layout::vertical([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(right);
+
+    draw_frontier_panel(f, left, &result, &t);
+    draw_weights_panel(f, weights_area, &result, &t);
+    draw_correlation_panel(f, heatmap_area, &result, &t);
+}
+
+/// Small centered single-line note inside a titled block.
+fn draw_optimizer_note(f: &mut Frame, area: Rect, msg: &str, t: &Theme) {
     let block = Block::default().borders(Borders::ALL).title(" Optimizer ");
     let p = Paragraph::new(msg)
         .block(block)
         .style(Style::default().fg(t.fg))
-        .alignment(Alignment::Center);
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
     f.render_widget(p, area);
+}
+
+/// (lo, hi) bounds for an axis, padded so points never ride the plot edge.
+fn padded_axis_bounds(values: &[f64]) -> (f64, f64) {
+    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    if finite.is_empty() {
+        return (0.0, 1.0);
+    }
+    let lo = finite.iter().cloned().fold(f64::INFINITY, f64::min);
+    let hi = finite.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let pad = ((hi - lo) * 0.1).max(0.01);
+    (lo - pad, hi + pad)
+}
+
+fn draw_frontier_panel(f: &mut Frame, area: Rect, r: &crate::optimizer::OptimizerResult, t: &Theme) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Efficient Frontier ");
+    if r.cloud.is_empty() {
+        f.render_widget(placeholder("No frontier samples.", t), block.inner(area));
+        f.render_widget(block, area);
+        return;
+    }
+
+    let cloud: Vec<(f64, f64)> = r.cloud.iter().map(|p| (p.risk, p.ret)).collect();
+    let current = (r.current.point.risk, r.current.point.ret);
+    let tangency = r.tangency.as_ref().map(|p| (p.point.risk, p.point.ret));
+    let min_var = r.min_variance.as_ref().map(|p| (p.point.risk, p.point.ret));
+
+    let mut xs: Vec<f64> = cloud.iter().map(|p| p.0).collect();
+    let mut ys: Vec<f64> = cloud.iter().map(|p| p.1).collect();
+    xs.push(current.0);
+    ys.push(current.1);
+    if let Some(p) = tangency {
+        xs.push(p.0);
+        ys.push(p.1);
+    }
+    if let Some(p) = min_var {
+        xs.push(p.0);
+        ys.push(p.1);
+    }
+    xs.push(0.0);
+    let (x_min, x_max) = padded_axis_bounds(&xs);
+    let (y_min, y_max) = padded_axis_bounds(&ys);
+
+    let label_style = Style::default().fg(t.dim);
+    let title_style = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
+    let pct_label = |v: f64| Line::from(Span::styled(format!("{:.0}%", v * 100.0), label_style));
+
+    let cloud_ds = Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Scatter)
+        .style(Style::default().fg(t.dim))
+        .data(&cloud);
+
+    let min_var_pt = min_var.map(|p| vec![p]);
+    let tangency_pt = tangency.map(|p| vec![p]);
+    let current_pt = vec![current];
+
+    let mut datasets = vec![cloud_ds];
+    if let Some(pts) = &min_var_pt {
+        datasets.push(
+            Dataset::default()
+                .name("Min-Var ◇")
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Scatter)
+                .style(Style::default().fg(t.accent))
+                .data(pts),
+        );
+    }
+    if let Some(pts) = &tangency_pt {
+        datasets.push(
+            Dataset::default()
+                .name("Tangency ★")
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Scatter)
+                .style(Style::default().fg(t.up))
+                .data(pts),
+        );
+    }
+    datasets.push(
+        Dataset::default()
+            .name("You ●")
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Scatter)
+            .style(Style::default().fg(t.gold))
+            .data(&current_pt),
+    );
+
+    let x_axis = Axis::default()
+        .title(Span::styled("Risk (σ)", title_style))
+        .style(label_style)
+        .bounds([x_min, x_max])
+        .labels([pct_label(x_min), pct_label((x_min + x_max) / 2.0), pct_label(x_max)]);
+    let y_axis = Axis::default()
+        .title(Span::styled("Return", title_style))
+        .style(label_style)
+        .bounds([y_min, y_max])
+        .labels([pct_label(y_min), pct_label((y_min + y_max) / 2.0), pct_label(y_max)]);
+
+    let chart = Chart::new(datasets)
+        .block(block)
+        .x_axis(x_axis)
+        .y_axis(y_axis)
+        .legend_position(Some(LegendPosition::TopRight));
+    f.render_widget(chart, area);
+}
+
+/// Current vs tangency vs min-variance weights, one row per ticker.
+fn draw_weights_panel(f: &mut Frame, area: Rect, r: &crate::optimizer::OptimizerResult, t: &Theme) {
+    let pct = |w: Option<f64>| w.map_or("-".to_string(), |v| format!("{:+.1}%", v * 100.0));
+    let tan = r.tangency.as_ref().map(|p| &p.weights);
+    let mv = r.min_variance.as_ref().map(|p| &p.weights);
+
+    let header = Row::new(
+        ["Ticker", "Current", "Tangency", "MinVar"]
+            .into_iter()
+            .map(|h| Cell::from(Span::styled(h, Style::default().fg(t.accent).add_modifier(Modifier::BOLD)))),
+    );
+    let rows: Vec<Row> = r
+        .tickers
+        .iter()
+        .enumerate()
+        .map(|(i, ticker)| {
+            Row::new(vec![
+                Cell::from(ticker.clone()),
+                Cell::from(pct(Some(r.current.weights[i]))),
+                Cell::from(pct(tan.map(|w| w[i]))),
+                Cell::from(pct(mv.map(|w| w[i]))),
+            ])
+        })
+        .collect();
+
+    let note = format!(" Weights ({} of {} included) ", r.included, r.total);
+    let widths = [
+        Constraint::Length(8),
+        Constraint::Length(9),
+        Constraint::Length(9),
+        Constraint::Length(9),
+    ];
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(Block::default().borders(Borders::ALL).title(note))
+        .style(Style::default().fg(t.fg));
+    f.render_widget(table, area);
+}
+
+fn draw_correlation_panel(f: &mut Frame, area: Rect, r: &crate::optimizer::OptimizerResult, t: &Theme) {
+    use crate::optimizer::correlation_rgb;
+
+    let n = r.tickers.len();
+    let short = |s: &str| s.chars().take(4).collect::<String>();
+    let header = Row::new(
+        std::iter::once(Cell::from(""))
+            .chain(r.tickers.iter().map(|s| Cell::from(short(s)))),
+    );
+
+    let rows: Vec<Row> = (0..n)
+        .map(|i| {
+            let mut cells: Vec<Cell> = Vec::with_capacity(n + 1);
+            cells.push(Cell::from(short(&r.tickers[i])));
+            for j in 0..n {
+                let (cr, cg, cb) = correlation_rgb(r.correlation[i][j]);
+                cells.push(
+                    Cell::from(format!("{:+.2}", r.correlation[i][j]))
+                        .style(Style::default().fg(Color::Rgb(cr, cg, cb))),
+                );
+            }
+            Row::new(cells)
+        })
+        .collect();
+
+    let widths: Vec<Constraint> = std::iter::repeat_n(Constraint::Length(6), n + 1).collect();
+    let table = Table::new(rows, widths)
+        .header(header.style(Style::default().fg(t.accent)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Correlation (blue −1 · red +1) "),
+        )
+        .style(Style::default().fg(t.fg));
+    f.render_widget(table, area);
 }
 
 /// Renders the Manage page body: a Holdings section above an Alerts section.

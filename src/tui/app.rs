@@ -339,7 +339,6 @@ pub struct OptimizerPageState {
     /// The last computed result, if any.
     pub result: Option<crate::optimizer::OptimizerResult>,
     /// A load error to surface, if any.
-    #[allow(dead_code)]
     pub error: Option<String>,
 }
 
