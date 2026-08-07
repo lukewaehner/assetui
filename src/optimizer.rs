@@ -153,6 +153,7 @@ pub fn portfolio_stats(weights: &[f64], mean: &[f64], cov: &[Vec<f64>], rf: f64)
 }
 
 /// Inverse of a square matrix via Gauss-Jordan elimination with partial pivoting.
+#[allow(clippy::needless_range_loop)]
 fn invert(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = mat.len();
     let mut a: Vec<Vec<f64>> = mat
@@ -176,9 +177,7 @@ fn invert(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         }
         a.swap(col, pivot);
         let d = a[col][col];
-        for j in 0..2 * n {
-            a[col][j] /= d;
-        }
+        a[col].iter_mut().for_each(|x| *x /= d);
         for r in 0..n {
             if r == col {
                 continue;
