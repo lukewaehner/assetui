@@ -133,7 +133,7 @@ mod tests {
     fn mean_returns_annualizes_the_daily_mean() {
         let r = vec![vec![0.0, 0.02, 0.01]];
         let m = mean_returns(&r);
-        approx(m[0], 0.01 * TRADING_DAYS);
+        approx(m[0], 2.52);
     }
 
     #[test]
@@ -170,5 +170,32 @@ mod tests {
         let (tickers, returns) = aligned_returns(&[("A".into(), only)]);
         assert!(tickers.is_empty());
         assert!(returns.is_empty());
+    }
+
+    #[test]
+    fn aligned_returns_rejects_exactly_min_aligned_dates() {
+        let d = |n: u32| NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(n as u64);
+        let series_a: Vec<(NaiveDate, f64)> = (0..40).map(|n| (d(n), 100.0 + n as f64)).collect();
+        let series_b: Vec<(NaiveDate, f64)> = (10..50)
+            .map(|n| (d(n), 200.0 + n as f64))
+            .collect();
+        let (tickers, returns) = aligned_returns(&[("A".into(), series_a), ("B".into(), series_b)]);
+        assert!(tickers.is_empty());
+        assert!(returns.is_empty());
+    }
+
+    #[test]
+    fn aligned_returns_accepts_one_past_min_aligned_dates() {
+        let d = |n: u32| NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(n as u64);
+        let series_a: Vec<(NaiveDate, f64)> = (0..40).map(|n| (d(n), 100.0 + n as f64)).collect();
+        let series_b: Vec<(NaiveDate, f64)> = (9..49)
+            .map(|n| (d(n), 200.0 + n as f64))
+            .collect();
+        let (tickers, returns) = aligned_returns(&[("A".into(), series_a), ("B".into(), series_b)]);
+        assert_eq!(tickers.len(), 2);
+        assert_eq!(tickers, vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(returns.len(), 2);
+        assert_eq!(returns[0].len(), 30);
+        assert_eq!(returns[1].len(), 30);
     }
 }
