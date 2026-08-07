@@ -514,7 +514,6 @@ pub struct PortfolioModal {
 
 fn sort_mode_for_key(key: char) -> Option<SortMode> {
     Some(match key {
-        'd' => SortMode::ById,
         't' => SortMode::ByTicker,
         'n' => SortMode::ByName,
         'p' => SortMode::ByPrice,
@@ -579,7 +578,7 @@ impl App {
                     table_state: TableState::default(),
                     watchlist: HashSet::new(),
                     watchlist_only: false,
-                    sort_mode: SortMode::ById,
+                    sort_mode: SortMode::ByAsOf,
                     sort_order: SortOrder::Descending,
                     page: 0,
                     page_size: 25,
@@ -1818,7 +1817,7 @@ mod tests {
         assert!(app.market.db_display.rows.is_empty());
         assert!(app.market.logs.is_empty());
         assert_eq!(app.overlay, Overlay::None);
-        assert_eq!(app.market.db_display.sort_mode, SortMode::ById);
+        assert_eq!(app.market.db_display.sort_mode, SortMode::ByAsOf);
         assert_eq!(app.market.db_display.sort_order, SortOrder::Descending);
     }
 
@@ -2379,7 +2378,7 @@ mod tests {
     #[tokio::test]
     async fn test_command_key_sort_by_price() {
         let (mut app, _rx) = make_test_app();
-        assert_eq!(app.market.db_display.sort_mode, SortMode::ById);
+        assert_eq!(app.market.db_display.sort_mode, SortMode::ByAsOf);
         app.handle_command_key('p');
         assert_eq!(app.market.db_display.sort_mode, SortMode::ByPrice);
     }

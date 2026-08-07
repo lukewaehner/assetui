@@ -248,16 +248,6 @@ async fn test_fetch_latest_per_ticker_remaining_modes(pool: sqlx::PgPool) {
         Some("ALPHA"),
         "ByAsOf DESC: third should be ALPHA"
     );
-
-    let by_id_asc = fetch_latest_per_ticker(&pool, SortMode::ById, SortOrder::Ascending, 10)
-        .await
-        .expect("fetch_latest_per_ticker ById ASC failed");
-    assert_eq!(by_id_asc.len(), 3);
-    assert_eq!(
-        by_id_asc[0].ticker.as_deref(),
-        Some("ALPHA"),
-        "ById ASC: first should be ALPHA (inserted first)"
-    );
 }
 
 #[sqlx::test]

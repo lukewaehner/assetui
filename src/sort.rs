@@ -19,13 +19,12 @@ impl SortOrder {
 /// Column to sort by when querying the quotes table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SortMode {
-    #[default]
-    ById,
     ByTicker,
     ByName,
     ByPrice,
     ByPrevClose,
     ByVolume,
+    #[default]
     ByAsOf,
 }
 
@@ -33,7 +32,6 @@ impl SortMode {
     /// The `quotes` table column this mode sorts on.
     pub fn column(&self) -> &'static str {
         match self {
-            SortMode::ById => "id",
             SortMode::ByTicker => "ticker",
             SortMode::ByName => "name",
             SortMode::ByPrice => "price",
@@ -66,7 +64,6 @@ mod tests {
     fn test_sort_mode_all_variants_are_distinct() {
         use std::collections::HashSet;
         let variants = [
-            SortMode::ById,
             SortMode::ByTicker,
             SortMode::ByName,
             SortMode::ByPrice,
