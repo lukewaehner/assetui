@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use crossterm::event::KeyCode;
 use ratatui::widgets::TableState;
 use ratatui_notifications::{
@@ -37,6 +38,11 @@ const DASHBOARD_REFRESH: Duration = Duration::from_secs(3);
 
 /// How many portfolio-value samples the dashboard sparkline retains.
 const PORTFOLIO_SERIES_CAP: usize = 120;
+
+/// How often a periodic price snapshot is persisted per subscribed ticker.
+const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(300);
+/// Rows kept per ticker in the `quotes` history (retention cap).
+const SNAPSHOT_RETENTION: i64 = 200;
 
 /// Maximum number of lines retained in the log panel.
 const MAX_LOG_LINES: usize = 500;
@@ -264,6 +270,8 @@ pub struct MarketState {
     pub dashboard: DashboardSnapshot,
     /// Time accumulated since [`Self::dashboard`] last refreshed.
     pub dashboard_age: Duration,
+    /// Time accumulated since the last periodic price snapshot was persisted.
+    pub snapshot_age: Duration,
     pub portfolio_value_series: VecDeque<f64>,
     /// The merged watchlist news feed and its load bookkeeping.
     pub news_feed: NewsFeedState,
@@ -513,6 +521,31 @@ fn sort_mode_for_key(key: char) -> Option<SortMode> {
     })
 }
 
+/// One `QuoteRecord` per subscribed, priced ticker in `rows`, stamped `now`.
+fn snapshot_records(
+    rows: &[QuoteRecord],
+    subscribed: &HashSet<String>,
+    now: DateTime<Utc>,
+) -> Vec<QuoteRecord> {
+    rows.iter()
+        .filter(|r| r.price.is_some())
+        .filter(|r| {
+            r.ticker
+                .as_deref()
+                .is_some_and(|t| subscribed.contains(&t.to_ascii_uppercase()))
+        })
+        .map(|r| QuoteRecord {
+            id: None,
+            ticker: r.ticker.clone(),
+            name: r.name.clone(),
+            price: r.price,
+            previous_close: r.previous_close,
+            day_volume: r.day_volume,
+            as_of: Some(now),
+        })
+        .collect()
+}
+
 impl App {
     /// Creates a new `App` with sensible defaults.
     pub fn new(
@@ -542,6 +575,7 @@ impl App {
                 logs: VecDeque::new(),
                 dashboard: DashboardSnapshot::default(),
                 dashboard_age: DASHBOARD_REFRESH,
+                snapshot_age: Duration::ZERO,
                 portfolio_value_series: VecDeque::new(),
                 news_feed: NewsFeedState::default(),
             },
@@ -1668,6 +1702,41 @@ mod tests {
 
     fn n_records(n: usize) -> Vec<QuoteRecord> {
         (0..n).map(|_| QuoteRecord::default()).collect()
+    }
+
+    fn priced_row(ticker: &str, price: Option<f64>) -> QuoteRecord {
+        QuoteRecord {
+            ticker: Some(ticker.into()),
+            price,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn snapshot_records_includes_only_subscribed_priced_tickers() {
+        let rows = vec![
+            priced_row("AAPL", Some(229.0)),
+            priced_row("MSFT", Some(410.0)),
+            priced_row("NVDA", None),
+            priced_row("TSLA", Some(250.0)),
+        ];
+        let subscribed: HashSet<String> =
+            ["AAPL", "MSFT", "NVDA"].iter().map(|s| s.to_string()).collect();
+        let now = Utc::now();
+
+        let out = snapshot_records(&rows, &subscribed, now);
+
+        let tickers: Vec<&str> = out.iter().filter_map(|r| r.ticker.as_deref()).collect();
+        assert_eq!(tickers, vec!["AAPL", "MSFT"]);
+        assert!(out.iter().all(|r| r.as_of == Some(now)), "stamped with now");
+        assert!(out.iter().all(|r| r.id.is_none()), "fresh rows carry no id");
+    }
+
+    #[test]
+    fn snapshot_records_matches_subscribed_case_insensitively() {
+        let rows = vec![priced_row("aapl", Some(1.0))];
+        let subscribed: HashSet<String> = ["AAPL".to_string()].into_iter().collect();
+        assert_eq!(snapshot_records(&rows, &subscribed, Utc::now()).len(), 1);
     }
 
     fn named(ticker: &str, name: &str) -> QuoteRecord {
