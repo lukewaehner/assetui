@@ -645,6 +645,12 @@ impl App {
             self.market.dashboard_age = Duration::ZERO;
         }
 
+        self.market.snapshot_age += elapsed;
+        if self.market.snapshot_age >= SNAPSHOT_INTERVAL {
+            self.record_snapshots();
+            self.market.snapshot_age = Duration::ZERO;
+        }
+
         (blinked && self.market.input_mode.is_focused())
             || self.notifications.has_notification()
             || had_flashes
@@ -662,6 +668,17 @@ impl App {
         };
         self.market.dashboard = snapshot;
         self.sample_portfolio_value();
+    }
+
+    /// Builds the current snapshot set (subscribed, priced tickers) and spawns its persistence.
+    fn record_snapshots(&self) {
+        let subscribed: HashSet<String> = self
+            .subscribed_symbols
+            .iter()
+            .map(|s| s.to_ascii_uppercase())
+            .collect();
+        let records = snapshot_records(&self.market.db_display.all_rows, &subscribed, Utc::now());
+        self.spawn_snapshot(records);
     }
 
     fn sample_portfolio_value(&mut self) {

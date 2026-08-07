@@ -10,6 +10,7 @@ use crate::AppError;
 
 use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered, remove_alert};
 use crate::db::portfolio::{list_holdings, remove_holding, upsert_holding};
+use crate::db::quotes::{prune_quotes_history, store_quote_to_db};
 use crate::models::AlertDirection;
 use crate::portfolio::Holding;
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
@@ -17,11 +18,11 @@ use crate::fetch::{
     fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_news, fetch_option_chain,
     fetch_option_chain_for_expiry, fetch_quote_and_store, fetch_sorted,
 };
-use crate::models::QuoteTick;
+use crate::models::{QuoteRecord, QuoteTick};
 use crate::tui::stream::start_quote_stream;
 use crate::tui::theme::{Appearance, parse_appearance};
 
-use super::{App, AppEvent, FetchOrigin, PAGE_FETCH_LIMIT, fetch_failure_event};
+use super::{App, AppEvent, FetchOrigin, PAGE_FETCH_LIMIT, SNAPSHOT_RETENTION, fetch_failure_event};
 
 impl App {
     pub(crate) fn spawn_reload(&self) {
@@ -491,6 +492,31 @@ impl App {
                 }
             });
         }
+    }
+
+    /// Persists each snapshot record, then prunes that ticker's history to the retention cap.
+    pub(crate) fn spawn_snapshot(&self, records: Vec<QuoteRecord>) {
+        if records.is_empty() {
+            return;
+        }
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            for rec in records {
+                let ticker = rec.ticker.clone().unwrap_or_default();
+                if let Err(e) = store_quote_to_db(&rec, &pool).await {
+                    let _ = tx.send(AppEvent::LogLine(format!(
+                        "[WARN] snapshot {ticker} failed: {e}"
+                    )));
+                    continue;
+                }
+                if let Err(e) = prune_quotes_history(&pool, &ticker, SNAPSHOT_RETENTION).await {
+                    let _ = tx.send(AppEvent::LogLine(format!(
+                        "[WARN] prune {ticker} failed: {e}"
+                    )));
+                }
+            }
+        });
     }
 }
 
