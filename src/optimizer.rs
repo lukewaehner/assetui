@@ -1,11 +1,17 @@
 //! Portfolio optimization: efficient-frontier and correlation math.
 
 use chrono::NaiveDate;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub const TRADING_DAYS: f64 = 252.0;
 /// Minimum aligned daily returns required to include a holding.
 pub const MIN_RETURN_SAMPLES: usize = 30;
+/// Annual risk-free rate used for Sharpe ratios and the tangency portfolio.
+pub const RISK_FREE_ANNUAL: f64 = 0.04;
+/// Number of random portfolios sampled for the Monte Carlo cloud.
+pub const MC_SAMPLES: usize = 5_000;
+/// Fixed PRNG seed so the sampled cloud is reproducible across runs.
+pub const MC_SEED: u64 = 0x5EED_1234_ABCD_0001;
 
 /// Log daily returns of a close series: `ln(c[i]/c[i-1])`.
 pub fn daily_returns(closes: &[f64]) -> Vec<f64> {
@@ -208,12 +214,191 @@ pub fn tangency(mean: &[f64], cov: &[Vec<f64>], rf: f64) -> Option<Portfolio> {
     Some(Portfolio { weights, point })
 }
 
+/// A tiny deterministic xorshift64* PRNG.
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Rng(seed | 1)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        ((self.next_u64() >> 11) as f64 + 1.0) / ((1u64 << 53) as f64 + 1.0)
+    }
+}
+
+fn random_simplex(rng: &mut Rng, k: usize) -> Vec<f64> {
+    let raw: Vec<f64> = (0..k).map(|_| -rng.next_f64().ln()).collect();
+    let sum: f64 = raw.iter().sum();
+    if sum > 0.0 {
+        raw.iter().map(|x| x / sum).collect()
+    } else {
+        vec![1.0 / k as f64; k]
+    }
+}
+
+pub fn sample_frontier(
+    mean: &[f64],
+    cov: &[Vec<f64>],
+    rf: f64,
+    n: usize,
+    seed: u64,
+) -> Vec<PortfolioPoint> {
+    let k = mean.len();
+    if k == 0 {
+        return Vec::new();
+    }
+    let mut rng = Rng::new(seed);
+    (0..n)
+        .map(|_| {
+            let w = random_simplex(&mut rng, k);
+            portfolio_stats(&w, mean, cov, rf)
+        })
+        .collect()
+}
+
+/// The full optimization result the Optimizer page renders.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptimizerResult {
+    /// Included tickers, index-aligned with `correlation` and every weight vec.
+    pub tickers: Vec<String>,
+    /// The Monte Carlo long-only cloud.
+    pub cloud: Vec<PortfolioPoint>,
+    /// Analytical tangency portfolio.
+    pub tangency: Option<Portfolio>,
+    /// Analytical minimum-variance portfolio.
+    pub min_variance: Option<Portfolio>,
+    /// The current allocation (weights from live market values).
+    pub current: Portfolio,
+    /// Correlation matrix over the included tickers.
+    pub correlation: Vec<Vec<f64>>,
+    /// Holdings included after dropping thin/misaligned series.
+    pub included: usize,
+    /// Holdings supplied (for the "N of M included" note).
+    pub total: usize,
+}
+
+pub fn compute_optimization(
+    histories: &[(String, Vec<(NaiveDate, f64)>)],
+    market_values: &HashMap<String, f64>,
+    rf: f64,
+    samples: usize,
+    seed: u64,
+) -> Option<OptimizerResult> {
+    let total = histories.len();
+    let (tickers, returns) = aligned_returns(histories);
+    if tickers.len() < 2 {
+        return None;
+    }
+    let included = tickers.len();
+    let mean = mean_returns(&returns);
+    let cov = covariance_matrix(&returns);
+    let correlation = correlation_matrix(&cov);
+    let cloud = sample_frontier(&mean, &cov, rf, samples, seed);
+    let tangency = tangency(&mean, &cov, rf);
+    let min_variance = min_variance(&cov, &mean, rf);
+
+    let mvs: Vec<f64> = tickers.iter().map(|t| *market_values.get(t).unwrap_or(&0.0)).collect();
+    let total_mv: f64 = mvs.iter().sum();
+    let current_weights: Vec<f64> = if total_mv > 0.0 {
+        mvs.iter().map(|v| v / total_mv).collect()
+    } else {
+        vec![1.0 / included as f64; included]
+    };
+    let current = Portfolio {
+        point: portfolio_stats(&current_weights, &mean, &cov, rf),
+        weights: current_weights,
+    };
+
+    Some(OptimizerResult {
+        tickers,
+        cloud,
+        tangency,
+        min_variance,
+        current,
+        correlation,
+        included,
+        total,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn approx(a: f64, b: f64) {
         assert!((a - b).abs() < 1e-9, "expected {b}, got {a}");
+    }
+
+    #[test]
+    fn random_simplex_weights_are_nonnegative_and_sum_to_one() {
+        let mut rng = Rng::new(42);
+        for _ in 0..100 {
+            let w = random_simplex(&mut rng, 4);
+            assert_eq!(w.len(), 4);
+            assert!(w.iter().all(|&x| x >= 0.0));
+            approx(w.iter().sum::<f64>(), 1.0);
+        }
+    }
+
+    #[test]
+    fn sample_frontier_is_deterministic_for_a_seed() {
+        let cov = vec![vec![0.04, 0.0], vec![0.0, 0.09]];
+        let a = sample_frontier(&[0.10, 0.15], &cov, 0.0, 500, 7);
+        let b = sample_frontier(&[0.10, 0.15], &cov, 0.0, 500, 7);
+        assert_eq!(a.len(), 500);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn sample_frontier_points_are_finite() {
+        let cov = vec![vec![0.04, 0.01], vec![0.01, 0.09]];
+        let cloud = sample_frontier(&[0.10, 0.15], &cov, 0.0, 200, 1);
+        assert!(cloud.iter().all(|p| p.risk.is_finite() && p.ret.is_finite() && p.sharpe.is_finite()));
+    }
+
+    fn d(n: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(n as u64)
+    }
+
+    #[test]
+    fn compute_optimization_two_holdings_produces_a_result() {
+        let a: Vec<(NaiveDate, f64)> = (0..40).map(|n| (d(n), 100.0 + n as f64)).collect();
+        let b: Vec<(NaiveDate, f64)> = (0..40).map(|n| (d(n), 50.0 + (n as f64) * 0.5)).collect();
+        let mut mv = std::collections::HashMap::new();
+        mv.insert("A".to_string(), 6000.0);
+        mv.insert("B".to_string(), 4000.0);
+        let res = compute_optimization(
+            &[("A".into(), a), ("B".into(), b)],
+            &mv,
+            0.0,
+            500,
+            7,
+        )
+        .expect("two priced holdings optimize");
+        assert_eq!(res.tickers, vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(res.included, 2);
+        assert_eq!(res.total, 2);
+        assert_eq!(res.cloud.len(), 500);
+        assert_eq!(res.correlation.len(), 2);
+        approx(res.current.weights[0], 0.6);
+        approx(res.current.weights[1], 0.4);
+    }
+
+    #[test]
+    fn compute_optimization_fewer_than_two_usable_is_none() {
+        let a: Vec<(NaiveDate, f64)> = (0..40).map(|n| (d(n), 100.0 + n as f64)).collect();
+        let mv = std::collections::HashMap::new();
+        assert!(compute_optimization(&[("A".into(), a)], &mv, 0.0, 100, 7).is_none());
     }
 
     #[test]

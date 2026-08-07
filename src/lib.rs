@@ -7,6 +7,7 @@ pub mod fetch;
 pub mod indicators;
 pub mod models;
 pub mod news_feed;
+pub mod optimizer;
 pub mod portfolio;
 pub mod run;
 pub mod search;
