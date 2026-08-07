@@ -557,6 +557,19 @@ pub(crate) fn group_spark_series(rows: Vec<(String, f64)>) -> HashMap<String, Ve
     map
 }
 
+pub(crate) fn append_spark_point(
+    series: &mut HashMap<String, Vec<f64>>,
+    ticker: &str,
+    price: f64,
+    cap: usize,
+) {
+    let points = series.entry(ticker.to_string()).or_default();
+    points.push(price);
+    if cap > 0 && points.len() > cap {
+        points.drain(0..points.len() - cap);
+    }
+}
+
 impl App {
     /// Creates a new `App` with sensible defaults.
     pub fn new(
@@ -683,13 +696,23 @@ impl App {
     }
 
     /// Builds the current snapshot set (subscribed, priced tickers) and spawns its persistence.
-    fn record_snapshots(&self) {
+    fn record_snapshots(&mut self) {
         let subscribed: HashSet<String> = self
             .subscribed_symbols
             .iter()
             .map(|s| s.to_ascii_uppercase())
             .collect();
         let records = snapshot_records(&self.market.db_display.all_rows, &subscribed, Utc::now());
+        for rec in &records {
+            if let (Some(ticker), Some(price)) = (rec.ticker.as_deref(), rec.price) {
+                append_spark_point(
+                    &mut self.market.db_display.spark_series,
+                    ticker,
+                    price,
+                    SNAPSHOT_RETENTION as usize,
+                );
+            }
+        }
         self.spawn_snapshot(records);
     }
 
@@ -791,6 +814,14 @@ impl App {
                         .db_display
                         .all_rows
                         .retain(|r| r.ticker.as_deref().map(str::to_ascii_uppercase) != Some(up.clone()));
+                }
+                if let (Some(ticker), Some(price)) = (record.ticker.as_deref(), record.price) {
+                    append_spark_point(
+                        &mut self.market.db_display.spark_series,
+                        ticker,
+                        price,
+                        SNAPSHOT_RETENTION as usize,
+                    );
                 }
                 self.market.db_display.all_rows.insert(0, record);
                 self.apply_filter();
@@ -1979,6 +2010,42 @@ mod tests {
         app.handle_event(AppEvent::SparkSeriesLoaded(series));
 
         assert_eq!(app.market.db_display.spark_series.get("AAPL"), Some(&vec![1.0, 2.0]));
+    }
+
+    #[test]
+    fn append_spark_point_appends_and_creates_entries() {
+        let mut series: HashMap<String, Vec<f64>> = HashMap::new();
+        append_spark_point(&mut series, "AAPL", 100.0, 200);
+        append_spark_point(&mut series, "AAPL", 101.0, 200);
+        append_spark_point(&mut series, "MSFT", 400.0, 200);
+        assert_eq!(series.get("AAPL"), Some(&vec![100.0, 101.0]));
+        assert_eq!(series.get("MSFT"), Some(&vec![400.0]));
+    }
+
+    #[test]
+    fn append_spark_point_trims_to_cap_keeping_newest() {
+        let mut series: HashMap<String, Vec<f64>> = HashMap::new();
+        for i in 0..5 {
+            append_spark_point(&mut series, "AAPL", i as f64, 3);
+        }
+        assert_eq!(series.get("AAPL"), Some(&vec![2.0, 3.0, 4.0]));
+    }
+
+    #[tokio::test]
+    async fn fetch_completed_extends_the_spark_series_live() {
+        let (mut app, _rx) = make_test_app();
+        app.market.db_display.spark_series.insert("AAPL".to_string(), vec![100.0]);
+
+        app.handle_event(AppEvent::FetchCompleted(QuoteRecord {
+            ticker: Some("AAPL".into()),
+            price: Some(105.0),
+            ..Default::default()
+        }));
+
+        assert_eq!(
+            app.market.db_display.spark_series.get("AAPL"),
+            Some(&vec![100.0, 105.0])
+        );
     }
 
     #[tokio::test]
