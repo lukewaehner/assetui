@@ -429,7 +429,7 @@ impl App {
                     let _ = tx.send(AppEvent::PortfolioHistoryLoaded(history));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!(
+                    let _ = tx.send(AppEvent::PortfolioHistoryFailed(format!(
                         "Failed to load portfolio history: {e}"
                     )));
                 }

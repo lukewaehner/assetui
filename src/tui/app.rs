@@ -106,6 +106,8 @@ pub enum AppEvent {
     },
     /// The persisted daily portfolio history, loaded once at startup.
     PortfolioHistoryLoaded(Vec<(chrono::NaiveDate, f64, f64)>),
+    /// The startup `load_history` query failed.
+    PortfolioHistoryFailed(String),
     /// Per-holding one-year close histories for the optimizer, ready to compute.
     OptimizerDataReady {
         histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)>,
@@ -379,6 +381,8 @@ pub struct App {
     pub show_logs: bool,
     pub help_modal: crate::tui::components::help::HelpModal,
     pub earnings_modal: crate::tui::components::earnings::EarningsModal,
+    /// Set once a live price has landed this session.
+    pub(crate) has_live_prices: bool,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -664,6 +668,7 @@ impl App {
             show_logs: false,
             help_modal: crate::tui::components::help::HelpModal::new(),
             earnings_modal: crate::tui::components::earnings::EarningsModal::new(),
+            has_live_prices: false,
         }
     }
 
@@ -696,8 +701,7 @@ impl App {
         }
 
         self.market.history_age += elapsed;
-        if self.market.history_age >= HISTORY_SAMPLE_INTERVAL {
-            self.record_history_sample();
+        if self.market.history_age >= HISTORY_SAMPLE_INTERVAL && self.record_history_sample() {
             self.market.history_age = Duration::ZERO;
         }
 
@@ -759,6 +763,9 @@ impl App {
 
     /// Current totals if they are safe to persist, else `None`.
     pub(crate) fn persistable_totals_now(&self) -> Option<(f64, f64)> {
+        if !self.has_live_prices {
+            return None;
+        }
         let positions = crate::portfolio::portfolio_positions(
             &self.holdings,
             &self.market.db_display.all_rows,
@@ -767,9 +774,9 @@ impl App {
     }
 
     /// Writes the day's portfolio totals on the [`HISTORY_SAMPLE_INTERVAL`] throttle.
-    fn record_history_sample(&mut self) {
+    fn record_history_sample(&mut self) -> bool {
         let Some((market_value, cost_basis)) = self.persistable_totals_now() else {
-            return;
+            return false;
         };
         let day = chrono::Local::now().date_naive();
         match self
@@ -779,12 +786,13 @@ impl App {
             .find(|(d, _, _)| *d == day)
         {
             Some(row) => *row = (day, market_value, cost_basis),
-            None => self
-                .portfolio_modal
-                .history
-                .push((day, market_value, cost_basis)),
+            None => {
+                self.portfolio_modal.history.push((day, market_value, cost_basis));
+                self.portfolio_modal.history.sort_unstable_by_key(|(d, _, _)| *d);
+            }
         }
         self.spawn_history_sample(day, market_value, cost_basis);
+        true
     }
 
     pub fn status_mode(&self) -> (StatusMode, &'static str) {
@@ -864,6 +872,7 @@ impl App {
                 self.push_log(format!("[INFO] fetching {symbol}"));
             }
             AppEvent::FetchCompleted(record) => {
+                self.has_live_prices = true;
                 let name = record.ticker.as_deref().unwrap_or("?");
                 self.market.db_display.status = format!("stored {name}");
                 self.push_log(format!("[SUCCESS] stored {name}"));
@@ -932,6 +941,7 @@ impl App {
                 self.push_error(message);
             }
             AppEvent::QuoteTick(tick) => {
+                self.has_live_prices = true;
                 self.materialize_held_ticker_row(&tick);
                 tick.apply(&mut self.market.db_display.all_rows, &mut HashMap::new());
                 let range = self.market.db_display.window_range();
@@ -965,6 +975,10 @@ impl App {
             AppEvent::PortfolioHistoryLoaded(history) => {
                 self.portfolio_modal.history = history;
                 self.portfolio_modal.loading = false;
+            }
+            AppEvent::PortfolioHistoryFailed(message) => {
+                self.portfolio_modal.loading = false;
+                self.push_error(message);
             }
             AppEvent::OptimizerDataReady { histories } => {
                 use crate::optimizer::{MC_SAMPLES, MC_SEED, RISK_FREE_ANNUAL, compute_optimization};
@@ -3159,6 +3173,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_portfolio_history_failed_clears_loading() {
+        let (mut app, _rx) = make_test_app();
+        app.portfolio_modal.loading = true;
+
+        app.handle_event(AppEvent::PortfolioHistoryFailed("db unreachable".to_string()));
+
+        assert!(!app.portfolio_modal.loading);
+    }
+
+    #[tokio::test]
+    async fn test_portfolio_history_failed_surfaces_the_error_in_the_log_panel() {
+        let (mut app, _rx) = make_test_app();
+
+        app.handle_event(AppEvent::PortfolioHistoryFailed(
+            "Failed to load portfolio history: db unreachable".to_string(),
+        ));
+
+        assert!(
+            app.market
+                .logs
+                .iter()
+                .any(|line| line.contains("Failed to load portfolio history: db unreachable")),
+            "expected the failure message in the log panel, got {:?}",
+            app.market.logs
+        );
+    }
+
+    #[tokio::test]
     async fn test_opening_the_portfolio_modal_does_not_refetch() {
         let (mut app, _rx) = make_test_app();
         let day = chrono::NaiveDate::from_ymd_opt(2026, 8, 18).unwrap();
@@ -3168,6 +3210,117 @@ mod tests {
 
         assert!(!app.portfolio_modal.loading);
         assert_eq!(app.portfolio_modal.history, vec![(day, 1100.0, 1000.0)]);
+    }
+
+    #[tokio::test]
+    async fn test_persistable_totals_now_is_none_before_any_live_price() {
+        let (mut app, _rx) = make_test_app();
+        app.holdings = vec![holding_for("AAPL")];
+        app.handle_event(AppEvent::PageLoaded(vec![priced_row("AAPL", Some(150.0))]));
+
+        assert_eq!(app.persistable_totals_now(), None);
+    }
+
+    #[tokio::test]
+    async fn test_page_loaded_does_not_count_as_a_live_price() {
+        let (mut app, _rx) = make_test_app();
+
+        app.handle_event(AppEvent::PageLoaded(vec![priced_row("AAPL", Some(150.0))]));
+
+        assert!(!app.has_live_prices);
+    }
+
+    #[tokio::test]
+    async fn test_quote_tick_marks_a_live_price_as_landed() {
+        let (mut app, _rx) = make_test_app();
+
+        app.handle_event(AppEvent::QuoteTick(price_tick("AAPL", Some(150.0))));
+
+        assert!(app.has_live_prices);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_completed_marks_a_live_price_as_landed() {
+        let (mut app, _rx) = make_test_app();
+
+        app.handle_event(AppEvent::FetchCompleted(priced_row("AAPL", Some(150.0))));
+
+        assert!(app.has_live_prices);
+    }
+
+    #[tokio::test]
+    async fn test_persistable_totals_now_returns_totals_once_a_live_price_has_landed() {
+        let (mut app, _rx) = make_test_app();
+        app.holdings = vec![holding_for("AAPL")];
+        app.handle_event(AppEvent::FetchCompleted(priced_row("AAPL", Some(150.0))));
+
+        assert_eq!(app.persistable_totals_now(), Some((1500.0, 1000.0)));
+    }
+
+    #[tokio::test]
+    async fn test_record_history_sample_appends_a_new_day() {
+        let (mut app, _rx) = make_test_app();
+        app.holdings = vec![holding_for("AAPL")];
+        app.handle_event(AppEvent::FetchCompleted(priced_row("AAPL", Some(150.0))));
+        let day = chrono::Local::now().date_naive();
+
+        let recorded = app.record_history_sample();
+
+        assert!(recorded, "expected a fully-priced, live sample to record");
+        assert_eq!(app.portfolio_modal.history, vec![(day, 1500.0, 1000.0)]);
+    }
+
+    #[tokio::test]
+    async fn test_record_history_sample_keeps_the_series_sorted_when_today_is_earlier_than_an_existing_entry() {
+        let (mut app, _rx) = make_test_app();
+        let day = chrono::Local::now().date_naive();
+        let future_day = day + chrono::Duration::days(1);
+        app.portfolio_modal.history = vec![(future_day, 500.0, 400.0)];
+        app.holdings = vec![holding_for("AAPL")];
+        app.handle_event(AppEvent::FetchCompleted(priced_row("AAPL", Some(150.0))));
+
+        app.record_history_sample();
+
+        assert_eq!(
+            app.portfolio_modal.history,
+            vec![(day, 1500.0, 1000.0), (future_day, 500.0, 400.0)]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_record_history_sample_replaces_todays_row_on_a_second_call() {
+        let (mut app, _rx) = make_test_app();
+        app.holdings = vec![holding_for("AAPL")];
+        app.handle_event(AppEvent::FetchCompleted(priced_row("AAPL", Some(150.0))));
+        app.record_history_sample();
+
+        app.handle_event(AppEvent::FetchCompleted(priced_row("AAPL", Some(160.0))));
+        app.record_history_sample();
+
+        let day = chrono::Local::now().date_naive();
+        assert_eq!(app.portfolio_modal.history, vec![(day, 1600.0, 1000.0)]);
+    }
+
+    #[tokio::test]
+    async fn test_tick_does_not_reset_history_age_when_the_sample_is_skipped() {
+        let (mut app, _rx) = make_test_app();
+        app.market.history_age = HISTORY_SAMPLE_INTERVAL;
+
+        app.tick(Duration::ZERO);
+
+        assert!(app.market.history_age >= HISTORY_SAMPLE_INTERVAL);
+    }
+
+    #[tokio::test]
+    async fn test_tick_resets_history_age_after_a_successful_sample() {
+        let (mut app, _rx) = make_test_app();
+        app.holdings = vec![holding_for("AAPL")];
+        app.handle_event(AppEvent::FetchCompleted(priced_row("AAPL", Some(150.0))));
+        app.market.history_age = HISTORY_SAMPLE_INTERVAL;
+
+        app.tick(Duration::ZERO);
+
+        assert_eq!(app.market.history_age, Duration::ZERO);
     }
 
     #[tokio::test]
