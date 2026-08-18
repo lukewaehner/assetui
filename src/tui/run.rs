@@ -33,8 +33,35 @@ pub async fn run(pool: sqlx::PgPool, client: YfClient) -> Result<(), AppError> {
     Ok(result?)
 }
 
-/// Main event loop.
+/// Runs the event loop to completion, then always runs teardown before returning.
 async fn run_loop<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
+) -> io::Result<()>
+where
+    io::Error: From<B::Error>,
+{
+    let outcome = drive_event_loop(terminal, app, event_rx).await;
+
+    if let Some(handle) = app.stream_handle.take() {
+        handle.stop().await;
+    }
+
+    if let Some((market_value, cost_basis)) = app.persistable_totals_now() {
+        let day = chrono::Local::now().date_naive();
+        if let Err(e) =
+            crate::db::portfolio_history::upsert_day(&app.services.pool, day, market_value, cost_basis)
+                .await
+        {
+            tracing::warn!("final portfolio history sample failed: {e}");
+        }
+    }
+
+    outcome
+}
+
+async fn drive_event_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
@@ -79,18 +106,5 @@ where
         }
     }
 
-    if let Some(handle) = app.stream_handle.take() {
-        handle.stop().await;
-    }
-
-    if let Some((market_value, cost_basis)) = app.persistable_totals_now() {
-        let day = chrono::Local::now().date_naive();
-        if let Err(e) =
-            crate::db::portfolio_history::upsert_day(&app.services.pool, day, market_value, cost_basis)
-                .await
-        {
-            tracing::warn!("final portfolio history sample failed: {e}");
-        }
-    }
     Ok(())
 }
