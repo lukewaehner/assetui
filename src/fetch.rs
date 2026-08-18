@@ -1,15 +1,16 @@
 //! Yahoo Finance API integration.
 
-use tokio::try_join;
+use tokio::{join, try_join};
 use tracing::{debug, instrument};
 use yfinance_rs::{
     AnalysisBuilder, AssetKind, Candle, HistoryBuilder, Interval, Range, Ticker, YfClient,
 };
 
 use chrono::{DateTime, Utc};
-use yfinance_rs::{CacheMode, OptionContract as YfOptionContract, OptionSide};
+use yfinance_rs::{CacheMode, Earnings, OptionContract as YfOptionContract, OptionSide, YfError};
 
 use crate::black_scholes::OptionKind;
+use crate::earnings::{QuarterEps, QuarterRevenue, TickerEarnings, next_report_date};
 use crate::models::{
     NewsItem, OptionChain, OptionContract, QuoteRecordAnalysis, QuoteRecordStatistics, StockNews,
 };
@@ -174,6 +175,64 @@ pub async fn fetch_news(client: &YfClient, symbol: &str) -> Result<StockNews, Ap
     Ok(StockNews {
         ticker: Some(symbol.to_string()),
         items,
+    })
+}
+
+/// How many quarters of history to keep.
+const EARNINGS_QUARTERS: usize = 8;
+
+/// Fetches quarterly earnings history and the next scheduled report date.
+#[instrument(skip(client), fields(symbol = %symbol))]
+pub async fn fetch_earnings(client: &YfClient, symbol: &str) -> Result<TickerEarnings, AppError> {
+    let ticker = Ticker::new(client, symbol).cache_mode(CacheMode::Use);
+    let (earnings_result, calendar_result) = join!(ticker.earnings(None), ticker.calendar());
+
+    let earnings = match earnings_result {
+        Ok(e) => e,
+        Err(YfError::NotFound { .. }) => {
+            debug!("no earnings module for this instrument");
+            Earnings::default()
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let next_report = match calendar_result {
+        Ok(calendar) => next_report_date(&calendar.earnings_dates, Utc::now()),
+        Err(YfError::NotFound { .. }) => {
+            debug!("no calendar module for this instrument");
+            None
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let eps = earnings
+        .quarterly_eps
+        .iter()
+        .rev()
+        .take(EARNINGS_QUARTERS)
+        .map(|q| QuarterEps {
+            period: q.period.to_string(),
+            estimate: q.estimate.as_ref().map(|p| p.amount().as_f64()),
+            actual: q.actual.as_ref().map(|p| p.amount().as_f64()),
+        })
+        .collect();
+    let revenue = earnings
+        .quarterly
+        .iter()
+        .rev()
+        .take(EARNINGS_QUARTERS)
+        .map(|q| QuarterRevenue {
+            period: q.period.to_string(),
+            revenue: q.revenue.as_ref().map(|m| m.amount().as_f64()),
+        })
+        .collect();
+
+    debug!(quarters = EARNINGS_QUARTERS, "earnings fetched");
+
+    Ok(TickerEarnings {
+        ticker: symbol.to_string(),
+        eps,
+        revenue,
+        next_report,
     })
 }
 

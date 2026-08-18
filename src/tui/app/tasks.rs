@@ -15,9 +15,9 @@ use crate::models::AlertDirection;
 use crate::portfolio::Holding;
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
-    fetch_analysis, fetch_chart_data, fetch_key_statistics, fetch_latest_per_ticker, fetch_news,
-    fetch_option_chain, fetch_option_chain_for_expiry, fetch_quote_and_store, fetch_return_history,
-    fetch_spark_series,
+    fetch_analysis, fetch_chart_data, fetch_earnings, fetch_key_statistics,
+    fetch_latest_per_ticker, fetch_news, fetch_option_chain, fetch_option_chain_for_expiry,
+    fetch_quote_and_store, fetch_return_history, fetch_spark_series,
 };
 use crate::models::{QuoteRecord, QuoteTick};
 use crate::tui::stream::start_quote_stream;
@@ -176,6 +176,15 @@ impl App {
                 fetch_option_chain_for_expiry(&client, &symbol, expiry).await
             },
             AppEvent::OptionChainReady,
+        );
+    }
+
+    pub(crate) fn spawn_earnings(&self, symbol: &str) {
+        self.spawn_client_fetch(
+            symbol.to_owned(),
+            "earnings",
+            |client, symbol| async move { fetch_earnings(&client, &symbol).await },
+            AppEvent::EarningsReady,
         );
     }
 

@@ -78,6 +78,8 @@ pub enum AppEvent {
     ChartDataReady(Vec<Candle>),
     /// Options chain (expirations + contracts) loaded for the selected stock.
     OptionChainReady(OptionChain),
+    /// Quarterly earnings history loaded for the selected stock.
+    EarningsReady(crate::earnings::TickerEarnings),
     /// Active price alerts loaded from the database at startup.
     AlertsLoaded(Vec<Alert>),
     /// Portfolio holdings loaded from the database at startup.
@@ -875,6 +877,10 @@ impl App {
                 let last = chain.expirations.len().saturating_sub(1);
                 self.stock_modal.selected_expiry = self.stock_modal.selected_expiry.min(last);
                 self.stock_modal.option_chain = Some(chain);
+            }
+            AppEvent::EarningsReady(data) => {
+                self.earnings_modal.loading = false;
+                self.earnings_modal.data = Some(data);
             }
             AppEvent::QuoteTick(tick) => {
                 self.materialize_held_ticker_row(&tick);
@@ -1783,7 +1789,19 @@ impl App {
         let ticker = stock.ticker.clone();
         self.stock_modal.stock = stock;
         self.overlay = Overlay::Earnings;
-        self.earnings_modal.ticker = ticker;
+        self.earnings_modal.ticker = ticker.clone();
+
+        let has_earnings = self
+            .earnings_modal
+            .data
+            .as_ref()
+            .is_some_and(|e| Some(&e.ticker) == ticker.as_ref());
+
+        if !has_earnings && let Some(t) = ticker.as_deref() {
+            self.earnings_modal.data = None;
+            self.earnings_modal.loading = true;
+            self.spawn_earnings(t);
+        }
     }
 
     /// Opens the portfolio performance modal and kicks off the history fetch.
@@ -2450,6 +2468,60 @@ mod tests {
         app.handle_command_key('e');
 
         assert_eq!(app.overlay, Overlay::None);
+    }
+
+    fn earnings_for(ticker: &str) -> crate::earnings::TickerEarnings {
+        crate::earnings::TickerEarnings {
+            ticker: ticker.to_string(),
+            eps: vec![crate::earnings::QuarterEps {
+                period: "2026Q2".to_string(),
+                estimate: Some(2.00),
+                actual: Some(2.20),
+            }],
+            revenue: Vec::new(),
+            next_report: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_earnings_ready_stores_data_and_clears_loading() {
+        let (mut app, _rx) = make_test_app();
+        app.earnings_modal.loading = true;
+
+        app.handle_event(AppEvent::EarningsReady(earnings_for("AAPL")));
+
+        assert_eq!(
+            app.earnings_modal.data.as_ref().map(|e| e.ticker.as_str()),
+            Some("AAPL")
+        );
+        assert!(!app.earnings_modal.loading);
+    }
+
+    #[tokio::test]
+    async fn test_open_earnings_reuses_cached_data_for_the_same_ticker() {
+        // arrange
+        let mut app = app_with_three_stocks();
+        app.earnings_modal.data = Some(earnings_for("AAPL"));
+
+        // act
+        app.handle_command_key('e');
+
+        // assert
+        assert!(!app.earnings_modal.loading);
+    }
+
+    #[tokio::test]
+    async fn test_open_earnings_drops_stale_data_for_a_different_ticker() {
+        // arrange
+        let mut app = app_with_three_stocks();
+        app.earnings_modal.data = Some(earnings_for("TSLA"));
+
+        // act
+        app.handle_command_key('e');
+
+        // assert
+        assert!(app.earnings_modal.data.is_none());
+        assert!(app.earnings_modal.loading);
     }
 
     #[tokio::test]
