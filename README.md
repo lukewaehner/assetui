@@ -6,7 +6,7 @@ A Rust tool for pulling stock quotes from Yahoo Finance and keeping a local hist
 
 Every fetch stores a timestamped snapshot of a quote (price, previous close, volume) in Postgres. Duplicate fetches - same ticker at the same `as_of` timestamp - are silently ignored, so you can run it on a schedule without cluttering the table.
 
-The TUI loads your most recent 200 quotes on startup, pages through them, and lets you sort by any column. Three modals cover the selected stock: an info modal (press `s`) with analyst consensus and price targets, a chart modal (press `Enter`) that plots recent price history, and an options modal (press `x`) that shows the option chain for a selectable expiry with side-by-side calls and puts, each contract's implied volatility, and a Black-Scholes theoretical price and Greeks. While you're browsing, the rows on the current page update live from Yahoo's streaming feed - price cells flash green or red in the tick direction - and the colour theme follows your macOS light/dark setting.
+The TUI loads your most recent 200 quotes on startup, pages through them, and lets you sort by any column. Four modals cover the selected stock: an info modal (press `s`) with analyst consensus and price targets, a chart modal (press `Enter`) that plots recent price history, an options modal (press `x`) that shows the option chain for a selectable expiry with side-by-side calls and puts, each contract's implied volatility, and a Black-Scholes theoretical price and Greeks, and an earnings modal (press `e`) with quarterly EPS estimates vs actuals and their surprise, a revenue trend, and the next scheduled report date. While you're browsing, the rows on the current page update live from Yahoo's streaming feed - price cells flash green or red in the tick direction - and the colour theme follows your macOS light/dark setting.
 
 ## Setup
 
@@ -49,6 +49,7 @@ cargo run
 | `h` / `l` | Previous / next page |
 | `s` | Open the info modal |
 | `x` | Open the options modal (chain, IV, and Greeks) for the selected row |
+| `e` | Open the earnings modal (EPS surprise, revenue trend, next report) for the selected row |
 | `Tab` | Open the page picker (Market / Manage / Sectors / News / Optimizer) |
 | `r` | On the Optimizer page: refetch history and recompute |
 | `?` | Open the help modal |
