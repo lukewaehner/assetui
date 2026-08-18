@@ -40,7 +40,7 @@ impl EarningsModal {
         let title = block_title(format!("{ticker} · earnings"), t);
         let (content, footer) = modal_frame(f, 60, 60, title, t);
 
-        let Some(data) = self.data.as_ref() else {
+        let Some(data) = self.data.as_ref().filter(|d| !d.is_empty()) else {
             let msg = if self.loading {
                 "loading earnings…"
             } else {
@@ -136,6 +136,70 @@ fn fmt_surprise(value: Option<f64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::earnings::QuarterEps;
+    use crate::tui::theme::Appearance;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn draw_shows_surprise_column_for_a_beat_and_a_miss() {
+        // arrange
+        let mut modal = EarningsModal::new();
+        modal.ticker = Some("AAPL".to_string());
+        modal.data = Some(TickerEarnings {
+            ticker: "AAPL".to_string(),
+            eps: vec![
+                QuarterEps {
+                    period: "2Q2026".to_string(),
+                    estimate: Some(2.0),
+                    actual: Some(2.5),
+                },
+                QuarterEps {
+                    period: "1Q2026".to_string(),
+                    estimate: Some(2.0),
+                    actual: Some(1.5),
+                },
+            ],
+            revenue: vec![],
+            next_report: None,
+        });
+        let theme = Theme::for_appearance(Appearance::Dark);
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+
+        // act
+        terminal.draw(|f| modal.draw(f, &theme)).unwrap();
+
+        // assert
+        let text = buffer_text(&terminal);
+        assert!(text.contains("SURPRISE"), "surprise column header is drawn");
+        assert!(text.contains("+25.0%"), "the beat's surprise percentage is drawn");
+        assert!(text.contains("-25.0%"), "the miss's surprise percentage is drawn");
+    }
+
+    #[test]
+    fn draw_shows_no_earnings_data_for_vacuous_data() {
+        // arrange
+        let mut modal = EarningsModal::new();
+        modal.ticker = Some("SPY".to_string());
+        modal.data = Some(TickerEarnings::default());
+        let theme = Theme::for_appearance(Appearance::Dark);
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+
+        // act
+        terminal.draw(|f| modal.draw(f, &theme)).unwrap();
+
+        // assert
+        assert!(buffer_text(&terminal).contains("no earnings data"));
+    }
 
     #[test]
     fn fmt_eps_shows_two_decimals() {

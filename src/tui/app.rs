@@ -770,7 +770,7 @@ impl App {
         } else if self.overlay == Overlay::Info {
             (StatusMode::View, "s info · enter chart · esc close")
         } else if self.overlay == Overlay::Earnings {
-            (StatusMode::View, "esc close")
+            (StatusMode::View, "q/e/esc close")
         } else if self.page == Page::Sectors {
             (
                 StatusMode::Sectors,
@@ -2073,6 +2073,22 @@ mod tests {
         assert_eq!(
             (mode, mode.label(), hint),
             (StatusMode::Options, "VIEW", "h/l expiry · esc close")
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mode_is_view_with_earnings_hint_when_earnings_overlay_open() {
+        // arrange
+        let (mut app, _rx) = make_test_app();
+        app.overlay = Overlay::Earnings;
+
+        // act
+        let (mode, hint) = app.status_mode();
+
+        // assert
+        assert_eq!(
+            (mode, mode.label(), hint),
+            (StatusMode::View, "VIEW", "q/e/esc close")
         );
     }
 

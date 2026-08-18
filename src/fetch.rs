@@ -204,7 +204,7 @@ pub async fn fetch_earnings(client: &YfClient, symbol: &str) -> Result<TickerEar
         Err(e) => return Err(e.into()),
     };
 
-    let eps = earnings
+    let eps: Vec<QuarterEps> = earnings
         .quarterly_eps
         .iter()
         .rev()
@@ -215,7 +215,7 @@ pub async fn fetch_earnings(client: &YfClient, symbol: &str) -> Result<TickerEar
             actual: q.actual.as_ref().map(|p| p.amount().as_f64()),
         })
         .collect();
-    let revenue = earnings
+    let revenue: Vec<QuarterRevenue> = earnings
         .quarterly
         .iter()
         .rev()
@@ -226,7 +226,7 @@ pub async fn fetch_earnings(client: &YfClient, symbol: &str) -> Result<TickerEar
         })
         .collect();
 
-    debug!(quarters = EARNINGS_QUARTERS, "earnings fetched");
+    debug!(eps_quarters = eps.len(), revenue_quarters = revenue.len(), "earnings fetched");
 
     Ok(TickerEarnings {
         ticker: symbol.to_string(),

@@ -35,6 +35,13 @@ pub struct TickerEarnings {
     pub next_report: Option<NaiveDate>,
 }
 
+impl TickerEarnings {
+    /// True when there is nothing to show: no EPS rows and no revenue rows.
+    pub fn is_empty(&self) -> bool {
+        self.eps.is_empty() && self.revenue.is_empty()
+    }
+}
+
 pub fn surprise_pct(estimate: Option<f64>, actual: Option<f64>) -> Option<f64> {
     let (estimate, actual) = (estimate?, actual?);
     if estimate == 0.0 || !estimate.is_finite() || !actual.is_finite() {
@@ -118,5 +125,37 @@ mod tests {
     #[test]
     fn next_report_date_is_none_for_an_empty_calendar() {
         assert_eq!(next_report_date(&[], dt(2026, 8, 18)), None);
+    }
+
+    #[test]
+    fn is_empty_is_true_when_both_eps_and_revenue_are_empty() {
+        assert!(TickerEarnings::default().is_empty());
+    }
+
+    #[test]
+    fn is_empty_is_false_when_eps_has_a_row() {
+        let earnings = TickerEarnings {
+            eps: vec![QuarterEps {
+                period: "2Q2026".to_string(),
+                estimate: Some(1.0),
+                actual: Some(1.1),
+            }],
+            ..TickerEarnings::default()
+        };
+
+        assert!(!earnings.is_empty());
+    }
+
+    #[test]
+    fn is_empty_is_false_when_revenue_has_a_row() {
+        let earnings = TickerEarnings {
+            revenue: vec![QuarterRevenue {
+                period: "2Q2026".to_string(),
+                revenue: Some(1_000_000.0),
+            }],
+            ..TickerEarnings::default()
+        };
+
+        assert!(!earnings.is_empty());
     }
 }
