@@ -82,5 +82,15 @@ where
     if let Some(handle) = app.stream_handle.take() {
         handle.stop().await;
     }
+
+    if let Some((market_value, cost_basis)) = app.persistable_totals_now() {
+        let day = chrono::Local::now().date_naive();
+        if let Err(e) =
+            crate::db::portfolio_history::upsert_day(&app.services.pool, day, market_value, cost_basis)
+                .await
+        {
+            tracing::warn!("final portfolio history sample failed: {e}");
+        }
+    }
     Ok(())
 }

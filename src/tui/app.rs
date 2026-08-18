@@ -44,6 +44,9 @@ const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(300);
 /// Rows kept per ticker in the `quotes` history (retention cap).
 const SNAPSHOT_RETENTION: i64 = 200;
 
+/// How often the portfolio's totals are written to `portfolio_value_history`.
+const HISTORY_SAMPLE_INTERVAL: Duration = Duration::from_secs(300);
+
 /// Maximum number of lines retained in the log panel.
 const MAX_LOG_LINES: usize = 500;
 
@@ -276,6 +279,8 @@ pub struct MarketState {
     pub dashboard_age: Duration,
     /// Time accumulated since the last periodic price snapshot was persisted.
     pub snapshot_age: Duration,
+    /// Compared against [`HISTORY_SAMPLE_INTERVAL`] to throttle history writes.
+    pub history_age: Duration,
     pub portfolio_value_series: VecDeque<f64>,
     /// The merged watchlist news feed and its load bookkeeping.
     pub news_feed: NewsFeedState,
@@ -614,6 +619,7 @@ impl App {
                 dashboard: DashboardSnapshot::default(),
                 dashboard_age: DASHBOARD_REFRESH,
                 snapshot_age: Duration::ZERO,
+                history_age: HISTORY_SAMPLE_INTERVAL,
                 portfolio_value_series: VecDeque::new(),
                 news_feed: NewsFeedState::default(),
             },
@@ -692,6 +698,12 @@ impl App {
             self.market.snapshot_age = Duration::ZERO;
         }
 
+        self.market.history_age += elapsed;
+        if self.market.history_age >= HISTORY_SAMPLE_INTERVAL {
+            self.record_history_sample();
+            self.market.history_age = Duration::ZERO;
+        }
+
         (blinked && self.market.input_mode.is_focused())
             || self.notifications.has_notification()
             || had_flashes
@@ -746,6 +758,24 @@ impl App {
         while series.len() > PORTFOLIO_SERIES_CAP {
             series.pop_front();
         }
+    }
+
+    /// Current totals if they are safe to persist, else `None`.
+    pub(crate) fn persistable_totals_now(&self) -> Option<(f64, f64)> {
+        let positions = crate::portfolio::portfolio_positions(
+            &self.holdings,
+            &self.market.db_display.all_rows,
+        );
+        crate::portfolio::persistable_totals(&positions)
+    }
+
+    /// Writes the day's portfolio totals on the [`HISTORY_SAMPLE_INTERVAL`] throttle.
+    fn record_history_sample(&mut self) {
+        let Some((market_value, cost_basis)) = self.persistable_totals_now() else {
+            return;
+        };
+        let day = chrono::Local::now().date_naive();
+        self.spawn_history_sample(day, market_value, cost_basis);
     }
 
     pub fn status_mode(&self) -> (StatusMode, &'static str) {

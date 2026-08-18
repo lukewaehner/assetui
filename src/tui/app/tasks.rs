@@ -10,6 +10,7 @@ use crate::AppError;
 
 use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered, remove_alert};
 use crate::db::portfolio::{list_holdings, remove_holding, upsert_holding};
+use crate::db::portfolio_history::upsert_day;
 use crate::db::quotes::{prune_quotes_history, store_quote_to_db};
 use crate::models::AlertDirection;
 use crate::portfolio::Holding;
@@ -345,6 +346,24 @@ impl App {
                 Err(e) => {
                     let _ = tx.send(AppEvent::Error(format!("Failed to load portfolio: {e}")));
                 }
+            }
+        });
+    }
+
+    /// Writes one day's portfolio totals.
+    pub(crate) fn spawn_history_sample(
+        &self,
+        day: chrono::NaiveDate,
+        market_value: f64,
+        cost_basis: f64,
+    ) {
+        let pool = self.services.pool.clone();
+        let tx = self.services.event_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = upsert_day(&pool, day, market_value, cost_basis).await {
+                let _ = tx.send(AppEvent::LogLine(format!(
+                    "[WARN] portfolio history sample failed: {e}"
+                )));
             }
         });
     }

@@ -215,6 +215,14 @@ pub fn reconstruct_value_series(
         .collect()
 }
 
+pub fn persistable_totals(positions: &[Position]) -> Option<(f64, f64)> {
+    if positions.is_empty() || positions.iter().any(|p| p.market_value.is_none()) {
+        return None;
+    }
+    let summary = summarize(positions);
+    Some((summary.total_market_value, summary.total_cost))
+}
+
 /// Start→end return of `series` against a flat `cost_basis`.
 pub fn series_return(series: &[(NaiveDate, f64)], cost_basis: f64) -> SeriesReturn {
     let latest_value = series.last().map_or(0.0, |(_, v)| *v);
@@ -465,5 +473,35 @@ mod tests {
     fn resolve_price_absent_ticker_is_none() {
         let rows = vec![quote("AAPL", Some(150.0), Some(148.0))];
         assert_eq!(resolve_price("TSLA", &rows), (None, None));
+    }
+
+    #[test]
+    fn persistable_totals_returns_value_and_cost_when_every_holding_is_priced() {
+        // arrange
+        let positions = vec![
+            value_position(Holding { ticker: "AAPL".into(), shares: 10.0, avg_cost: 100.0 }, Some(120.0), None),
+            value_position(Holding { ticker: "TSLA".into(), shares: 5.0, avg_cost: 200.0 }, Some(220.0), None),
+        ];
+
+        // act
+        let totals = persistable_totals(&positions);
+
+        // assert
+        assert_eq!(totals, Some((2300.0, 2000.0)));
+    }
+
+    #[test]
+    fn persistable_totals_is_none_when_any_holding_is_unpriced() {
+        let positions = vec![
+            value_position(Holding { ticker: "AAPL".into(), shares: 10.0, avg_cost: 100.0 }, Some(120.0), None),
+            value_position(Holding { ticker: "TSLA".into(), shares: 5.0, avg_cost: 200.0 }, None, None),
+        ];
+
+        assert_eq!(persistable_totals(&positions), None);
+    }
+
+    #[test]
+    fn persistable_totals_is_none_for_an_empty_portfolio() {
+        assert_eq!(persistable_totals(&[]), None);
     }
 }
