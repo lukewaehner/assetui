@@ -25,6 +25,8 @@ pub async fn run(pool: sqlx::PgPool, client: YfClient) -> Result<(), AppError> {
     app.spawn_load_watchlist();
     app.spawn_load_alerts();
     app.spawn_load_portfolio();
+    app.portfolio_modal.loading = true;
+    app.spawn_load_portfolio_history();
     app.spawn_theme_watcher();
 
     let mut terminal = ratatui::init();

@@ -10,7 +10,7 @@ use crate::AppError;
 
 use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered, remove_alert};
 use crate::db::portfolio::{list_holdings, remove_holding, upsert_holding};
-use crate::db::portfolio_history::upsert_day;
+use crate::db::portfolio_history::{load_history, upsert_day};
 use crate::db::quotes::{prune_quotes_history, store_quote_to_db};
 use crate::models::AlertDirection;
 use crate::portfolio::Holding;
@@ -419,35 +419,21 @@ impl App {
         });
     }
 
-    pub(crate) fn spawn_portfolio_history(&self) {
-        use crate::portfolio::reconstruct_value_series;
-
+    /// Loads the persisted daily portfolio history once at startup.
+    pub(crate) fn spawn_load_portfolio_history(&self) {
+        let pool = self.services.pool.clone();
         let tx = self.services.event_tx.clone();
-        let client = self.services.client.clone();
-        let holdings = self.holdings.clone();
-        let cost_basis: f64 = holdings.iter().map(|h| h.shares * h.avg_cost).sum();
-
         tokio::spawn(async move {
-            let mut holdings_closes: Vec<(f64, Vec<(chrono::NaiveDate, f64)>)> = Vec::new();
-            for h in &holdings {
-                match fetch_chart_data(&client, &h.ticker).await {
-                    Ok(candles) => {
-                        let closes = candles
-                            .iter()
-                            .map(|c| (c.ts.date_naive(), c.ohlc.close.as_decimal().as_f64()))
-                            .collect();
-                        holdings_closes.push((h.shares, closes));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(AppEvent::Error(format!(
-                            "portfolio history {}: {e}",
-                            h.ticker
-                        )));
-                    }
+            match load_history(&pool).await {
+                Ok(history) => {
+                    let _ = tx.send(AppEvent::PortfolioHistoryLoaded(history));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!(
+                        "Failed to load portfolio history: {e}"
+                    )));
                 }
             }
-            let series = reconstruct_value_series(&holdings_closes);
-            let _ = tx.send(AppEvent::PortfolioHistoryReady { series, cost_basis });
         });
     }
 

@@ -61,7 +61,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
     app.help_modal.draw(f, &app.theme);
-    app.portfolio_modal.draw(f, &app.theme, !app.holdings.is_empty());
+    app.portfolio_modal.draw(f, &app.theme);
     app.page_picker.draw(f, &app.theme);
 
     let area = f.area();

@@ -104,11 +104,8 @@ pub enum AppEvent {
         /// The sector's tiles (already sorted/truncated).
         tiles: Vec<crate::sectors::SectorTile>,
     },
-    /// The reconstructed portfolio value series and its cost basis.
-    PortfolioHistoryReady {
-        series: Vec<(chrono::NaiveDate, f64)>,
-        cost_basis: f64,
-    },
+    /// The persisted daily portfolio history, loaded once at startup.
+    PortfolioHistoryLoaded(Vec<(chrono::NaiveDate, f64, f64)>),
     /// Per-holding one-year close histories for the optimizer, ready to compute.
     OptimizerDataReady {
         histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)>,
@@ -775,6 +772,18 @@ impl App {
             return;
         };
         let day = chrono::Local::now().date_naive();
+        match self
+            .portfolio_modal
+            .history
+            .iter_mut()
+            .find(|(d, _, _)| *d == day)
+        {
+            Some(row) => *row = (day, market_value, cost_basis),
+            None => self
+                .portfolio_modal
+                .history
+                .push((day, market_value, cost_basis)),
+        }
         self.spawn_history_sample(day, market_value, cost_basis);
     }
 
@@ -953,9 +962,8 @@ impl App {
                     self.market.news_feed.loading = false;
                 }
             }
-            AppEvent::PortfolioHistoryReady { series, cost_basis } => {
-                self.portfolio_modal.series = Some(series);
-                self.portfolio_modal.cost_basis = cost_basis;
+            AppEvent::PortfolioHistoryLoaded(history) => {
+                self.portfolio_modal.history = history;
                 self.portfolio_modal.loading = false;
             }
             AppEvent::OptimizerDataReady { histories } => {
@@ -1844,17 +1852,8 @@ impl App {
         }
     }
 
-    /// Opens the portfolio performance modal and kicks off the history fetch.
     fn open_portfolio_modal(&mut self) {
         self.portfolio_modal.is_open = true;
-        self.portfolio_modal.series = None;
-        self.portfolio_modal.loading = true;
-        self.portfolio_modal.cost_basis = self
-            .holdings
-            .iter()
-            .map(|h| h.shares * h.avg_cost)
-            .sum();
-        self.spawn_portfolio_history();
     }
 
     fn cycle_expiry(&mut self, delta: isize) {
@@ -3140,20 +3139,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_portfolio_history_ready_populates_modal() {
-        use chrono::NaiveDate;
+    async fn test_portfolio_history_loaded_populates_the_modal() {
+        let (mut app, _rx) = make_test_app();
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 8, 18).unwrap();
+
+        app.handle_event(AppEvent::PortfolioHistoryLoaded(vec![(day, 1100.0, 1000.0)]));
+
+        assert_eq!(app.portfolio_modal.history, vec![(day, 1100.0, 1000.0)]);
+    }
+
+    #[tokio::test]
+    async fn test_portfolio_history_loaded_clears_loading() {
         let (mut app, _rx) = make_test_app();
         app.portfolio_modal.loading = true;
-        let series = vec![
-            (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 100.0),
-            (NaiveDate::from_ymd_opt(2026, 1, 2).unwrap(), 110.0),
-        ];
 
-        app.handle_event(AppEvent::PortfolioHistoryReady { series: series.clone(), cost_basis: 90.0 });
+        app.handle_event(AppEvent::PortfolioHistoryLoaded(Vec::new()));
 
-        assert_eq!(app.portfolio_modal.series, Some(series));
-        assert_eq!(app.portfolio_modal.cost_basis, 90.0);
         assert!(!app.portfolio_modal.loading);
+    }
+
+    #[tokio::test]
+    async fn test_opening_the_portfolio_modal_does_not_refetch() {
+        let (mut app, _rx) = make_test_app();
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 8, 18).unwrap();
+        app.handle_event(AppEvent::PortfolioHistoryLoaded(vec![(day, 1100.0, 1000.0)]));
+
+        app.handle_command_key('P');
+
+        assert!(!app.portfolio_modal.loading);
+        assert_eq!(app.portfolio_modal.history, vec![(day, 1100.0, 1000.0)]);
     }
 
     #[tokio::test]
