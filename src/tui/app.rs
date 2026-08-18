@@ -162,8 +162,6 @@ pub enum Overlay {
     Options,
     /// The portfolio performance modal.
     Portfolio,
-    /// The keybinding help modal.
-    Help,
     PagePicker,
 }
 
@@ -383,6 +381,7 @@ pub struct App {
     pub optimizer: OptimizerPageState,
     pub page_picker: PagePickerState,
     pub show_logs: bool,
+    pub help_modal: crate::tui::components::help::HelpModal,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -672,6 +671,7 @@ impl App {
             optimizer: OptimizerPageState::default(),
             page_picker: PagePickerState::default(),
             show_logs: false,
+            help_modal: crate::tui::components::help::HelpModal::new(),
         }
     }
 
@@ -762,7 +762,7 @@ impl App {
     pub fn status_mode(&self) -> (StatusMode, &'static str) {
         if self.overlay == Overlay::PagePicker {
             (StatusMode::Picker, "j/k move · enter go · tab/esc cancel")
-        } else if self.overlay == Overlay::Help {
+        } else if self.help_modal.is_open {
             (StatusMode::Help, "esc close")
         } else if self.manage.input.is_some() {
             (
@@ -1012,6 +1012,12 @@ impl App {
 
     /// Routes a raw terminal key press, dispatching by the current page.
     pub fn handle_key(&mut self, code: KeyCode) {
+        if self.help_modal.is_open {
+            use crate::tui::components::Component;
+            let key = crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+            self.help_modal.handle_key_events(key);
+            return;
+        }
         if matches!(code, KeyCode::Tab | KeyCode::BackTab) && self.manage.input.is_none() {
             self.toggle_page_picker();
             return;
@@ -1360,7 +1366,6 @@ impl App {
     /// Routes a single command key to the appropriate state change.
     pub fn handle_command_key(&mut self, key: char) {
         match self.overlay {
-            Overlay::Help => return,
             Overlay::Options => {
                 match key {
                     'h' => self.cycle_expiry(-1),
@@ -1824,8 +1829,8 @@ impl App {
     }
 
     /// Opens the keybinding help overlay, closing any stock modal so the two never stack.
-    fn open_help_modal(&mut self) {
-        self.overlay = Overlay::Help;
+    pub fn open_help_modal(&mut self) {
+        self.help_modal.is_open = true;
     }
 }
 
@@ -2056,7 +2061,7 @@ mod tests {
         // arrange
         let (mut app, _rx) = make_test_app();
         app.page = Page::Manage;
-        app.overlay = Overlay::Help;
+        app.help_modal.is_open = true;
 
         // act
         let (mode, hint) = app.status_mode();
@@ -2420,7 +2425,7 @@ mod tests {
     #[tokio::test]
     async fn test_open_options_modal_replaces_other_overlay() {
         let mut app = app_with_three_stocks();
-        app.overlay = Overlay::Help;
+        app.help_modal.is_open = true;
 
         app.open_options_modal();
 
@@ -3575,7 +3580,7 @@ mod tests {
     async fn test_question_mark_opens_help_modal() {
         let (mut app, _rx) = make_test_app();
         app.handle_key(KeyCode::Char('?'));
-        assert_eq!(app.overlay, Overlay::Help);
+        assert!(app.help_modal.is_open);
     }
 
     #[tokio::test]
@@ -3598,7 +3603,7 @@ mod tests {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('?'));
         app.handle_key(KeyCode::Char('s'));
-        assert_eq!(app.overlay, Overlay::Help);
+        assert!(app.help_modal.is_open);
     }
 
     #[tokio::test]

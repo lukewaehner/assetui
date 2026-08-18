@@ -59,9 +59,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             _ => {}
         }
     }
-    if app.overlay == Overlay::Help {
-        draw_help_modal(f, app);
-    }
+    app.help_modal.draw(f, &app.theme);
     if app.overlay == Overlay::Portfolio {
         draw_portfolio_modal(f, app);
     }
@@ -776,7 +774,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn help_row(keys: &'static str, desc: &'static str, t: &Theme) -> Line<'static> {
+pub(crate) fn help_row(keys: &'static str, desc: &'static str, t: &Theme) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("  {keys:<14}"),
@@ -787,61 +785,6 @@ fn help_row(keys: &'static str, desc: &'static str, t: &Theme) -> Line<'static> 
 }
 
 /// Renders the keybinding help overlay: a centred reference of every command key, grouped by purpose.
-fn draw_help_modal(f: &mut Frame, app: &App) {
-    let t = app.theme;
-    let title = Line::from(vec![
-        Span::raw(" "),
-        Span::styled(
-            "assetui",
-            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" · keybindings ", Style::default().fg(t.dim)),
-    ]);
-    let (content, footer) = modal_frame(f, 48, 80, title, &t);
-
-    let lines = vec![
-        section_heading("NAVIGATION", None, &t),
-        help_row("j / k", "move selection up / down", &t),
-        help_row("h / l", "previous / next page", &t),
-        Line::raw(""),
-        section_heading("VIEWS", None, &t),
-        help_row("s", "stock details", &t),
-        help_row("enter", "price chart", &t),
-        help_row("x", "options chain (h/l expiry)", &t),
-        help_row("L", "toggle dashboard / logs", &t),
-        help_row("?", "this help", &t),
-        Line::raw(""),
-        section_heading("WATCHLIST", None, &t),
-        help_row("w / r", "add / remove favourite (★)", &t),
-        Line::raw(""),
-        section_heading("MANAGE PAGE", None, &t),
-        help_row("tab", "open the page picker (j/k move, enter go)", &t),
-        help_row("a / e / d", "add / edit / delete a holding or alert", &t),
-        Line::from(Span::styled(
-            "  alerts fire once for on-screen tickers only",
-            Style::default().fg(t.dim),
-        )),
-        Line::raw(""),
-        section_heading("QUERY & SEARCH", None, &t),
-        help_row("i", "fetch tickers (input box)", &t),
-        help_row("/", "fuzzy search the table", &t),
-        Line::raw(""),
-        section_heading("SORT", None, &t),
-        help_row("o", "toggle ascending / descending", &t),
-        help_row("t n p c v a", "sort by column", &t),
-        Line::raw(""),
-        section_heading("GENERAL", None, &t),
-        help_row("esc", "close modal / cancel", &t),
-        help_row("q", "quit", &t),
-    ];
-    f.render_widget(Paragraph::new(lines), content);
-
-    f.render_widget(
-        Paragraph::new(Span::styled("esc close ", Style::default().fg(t.dim)))
-            .alignment(Alignment::Right),
-        footer,
-    );
-}
 
 fn draw_portfolio_modal(f: &mut Frame, app: &App) {
     let t = app.theme;
@@ -957,7 +900,7 @@ fn page_label(p: Page) -> &'static str {
     }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let [_, mid, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Percentage(percent_y),
@@ -973,7 +916,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     mid
 }
 
-fn modal_block(title: Line<'static>, t: &Theme) -> Block<'static> {
+pub(crate) fn modal_block(title: Line<'static>, t: &Theme) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(t.border).bg(t.panel))
@@ -983,7 +926,7 @@ fn modal_block(title: Line<'static>, t: &Theme) -> Block<'static> {
 }
 
 /// Draws the shared overlay chrome and returns the `(content, footer)` regions to fill.
-fn modal_frame(
+pub(crate) fn modal_frame(
     f: &mut Frame,
     pct_x: u16,
     pct_y: u16,
@@ -1016,7 +959,7 @@ fn label(text: &'static str, t: &Theme) -> Span<'static> {
     Span::styled(text, Style::default().fg(t.dim))
 }
 
-fn section_heading(text: &'static str, meta: Option<String>, t: &Theme) -> Line<'static> {
+pub(crate) fn section_heading(text: &'static str, meta: Option<String>, t: &Theme) -> Line<'static> {
     let mut spans = vec![Span::styled(
         text,
         Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
