@@ -16,6 +16,9 @@ use crate::AppError;
 /// Cadence of time-based updates (cursor blink, notification animations, price-flash expiry).
 const TICK_RATE: Duration = Duration::from_millis(100);
 
+/// Bound on the final, awaited history write during shutdown.
+const SHUTDOWN_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Runs the interactive TUI to completion, returning once the user quits or stdin closes.
 pub async fn run(pool: sqlx::PgPool, client: YfClient) -> Result<(), AppError> {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
@@ -52,11 +55,18 @@ where
 
     if let Some((market_value, cost_basis)) = app.persistable_totals_now() {
         let day = chrono::Local::now().date_naive();
-        if let Err(e) =
-            crate::db::portfolio_history::upsert_day(&app.services.pool, day, market_value, cost_basis)
-                .await
-        {
-            tracing::warn!("final portfolio history sample failed: {e}");
+        let write = crate::db::portfolio_history::upsert_day(
+            &app.services.pool,
+            day,
+            market_value,
+            cost_basis,
+        );
+        match tokio::time::timeout(SHUTDOWN_WRITE_TIMEOUT, write).await {
+            Ok(Err(e)) => tracing::warn!("final portfolio history sample failed: {e}"),
+            Err(_) => tracing::warn!(
+                "final portfolio history sample timed out after {SHUTDOWN_WRITE_TIMEOUT:?}"
+            ),
+            Ok(Ok(())) => {}
         }
     }
 
