@@ -160,8 +160,6 @@ pub enum Overlay {
     Chart,
     /// The options-chain modal.
     Options,
-    /// The portfolio performance modal.
-    Portfolio,
     PagePicker,
 }
 
@@ -352,8 +350,7 @@ pub struct App {
     pub animations: Animations,
     /// Overlay modal showing detailed info for the selected stock.
     pub stock_modal: StockInfoModal,
-    /// Overlay modal showing the portfolio value history and return.
-    pub portfolio_modal: PortfolioModal,
+    pub portfolio_modal: crate::tui::components::portfolio::PortfolioModal,
     /// The single overlay currently on top of the page, if any.
     pub overlay: Overlay,
     /// Slide-in error notifications shown top-right.
@@ -530,13 +527,6 @@ pub struct StockInfoModal {
     pub show_rsi: bool,
 }
 
-#[derive(Default)]
-pub struct PortfolioModal {
-    pub series: Option<Vec<(chrono::NaiveDate, f64)>>,
-    pub cost_basis: f64,
-    pub loading: bool,
-}
-
 fn sort_mode_for_key(key: char) -> Option<SortMode> {
     Some(match key {
         't' => SortMode::ByTicker,
@@ -651,7 +641,7 @@ impl App {
                 show_volume: true,
                 show_rsi: true,
             },
-            portfolio_modal: PortfolioModal::default(),
+            portfolio_modal: crate::tui::components::portfolio::PortfolioModal::default(),
             overlay: Overlay::None,
             notifications: Notifications::new(),
             appearance,
@@ -1016,6 +1006,12 @@ impl App {
             use crate::tui::components::Component;
             let key = crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
             self.help_modal.handle_key_events(key);
+            return;
+        }
+        if self.portfolio_modal.is_open {
+            use crate::tui::components::Component;
+            let key = crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+            self.portfolio_modal.handle_key_events(key);
             return;
         }
         if matches!(code, KeyCode::Tab | KeyCode::BackTab) && self.manage.input.is_none() {
@@ -1383,7 +1379,6 @@ impl App {
                 }
                 return;
             }
-            Overlay::Portfolio => return,
             Overlay::PagePicker => return,
             Overlay::None => {}
         }
@@ -1796,7 +1791,7 @@ impl App {
 
     /// Opens the portfolio performance modal and kicks off the history fetch.
     fn open_portfolio_modal(&mut self) {
-        self.overlay = Overlay::Portfolio;
+        self.portfolio_modal.is_open = true;
         self.portfolio_modal.series = None;
         self.portfolio_modal.loading = true;
         self.portfolio_modal.cost_basis = self
@@ -2961,7 +2956,7 @@ mod tests {
     async fn test_capital_p_opens_portfolio_modal_from_market() {
         let (mut app, _rx) = make_test_app();
         app.handle_key(KeyCode::Char('P'));
-        assert_eq!(app.overlay, Overlay::Portfolio);
+        assert!(app.portfolio_modal.is_open);
     }
 
     #[tokio::test]
@@ -2969,14 +2964,14 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.page = Page::Manage;
         app.handle_key(KeyCode::Char('P'));
-        assert_eq!(app.overlay, Overlay::Portfolio);
+        assert!(app.portfolio_modal.is_open);
     }
 
     #[tokio::test]
     async fn test_esc_closes_portfolio_modal_on_manage() {
         let (mut app, _rx) = make_test_app();
         app.page = Page::Manage;
-        app.overlay = Overlay::Portfolio;
+        app.portfolio_modal.is_open = true;
         app.handle_key(KeyCode::Esc);
         assert_eq!(app.overlay, Overlay::None);
     }

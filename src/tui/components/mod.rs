@@ -26,3 +26,4 @@ pub trait Component {
 }
 
 pub mod help;
+pub mod portfolio;

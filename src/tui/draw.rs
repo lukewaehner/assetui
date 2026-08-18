@@ -60,9 +60,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
     app.help_modal.draw(f, &app.theme);
-    if app.overlay == Overlay::Portfolio {
-        draw_portfolio_modal(f, app);
-    }
+    app.portfolio_modal.draw(f, &app.theme, !app.holdings.is_empty());
     if app.overlay == Overlay::PagePicker {
         draw_page_picker(f, app);
     }
@@ -95,7 +93,7 @@ fn draw_market_body(f: &mut Frame, body: Rect, app: &mut App) {
 }
 
 /// Builds a ` app · section ` block title in the bold accent colour.
-fn block_title(text: String, t: &Theme) -> Line<'static> {
+pub(crate) fn block_title(text: String, t: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         format!(" {text} "),
         Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
@@ -786,87 +784,6 @@ pub(crate) fn help_row(keys: &'static str, desc: &'static str, t: &Theme) -> Lin
 
 /// Renders the keybinding help overlay: a centred reference of every command key, grouped by purpose.
 
-fn draw_portfolio_modal(f: &mut Frame, app: &App) {
-    let t = app.theme;
-    let area = centered_rect(65, 55, f.area());
-    f.render_widget(Clear, area);
-
-    let pm = &app.portfolio_modal;
-    let series = match &pm.series {
-        None => {
-            let block = modal_block(block_title("portfolio · performance".into(), &t), &t);
-            let inner = block.inner(area);
-            f.render_widget(block, area);
-            let msg = if pm.loading { "reconstructing history…" } else { "no data" };
-            f.render_widget(placeholder(msg, &t), inner);
-            return;
-        }
-        Some(s) => s,
-    };
-
-    let ret = crate::portfolio::series_return(series, pm.cost_basis);
-    let pct = ret
-        .total_pnl_pct
-        .map(|v| format!("{v:+.1}%"))
-        .unwrap_or_else(|| "-".into());
-    let title = block_title(
-        format!("portfolio · ${:.2} ({pct})", ret.latest_value),
-        &t,
-    );
-    let block = modal_block(title, &t);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if series.len() < 2 {
-        let msg = if app.holdings.is_empty() { "no holdings" } else { "not enough history" };
-        f.render_widget(placeholder(msg, &t), inner);
-        return;
-    }
-
-    let data: Vec<(f64, f64)> = series
-        .iter()
-        .enumerate()
-        .map(|(i, (_, v))| (i as f64, *v))
-        .collect();
-    let xmax = (series.len() - 1) as f64;
-    let basis_line = vec![(0.0, pm.cost_basis), (xmax, pm.cost_basis)];
-
-    let trend_up = ret.total_pnl >= 0.0;
-    let value_ds = Dataset::default()
-        .marker(Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(if trend_up { t.up } else { t.down }))
-        .data(&data);
-    let basis_ds = Dataset::default()
-        .marker(Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(t.dim))
-        .data(&basis_line);
-
-    let ymin = data.iter().map(|(_, v)| *v).chain([pm.cost_basis]).fold(f64::INFINITY, f64::min);
-    let ymax = data.iter().map(|(_, v)| *v).chain([pm.cost_basis]).fold(f64::NEG_INFINITY, f64::max);
-    let pad = ((ymax - ymin) * 0.04).max(0.01);
-    let date_label = |i: usize| Line::from(Span::styled(series[i].0.format("%b %d").to_string(), Style::default().fg(t.dim)));
-
-    let chart = Chart::new(vec![value_ds, basis_ds])
-        .x_axis(
-            Axis::default()
-                .style(Style::default().fg(t.dim))
-                .bounds([0.0, xmax])
-                .labels([date_label(0), date_label(series.len() / 2), date_label(series.len() - 1)]),
-        )
-        .y_axis(
-            Axis::default()
-                .style(Style::default().fg(t.dim))
-                .bounds([ymin - pad, ymax + pad])
-                .labels([
-                    Line::from(format!("{:.0}", ymin - pad)),
-                    Line::from(format!("{:.0}", ymax + pad)),
-                ]),
-        );
-    f.render_widget(chart, inner);
-}
-
 fn draw_page_picker(f: &mut Frame, app: &App) {
     use crate::tui::app::PAGE_ORDER;
     let t = app.theme;
@@ -974,7 +891,7 @@ pub(crate) fn section_heading(text: &'static str, meta: Option<String>, t: &Them
 }
 
 /// A dimmed "Loading…"-style placeholder paragraph.
-fn placeholder(text: &'static str, t: &Theme) -> Paragraph<'static> {
+pub(crate) fn placeholder(text: &'static str, t: &Theme) -> Paragraph<'static> {
     Paragraph::new(Span::styled(text, Style::default().fg(t.dim)))
 }
 
