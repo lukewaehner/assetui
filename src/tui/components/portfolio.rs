@@ -22,6 +22,15 @@ pub struct PortfolioModal {
     pub loading: bool,
 }
 
+/// Each day's cost basis, indexed for plotting against the value series.
+fn basis_series(history: &[(chrono::NaiveDate, f64, f64)]) -> Vec<(f64, f64)> {
+    history
+        .iter()
+        .enumerate()
+        .map(|(i, (_, _, basis))| (i as f64, *basis))
+        .collect()
+}
+
 impl PortfolioModal {
     pub fn new() -> Self {
         Self::default()
@@ -68,12 +77,7 @@ impl PortfolioModal {
             .enumerate()
             .map(|(i, (_, v, _))| (i as f64, *v))
             .collect();
-        let basis_line: Vec<(f64, f64)> = self
-            .history
-            .iter()
-            .enumerate()
-            .map(|(i, (_, _, basis))| (i as f64, *basis))
-            .collect();
+        let basis_line = basis_series(&self.history);
         let xmax = (self.history.len() - 1) as f64;
 
         let trend_up = ret.total_pnl >= 0.0;
@@ -143,5 +147,93 @@ impl Component for PortfolioModal {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::theme::Appearance;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    fn d(day: u32) -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 1, day).unwrap()
+    }
+
+    fn draw_modal(modal: &PortfolioModal) -> String {
+        let theme = Theme::for_appearance(Appearance::Dark);
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        terminal.draw(|f| modal.draw(f, &theme)).unwrap();
+        buffer_text(&terminal)
+    }
+
+    #[test]
+    fn basis_series_steps_when_the_basis_changes_mid_series() {
+        let history = vec![(d(1), 100.0, 500.0), (d(2), 110.0, 500.0), (d(3), 140.0, 700.0)];
+
+        let points = basis_series(&history);
+
+        assert_eq!(points, vec![(0.0, 500.0), (1.0, 500.0), (2.0, 700.0)]);
+    }
+
+    #[test]
+    fn basis_series_is_empty_for_empty_history() {
+        assert!(basis_series(&[]).is_empty());
+    }
+
+    #[test]
+    fn draw_shows_loading_message_while_loading_with_no_history_yet() {
+        let modal = PortfolioModal { is_open: true, history: Vec::new(), loading: true };
+
+        let text = draw_modal(&modal);
+
+        assert!(text.contains("loading history"));
+    }
+
+    #[test]
+    fn draw_shows_empty_state_when_not_loading_and_history_is_empty() {
+        let modal = PortfolioModal { is_open: true, history: Vec::new(), loading: false };
+
+        let text = draw_modal(&modal);
+
+        assert!(text.contains("no history yet"));
+    }
+
+    #[test]
+    fn draw_shows_not_enough_history_message_for_a_single_day() {
+        let modal = PortfolioModal {
+            is_open: true,
+            history: vec![(d(1), 1000.0, 900.0)],
+            loading: false,
+        };
+
+        let text = draw_modal(&modal);
+
+        assert!(text.contains("not enough history yet"));
+    }
+
+    #[test]
+    fn draw_renders_the_chart_title_for_multi_day_history() {
+        let modal = PortfolioModal {
+            is_open: true,
+            history: vec![(d(1), 1000.0, 900.0), (d(2), 1100.0, 900.0)],
+            loading: false,
+        };
+
+        let text = draw_modal(&modal);
+
+        assert!(text.contains("$1100.00"), "latest value is drawn in the title");
+        assert!(!text.contains("no history yet"));
+        assert!(!text.contains("not enough history yet"));
     }
 }
