@@ -56,6 +56,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Overlay::Info => draw_stock_modal(f, app),
             Overlay::Chart => draw_chart_modal(f, app),
             Overlay::Options => draw_options_modal(f, app),
+            Overlay::Earnings => app.earnings_modal.draw(f, &app.theme),
             _ => {}
         }
     }
@@ -894,7 +895,7 @@ fn fmt_volume(v: f64) -> String {
     }
 }
 
-fn fmt_market_cap(value: Option<f64>) -> String {
+pub(crate) fn fmt_market_cap(value: Option<f64>) -> String {
     value
         .map(|v| format!("${}", fmt_volume(v)))
         .unwrap_or_else(|| "-".into())
@@ -1590,7 +1591,7 @@ pub(crate) fn ranked_movers(rows: &[QuoteRecord], limit: usize) -> Vec<Mover> {
     movers
 }
 
-fn bar_cells(pct: f64, max_pct: f64, width: usize) -> usize {
+pub(crate) fn bar_cells(pct: f64, max_pct: f64, width: usize) -> usize {
     if width == 0 || !(max_pct > 0.0) || !max_pct.is_finite() {
         return 0;
     }
@@ -1670,7 +1671,7 @@ pub(crate) fn most_active(rows: &[QuoteRecord]) -> Option<(String, f64)> {
         .max_by(|a, b| a.1.partial_cmp(&b.1).expect("finite volume"))
 }
 
-fn pnl_color(value: Option<f64>, t: &Theme) -> Color {
+pub(crate) fn pnl_color(value: Option<f64>, t: &Theme) -> Color {
     match value {
         Some(v) => direction_color(direction(v, f64::EPSILON), t),
         None => t.dim,

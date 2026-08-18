@@ -26,6 +26,7 @@ pub trait Component {
     }
 }
 
+pub mod earnings;
 pub mod help;
 pub mod page_picker;
 pub mod portfolio;

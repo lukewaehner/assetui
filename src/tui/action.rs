@@ -10,4 +10,6 @@ pub enum Action {
     ToggleHelp,
     /// Switch to `Page`, running its lazy page-entry effects.
     GoToPage(Page),
+    /// Dismiss whatever overlay is currently showing.
+    CloseOverlay,
 }

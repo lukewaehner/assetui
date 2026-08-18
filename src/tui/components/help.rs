@@ -73,6 +73,7 @@ impl HelpModal {
             help_row("s", "stock details", t),
             help_row("enter", "price chart", t),
             help_row("x", "options chain (h/l expiry)", t),
+            help_row("e", "earnings history", t),
             help_row("L", "toggle dashboard / logs", t),
             help_row("?", "this help", t),
             Line::raw(""),

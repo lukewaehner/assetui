@@ -160,6 +160,8 @@ pub enum Overlay {
     Chart,
     /// The options-chain modal.
     Options,
+    /// The earnings history modal.
+    Earnings,
 }
 
 /// The interaction mode reflected in the status bar.
@@ -370,6 +372,7 @@ pub struct App {
     pub page_picker: crate::tui::components::page_picker::PagePicker,
     pub show_logs: bool,
     pub help_modal: crate::tui::components::help::HelpModal,
+    pub earnings_modal: crate::tui::components::earnings::EarningsModal,
 }
 
 /// Shared handles cloned into every async fetch/stream task.
@@ -653,6 +656,7 @@ impl App {
             page_picker: crate::tui::components::page_picker::PagePicker::new(),
             show_logs: false,
             help_modal: crate::tui::components::help::HelpModal::new(),
+            earnings_modal: crate::tui::components::earnings::EarningsModal::new(),
         }
     }
 
@@ -761,6 +765,8 @@ impl App {
             (StatusMode::View, "s info · v vol · r rsi · esc close")
         } else if self.overlay == Overlay::Info {
             (StatusMode::View, "s info · enter chart · esc close")
+        } else if self.overlay == Overlay::Earnings {
+            (StatusMode::View, "esc close")
         } else if self.page == Page::Sectors {
             (
                 StatusMode::Sectors,
@@ -1342,6 +1348,18 @@ impl App {
                 }
                 return;
             }
+            Overlay::Earnings => {
+                use crate::tui::action::Action;
+                use crate::tui::components::Component;
+                let event = crossterm::event::KeyEvent::new(
+                    KeyCode::Char(key),
+                    crossterm::event::KeyModifiers::NONE,
+                );
+                if let Some(Action::CloseOverlay) = self.earnings_modal.handle_key_events(event) {
+                    self.overlay = Overlay::None;
+                }
+                return;
+            }
             Overlay::None => {}
         }
         if let Some(mode) = sort_mode_for_key(key) {
@@ -1355,6 +1373,7 @@ impl App {
             '?' => self.open_help_modal(),
             'w' => self.toggle_watchlist(),
             'x' => self.open_options_modal(),
+            'e' => self.open_earnings_modal(),
             'P' => self.open_portfolio_modal(),
             'L' => self.show_logs = !self.show_logs,
             'W' => {
@@ -1749,6 +1768,22 @@ impl App {
             self.stock_modal.selected_expiry = 0;
             self.spawn_option_chain(t);
         }
+    }
+
+    fn open_earnings_modal(&mut self) {
+        let Some(stock) = self
+            .market.db_display
+            .table_state
+            .selected()
+            .and_then(|i| self.market.db_display.window().get(i))
+            .cloned()
+        else {
+            return;
+        };
+        let ticker = stock.ticker.clone();
+        self.stock_modal.stock = stock;
+        self.overlay = Overlay::Earnings;
+        self.earnings_modal.ticker = ticker;
     }
 
     /// Opens the portfolio performance modal and kicks off the history fetch.
@@ -2377,6 +2412,44 @@ mod tests {
         app.handle_command_key('x');
 
         assert_eq!(app.overlay, Overlay::Options);
+    }
+
+    #[tokio::test]
+    async fn test_command_key_e_opens_earnings_modal() {
+        let mut app = app_with_three_stocks();
+
+        app.handle_command_key('e');
+
+        assert_eq!(app.overlay, Overlay::Earnings);
+    }
+
+    #[tokio::test]
+    async fn test_open_earnings_modal_targets_the_selected_row() {
+        let mut app = app_with_three_stocks();
+
+        app.handle_command_key('e');
+
+        assert_eq!(app.earnings_modal.ticker.as_deref(), Some("AAPL"));
+    }
+
+    #[tokio::test]
+    async fn test_esc_closes_earnings_modal() {
+        let mut app = app_with_three_stocks();
+        app.handle_command_key('e');
+
+        app.handle_key(KeyCode::Esc);
+
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[tokio::test]
+    async fn test_e_closes_earnings_modal_when_already_open() {
+        let mut app = app_with_three_stocks();
+        app.handle_command_key('e');
+
+        app.handle_command_key('e');
+
+        assert_eq!(app.overlay, Overlay::None);
     }
 
     #[tokio::test]
