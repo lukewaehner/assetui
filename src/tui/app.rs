@@ -80,6 +80,8 @@ pub enum AppEvent {
     OptionChainReady(OptionChain),
     /// Quarterly earnings history loaded for the selected stock.
     EarningsReady(crate::earnings::TickerEarnings),
+    /// Quarterly earnings fetch failed for `ticker`.
+    EarningsFailed { ticker: String, message: String },
     /// Active price alerts loaded from the database at startup.
     AlertsLoaded(Vec<Alert>),
     /// Portfolio holdings loaded from the database at startup.
@@ -879,8 +881,16 @@ impl App {
                 self.stock_modal.option_chain = Some(chain);
             }
             AppEvent::EarningsReady(data) => {
-                self.earnings_modal.loading = false;
-                self.earnings_modal.data = Some(data);
+                if Some(&data.ticker) == self.earnings_modal.ticker.as_ref() {
+                    self.earnings_modal.loading = false;
+                    self.earnings_modal.data = Some(data);
+                }
+            }
+            AppEvent::EarningsFailed { ticker, message } => {
+                if Some(&ticker) == self.earnings_modal.ticker.as_ref() {
+                    self.earnings_modal.loading = false;
+                }
+                self.push_error(message);
             }
             AppEvent::QuoteTick(tick) => {
                 self.materialize_held_ticker_row(&tick);
@@ -2486,6 +2496,7 @@ mod tests {
     #[tokio::test]
     async fn test_earnings_ready_stores_data_and_clears_loading() {
         let (mut app, _rx) = make_test_app();
+        app.earnings_modal.ticker = Some("AAPL".to_string());
         app.earnings_modal.loading = true;
 
         app.handle_event(AppEvent::EarningsReady(earnings_for("AAPL")));
@@ -2495,6 +2506,46 @@ mod tests {
             Some("AAPL")
         );
         assert!(!app.earnings_modal.loading);
+    }
+
+    #[tokio::test]
+    async fn test_earnings_ready_for_a_stale_ticker_is_ignored() {
+        let (mut app, _rx) = make_test_app();
+        app.earnings_modal.ticker = Some("TSLA".to_string());
+        app.earnings_modal.loading = true;
+
+        app.handle_event(AppEvent::EarningsReady(earnings_for("AAPL")));
+
+        assert!(app.earnings_modal.data.is_none());
+        assert!(app.earnings_modal.loading);
+    }
+
+    #[tokio::test]
+    async fn test_earnings_failed_clears_loading_for_the_matching_ticker() {
+        let (mut app, _rx) = make_test_app();
+        app.earnings_modal.ticker = Some("AAPL".to_string());
+        app.earnings_modal.loading = true;
+
+        app.handle_event(AppEvent::EarningsFailed {
+            ticker: "AAPL".to_string(),
+            message: "earnings AAPL: rate limited".to_string(),
+        });
+
+        assert!(!app.earnings_modal.loading);
+    }
+
+    #[tokio::test]
+    async fn test_earnings_failed_for_a_stale_ticker_does_not_clear_loading() {
+        let (mut app, _rx) = make_test_app();
+        app.earnings_modal.ticker = Some("TSLA".to_string());
+        app.earnings_modal.loading = true;
+
+        app.handle_event(AppEvent::EarningsFailed {
+            ticker: "AAPL".to_string(),
+            message: "earnings AAPL: rate limited".to_string(),
+        });
+
+        assert!(app.earnings_modal.loading);
     }
 
     #[tokio::test]

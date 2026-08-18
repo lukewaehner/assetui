@@ -180,12 +180,22 @@ impl App {
     }
 
     pub(crate) fn spawn_earnings(&self, symbol: &str) {
-        self.spawn_client_fetch(
-            symbol.to_owned(),
-            "earnings",
-            |client, symbol| async move { fetch_earnings(&client, &symbol).await },
-            AppEvent::EarningsReady,
-        );
+        let tx = self.services.event_tx.clone();
+        let client = self.services.client.clone();
+        let symbol = symbol.to_owned();
+        tokio::spawn(async move {
+            match fetch_earnings(&client, &symbol).await {
+                Ok(data) => {
+                    let _ = tx.send(AppEvent::EarningsReady(data));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::EarningsFailed {
+                        ticker: symbol.clone(),
+                        message: format!("earnings {symbol}: {e}"),
+                    });
+                }
+            }
+        });
     }
 
     pub(crate) fn spawn_stream(&self, symbols: Vec<String>) {
