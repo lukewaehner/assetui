@@ -160,16 +160,6 @@ pub enum Overlay {
     Chart,
     /// The options-chain modal.
     Options,
-    PagePicker,
-}
-
-/// The page order used by the picker and its highlight movement.
-pub(crate) const PAGE_ORDER: [Page; 5] =
-    [Page::Market, Page::Manage, Page::Sectors, Page::News, Page::Optimizer];
-
-#[derive(Default)]
-pub struct PagePickerState {
-    pub highlighted: Page,
 }
 
 /// The interaction mode reflected in the status bar.
@@ -376,7 +366,8 @@ pub struct App {
     pub news_page: NewsPageState,
     /// Optimizer-page state.
     pub optimizer: OptimizerPageState,
-    pub page_picker: PagePickerState,
+    /// The `Tab` page-picker modal component.
+    pub page_picker: crate::tui::components::page_picker::PagePicker,
     pub show_logs: bool,
     pub help_modal: crate::tui::components::help::HelpModal,
 }
@@ -641,7 +632,7 @@ impl App {
                 show_volume: true,
                 show_rsi: true,
             },
-            portfolio_modal: crate::tui::components::portfolio::PortfolioModal::default(),
+            portfolio_modal: crate::tui::components::portfolio::PortfolioModal::new(),
             overlay: Overlay::None,
             notifications: Notifications::new(),
             appearance,
@@ -659,7 +650,7 @@ impl App {
             sectors: SectorState::default(),
             news_page: NewsPageState::default(),
             optimizer: OptimizerPageState::default(),
-            page_picker: PagePickerState::default(),
+            page_picker: crate::tui::components::page_picker::PagePicker::new(),
             show_logs: false,
             help_modal: crate::tui::components::help::HelpModal::new(),
         }
@@ -750,7 +741,7 @@ impl App {
     }
 
     pub fn status_mode(&self) -> (StatusMode, &'static str) {
-        if self.overlay == Overlay::PagePicker {
+        if self.page_picker.is_open {
             (StatusMode::Picker, "j/k move · enter go · tab/esc cancel")
         } else if self.help_modal.is_open {
             (StatusMode::Help, "esc close")
@@ -1015,11 +1006,18 @@ impl App {
             return;
         }
         if matches!(code, KeyCode::Tab | KeyCode::BackTab) && self.manage.input.is_none() {
-            self.toggle_page_picker();
+            self.page_picker.toggle(self.page);
             return;
         }
-        if self.overlay == Overlay::PagePicker {
-            self.handle_page_picker_key(code);
+        if self.page_picker.is_open {
+            use crate::tui::action::Action;
+            use crate::tui::components::Component;
+            let key = crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+            match self.page_picker.handle_key_events(key) {
+                Some(Action::GoToPage(page)) => self.goto_page(page),
+                Some(Action::Quit) => self.should_quit = true,
+                _ => {}
+            }
             return;
         }
         match self.page {
@@ -1029,41 +1027,6 @@ impl App {
             Page::News => self.handle_news_key(code),
             Page::Optimizer => self.handle_optimizer_key(code),
         }
-    }
-
-    fn toggle_page_picker(&mut self) {
-        if self.overlay == Overlay::PagePicker {
-            self.overlay = Overlay::None;
-        } else {
-            self.page_picker.highlighted = self.page;
-            self.overlay = Overlay::PagePicker;
-        }
-    }
-
-    fn handle_page_picker_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Esc => self.overlay = Overlay::None,
-            KeyCode::Char('j') | KeyCode::Down => self.picker_move(1),
-            KeyCode::Char('k') | KeyCode::Up => self.picker_move(-1),
-            KeyCode::Enter => {
-                let target = self.page_picker.highlighted;
-                self.overlay = Overlay::None;
-                self.goto_page(target);
-            }
-            KeyCode::Char('q') => self.should_quit = true,
-            _ => {}
-        }
-    }
-
-    /// Moves the picker highlight through `PAGE_ORDER`, wrapping.
-    fn picker_move(&mut self, delta: isize) {
-        let idx = PAGE_ORDER
-            .iter()
-            .position(|&p| p == self.page_picker.highlighted)
-            .unwrap_or(0) as isize;
-        let n = PAGE_ORDER.len() as isize;
-        let next = (idx + delta).rem_euclid(n) as usize;
-        self.page_picker.highlighted = PAGE_ORDER[next];
     }
 
     /// Switches to `page`, running its lazy page-entry effects.
@@ -1379,7 +1342,6 @@ impl App {
                 }
                 return;
             }
-            Overlay::PagePicker => return,
             Overlay::None => {}
         }
         if let Some(mode) = sort_mode_for_key(key) {
@@ -3181,15 +3143,15 @@ mod tests {
     #[tokio::test]
     async fn test_tab_opens_and_toggles_the_page_picker() {
         let (mut app, _rx) = make_test_app();
-        assert_eq!(app.overlay, Overlay::None);
+        assert!(!app.page_picker.is_open);
 
         app.handle_key(KeyCode::Tab);
-        assert_eq!(app.overlay, Overlay::PagePicker, "tab opens the picker");
+        assert!(app.page_picker.is_open, "tab opens the picker");
         assert_eq!(app.page_picker.highlighted, Page::Market, "seeded to current page");
         assert_eq!(app.page, Page::Market, "page unchanged while picking");
 
         app.handle_key(KeyCode::Tab);
-        assert_eq!(app.overlay, Overlay::None, "tab again cancels");
+        assert!(!app.page_picker.is_open, "tab again cancels");
         assert_eq!(app.page, Page::Market, "still on the original page");
     }
 
@@ -3210,7 +3172,7 @@ mod tests {
         app.handle_key(KeyCode::Char('j'));
         app.handle_key(KeyCode::Enter);
         assert_eq!(app.page, Page::Manage);
-        assert_eq!(app.overlay, Overlay::None);
+        assert!(!app.page_picker.is_open);
     }
 
     #[tokio::test]
@@ -3219,7 +3181,7 @@ mod tests {
         app.handle_key(KeyCode::Tab);
         app.handle_key(KeyCode::Char('j'));
         app.handle_key(KeyCode::Esc);
-        assert_eq!(app.overlay, Overlay::None);
+        assert!(!app.page_picker.is_open);
         assert_eq!(app.page, Page::Market, "esc keeps the current page");
     }
 

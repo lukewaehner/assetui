@@ -1,3 +1,6 @@
+use crate::tui::app::Page;
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Tick,
@@ -5,4 +8,6 @@ pub enum Action {
     Resize(u16, u16),
     Quit,
     ToggleHelp,
+    /// Switch to `Page`, running its lazy page-entry effects.
+    GoToPage(Page),
 }

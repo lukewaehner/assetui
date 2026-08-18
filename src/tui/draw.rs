@@ -61,9 +61,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     app.help_modal.draw(f, &app.theme);
     app.portfolio_modal.draw(f, &app.theme, !app.holdings.is_empty());
-    if app.overlay == Overlay::PagePicker {
-        draw_page_picker(f, app);
-    }
+    app.page_picker.draw(f, &app.theme);
 
     let area = f.area();
     app.notifications.render(f, area);
@@ -780,41 +778,6 @@ pub(crate) fn help_row(keys: &'static str, desc: &'static str, t: &Theme) -> Lin
         ),
         Span::styled(desc, Style::default().fg(t.fg)),
     ])
-}
-
-/// Renders the keybinding help overlay: a centred reference of every command key, grouped by purpose.
-
-fn draw_page_picker(f: &mut Frame, app: &App) {
-    use crate::tui::app::PAGE_ORDER;
-    let t = app.theme;
-    let title = block_title("go to page".into(), &t);
-    let (content, _footer) = modal_frame(f, 30, 34, title, &t);
-
-    let lines: Vec<Line> = PAGE_ORDER
-        .iter()
-        .map(|&p| {
-            let selected = p == app.page_picker.highlighted;
-            let caret = if selected { "› " } else { "  " };
-            let style = if selected {
-                Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(t.fg)
-            };
-            Line::from(Span::styled(format!("{caret}{}", page_label(p)), style))
-        })
-        .collect();
-    f.render_widget(Paragraph::new(lines), content);
-}
-
-/// Human label for a page, shown in the picker.
-fn page_label(p: Page) -> &'static str {
-    match p {
-        Page::Market => "Market",
-        Page::Manage => "Manage",
-        Page::Sectors => "Sectors",
-        Page::News => "News",
-        Page::Optimizer => "Optimizer",
-    }
 }
 
 pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

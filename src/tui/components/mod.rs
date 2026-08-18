@@ -2,6 +2,7 @@ use std::io;
 use crossterm::event::{Event, KeyEvent, MouseEvent};
 use super::action::Action;
 
+#[allow(dead_code)]
 pub trait Component {
     /// Initialize the component.
     fn init(&mut self) -> Result<(), io::Error> {
@@ -26,4 +27,5 @@ pub trait Component {
 }
 
 pub mod help;
+pub mod page_picker;
 pub mod portfolio;

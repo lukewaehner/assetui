@@ -7,7 +7,7 @@ mod stream;
 mod theme;
 pub(crate) mod treemap;
 
-pub mod action;
-pub mod components;
+pub(crate) mod action;
+pub(crate) mod components;
 
 pub use run::run;
