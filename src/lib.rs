@@ -3,6 +3,7 @@
 pub mod black_scholes;
 pub mod cli;
 pub mod db;
+pub mod earnings;
 pub mod fetch;
 pub mod indicators;
 pub mod models;
