@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ticker FROM watchlist",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ticker",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watchlist",
+            "name": "ticker"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d68bb791dd8b3ac6d7061d0547c5b9c5e5bd7435587d6d4a892d83a16c975645"
+}
