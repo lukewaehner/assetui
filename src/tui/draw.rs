@@ -1613,7 +1613,7 @@ pub(crate) fn ranked_movers(rows: &[QuoteRecord], limit: usize) -> Vec<Mover> {
 }
 
 pub(crate) fn bar_cells(pct: f64, max_pct: f64, width: usize) -> usize {
-    if width == 0 || !(max_pct > 0.0) || !max_pct.is_finite() {
+    if width == 0 || !max_pct.is_finite() || max_pct <= 0.0 {
         return 0;
     }
     let frac = (pct.abs() / max_pct).clamp(0.0, 1.0);
@@ -2804,6 +2804,12 @@ mod tests {
     fn bar_cells_is_zero_when_no_width_or_no_spread() {
         assert_eq!(bar_cells(3.0, 6.0, 0), 0);
         assert_eq!(bar_cells(3.0, 0.0, 10), 0);
+    }
+
+    #[test]
+    fn bar_cells_is_zero_for_a_non_finite_max() {
+        assert_eq!(bar_cells(3.0, f64::NAN, 10), 0);
+        assert_eq!(bar_cells(3.0, f64::INFINITY, 10), 0);
     }
 
     fn watchlist(tickers: &[&str]) -> HashSet<String> {
