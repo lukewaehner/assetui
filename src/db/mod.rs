@@ -2,6 +2,7 @@
 
 pub mod alerts;
 pub mod connection;
+pub mod numeric;
 pub mod portfolio;
 pub mod portfolio_history;
 pub mod quotes;

@@ -60,3 +60,32 @@ async fn test_load_orders_days_ascending(pool: sqlx::PgPool) {
         vec![day(2026, 8, 16), day(2026, 8, 17), day(2026, 8, 18)]
     );
 }
+
+#[sqlx::test]
+async fn test_upsert_stores_the_intended_decimal_not_the_float_expansion(pool: sqlx::PgPool) {
+    // arrange
+    let drifted_total = 2811.8999999999996_f64;
+
+    // act
+    upsert_day(&pool, day(2026, 8, 18), drifted_total, 500.0)
+        .await
+        .unwrap();
+
+    // assert
+    let (stored,): (String,) =
+        sqlx::query_as("SELECT market_value::text FROM portfolio_value_history WHERE day = $1")
+            .bind(day(2026, 8, 18))
+            .fetch_one(&pool)
+            .await
+            .expect("stored value should be readable as text");
+    assert_eq!(stored, "2811.90000000");
+}
+
+#[sqlx::test]
+async fn test_upsert_rejects_a_non_finite_total(pool: sqlx::PgPool) {
+    let result = upsert_day(&pool, day(2026, 8, 18), f64::NAN, 500.0).await;
+
+    assert!(result.is_err(), "expected a rejected write");
+    let history = load_history(&pool).await.unwrap();
+    assert!(history.is_empty(), "nothing should have been written");
+}

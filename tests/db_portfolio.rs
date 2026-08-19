@@ -92,3 +92,38 @@ async fn test_remove_absent_is_noop(pool: sqlx::PgPool) {
         .await
         .expect("removing an absent holding should not error");
 }
+
+#[sqlx::test]
+async fn test_upsert_stores_cost_basis_as_the_typed_decimal(pool: sqlx::PgPool) {
+    let holding = Holding {
+        ticker: "AAPL".to_string(),
+        shares: 1.5,
+        avg_cost: 150.10,
+    };
+
+    upsert_holding(&pool, &holding).await.unwrap();
+
+    let (shares, avg_cost): (String, String) =
+        sqlx::query_as("SELECT shares::text, avg_cost::text FROM portfolio_holdings")
+            .fetch_one(&pool)
+            .await
+            .expect("stored values should be readable as text");
+    assert_eq!(
+        (shares.as_str(), avg_cost.as_str()),
+        ("1.50000000", "150.10000000")
+    );
+}
+
+#[sqlx::test]
+async fn test_fractional_shares_round_trip(pool: sqlx::PgPool) {
+    let holding = Holding {
+        ticker: "AMZN".to_string(),
+        shares: 0.00123456,
+        avg_cost: 3300.25,
+    };
+
+    upsert_holding(&pool, &holding).await.unwrap();
+
+    let holdings = list_holdings(&pool).await.unwrap();
+    assert_eq!(holdings, vec![holding]);
+}
