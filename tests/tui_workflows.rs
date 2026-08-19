@@ -1,8 +1,8 @@
-use chrono::{TimeZone, Utc};
 use assetui::db::quotes::store_quote_to_db;
 use assetui::fetch::fetch_latest_per_ticker;
 use assetui::models::QuoteRecord;
 use assetui::sort::{SortMode, SortOrder};
+use chrono::{TimeZone, Utc};
 
 /// Construct a `QuoteRecord` suitable for TUI workflow tests.
 fn tui_quote(ticker: &str, price: f64, seq: u32) -> QuoteRecord {
@@ -99,9 +99,10 @@ async fn test_tui_sort_change_reloads_correctly(pool: sqlx::PgPool) {
         "MANGO last alphabetically"
     );
 
-    let by_price_desc = fetch_latest_per_ticker(&pool, SortMode::ByPrice, SortOrder::Descending, 200)
-        .await
-        .unwrap();
+    let by_price_desc =
+        fetch_latest_per_ticker(&pool, SortMode::ByPrice, SortOrder::Descending, 200)
+            .await
+            .unwrap();
 
     assert_eq!(by_price_desc.len(), 3);
     assert_eq!(

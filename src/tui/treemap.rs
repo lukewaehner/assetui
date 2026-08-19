@@ -49,7 +49,11 @@ pub(crate) fn squarify(weights: &[f64], area: Rect) -> Vec<Rect> {
 
         let mut pos = if vertical_strip { fy } else { fx };
         for k in i..j {
-            let cell = if row_sum > 0.0 { areas[k] / row_sum * short } else { 0.0 };
+            let cell = if row_sum > 0.0 {
+                areas[k] / row_sum * short
+            } else {
+                0.0
+            };
             let mut r = if vertical_strip {
                 Rect::new(
                     fx.round() as u16,
@@ -133,7 +137,10 @@ mod tests {
             let rects = squarify(weights, *area);
             assert_eq!(rects.len(), weights.len());
             for r in &rects {
-                assert!(contains(*area, *r), "rect {r:?} escaped {area:?} for {weights:?}");
+                assert!(
+                    contains(*area, *r),
+                    "rect {r:?} escaped {area:?} for {weights:?}"
+                );
             }
         }
     }
@@ -144,7 +151,10 @@ mod tests {
         let rects = squarify(&[9.0, 1.0], area);
         let a0 = u32::from(rects[0].width) * u32::from(rects[0].height);
         let a1 = u32::from(rects[1].width) * u32::from(rects[1].height);
-        assert!(a0 > a1, "first weight (9) should get more area than second (1)");
+        assert!(
+            a0 > a1,
+            "first weight (9) should get more area than second (1)"
+        );
     }
 
     #[test]

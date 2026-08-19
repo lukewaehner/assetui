@@ -142,7 +142,9 @@ mod tests {
 
     impl FailingSizeBackend {
         fn new() -> Self {
-            Self { size_calls: CallCounter::new(0) }
+            Self {
+                size_calls: CallCounter::new(0),
+            }
         }
     }
 
@@ -191,7 +193,10 @@ mod tests {
         }
 
         fn window_size(&mut self) -> io::Result<WindowSize> {
-            Ok(WindowSize { columns_rows: Size::new(80, 24), pixels: Size::new(0, 0) })
+            Ok(WindowSize {
+                columns_rows: Size::new(80, 24),
+                pixels: Size::new(0, 0),
+            })
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -207,7 +212,11 @@ mod tests {
         // arrange
         let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
         let mut app = App::new(pool.clone(), YfClient::default(), tx);
-        app.holdings = vec![Holding { ticker: "AAPL".to_string(), shares: 2.0, avg_cost: 100.0 }];
+        app.holdings = vec![Holding {
+            ticker: "AAPL".to_string(),
+            shares: 2.0,
+            avg_cost: 100.0,
+        }];
         app.market.db_display.all_rows = vec![QuoteRecord {
             ticker: Some("AAPL".to_string()),
             price: Some(150.0),
@@ -223,8 +232,16 @@ mod tests {
         let result = run_loop(&mut terminal, &mut app, &mut rx).await;
 
         // assert
-        assert!(result.is_err(), "expected the size() failure to propagate as an Err");
-        let history = load_history(&pool).await.expect("load_history should succeed");
-        assert_eq!(history, vec![(chrono::Local::now().date_naive(), 300.0, 200.0)]);
+        assert!(
+            result.is_err(),
+            "expected the size() failure to propagate as an Err"
+        );
+        let history = load_history(&pool)
+            .await
+            .expect("load_history should succeed");
+        assert_eq!(
+            history,
+            vec![(chrono::Local::now().date_naive(), 300.0, 200.0)]
+        );
     }
 }

@@ -1,16 +1,16 @@
 use ratatui::{
+    Frame,
+    style::Style,
     symbols::Marker,
     text::{Line, Span},
-    widgets::{Clear, GraphType, Dataset, Chart, Axis},
-    style::Style,
-    Frame,
+    widgets::{Axis, Chart, Clear, Dataset, GraphType},
 };
 
 use crate::tui::{
+    action::Action,
     components::Component,
     draw::{block_title, centered_rect, modal_block, placeholder},
     theme::Theme,
-    action::Action,
 };
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -154,7 +154,7 @@ impl Component for PortfolioModal {
 mod tests {
     use super::*;
     use crate::tui::theme::Appearance;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
         terminal
@@ -179,7 +179,11 @@ mod tests {
 
     #[test]
     fn basis_series_steps_when_the_basis_changes_mid_series() {
-        let history = vec![(d(1), 100.0, 500.0), (d(2), 110.0, 500.0), (d(3), 140.0, 700.0)];
+        let history = vec![
+            (d(1), 100.0, 500.0),
+            (d(2), 110.0, 500.0),
+            (d(3), 140.0, 700.0),
+        ];
 
         let points = basis_series(&history);
 
@@ -193,7 +197,11 @@ mod tests {
 
     #[test]
     fn draw_shows_loading_message_while_loading_with_no_history_yet() {
-        let modal = PortfolioModal { is_open: true, history: Vec::new(), loading: true };
+        let modal = PortfolioModal {
+            is_open: true,
+            history: Vec::new(),
+            loading: true,
+        };
 
         let text = draw_modal(&modal);
 
@@ -202,7 +210,11 @@ mod tests {
 
     #[test]
     fn draw_shows_empty_state_when_not_loading_and_history_is_empty() {
-        let modal = PortfolioModal { is_open: true, history: Vec::new(), loading: false };
+        let modal = PortfolioModal {
+            is_open: true,
+            history: Vec::new(),
+            loading: false,
+        };
 
         let text = draw_modal(&modal);
 
@@ -232,7 +244,10 @@ mod tests {
 
         let text = draw_modal(&modal);
 
-        assert!(text.contains("$1100.00"), "latest value is drawn in the title");
+        assert!(
+            text.contains("$1100.00"),
+            "latest value is drawn in the title"
+        );
         assert!(!text.contains("no history yet"));
         assert!(!text.contains("not enough history yet"));
     }

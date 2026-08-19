@@ -1,11 +1,11 @@
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::Alignment,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
-use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::tui::{
     action::Action,

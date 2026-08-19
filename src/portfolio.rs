@@ -23,7 +23,9 @@ impl std::fmt::Display for HoldingParseError {
                 write!(f, "enter shares and average cost, e.g. 10 150.50")
             }
             HoldingParseError::InvalidNumber(s) => write!(f, "not a number: {s}"),
-            HoldingParseError::NonPositiveShares(v) => write!(f, "shares must be positive (got {v})"),
+            HoldingParseError::NonPositiveShares(v) => {
+                write!(f, "shares must be positive (got {v})")
+            }
             HoldingParseError::NegativeCost(v) => write!(f, "cost can't be negative (got {v})"),
         }
     }
@@ -53,8 +55,7 @@ pub fn parse_holding_input(input: &str) -> Result<(f64, f64), HoldingParseError>
 }
 
 pub fn parse_holding_entry(input: &str) -> Result<Holding, HoldingParseError> {
-    let (ticker, rest) =
-        split_ticker_entry(input).ok_or(HoldingParseError::WrongFieldCount)?;
+    let (ticker, rest) = split_ticker_entry(input).ok_or(HoldingParseError::WrongFieldCount)?;
     let (shares, avg_cost) = parse_holding_input(rest)?;
     Ok(Holding {
         ticker,
@@ -112,7 +113,9 @@ pub fn value_position(
     let market_value = price.map(|p| holding.shares * p);
     let unrealized_pnl = price.map(|p| holding.shares * (p - holding.avg_cost));
     let unrealized_pnl_pct = match price {
-        Some(p) if holding.avg_cost != 0.0 => Some((p - holding.avg_cost) / holding.avg_cost * 100.0),
+        Some(p) if holding.avg_cost != 0.0 => {
+            Some((p - holding.avg_cost) / holding.avg_cost * 100.0)
+        }
         _ => None,
     };
     let day_change = match (price, previous_close) {
@@ -154,7 +157,11 @@ pub fn summarize(positions: &[Position]) -> PortfolioSummary {
 
 pub(crate) fn resolve_price(ticker: &str, rows: &[QuoteRecord]) -> (Option<f64>, Option<f64>) {
     rows.iter()
-        .find(|r| r.ticker.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticker)))
+        .find(|r| {
+            r.ticker
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case(ticker))
+        })
         .map_or((None, None), |r| (r.price, r.previous_close))
 }
 
@@ -195,7 +202,11 @@ pub fn series_return(series: &[(NaiveDate, f64)], cost_basis: f64) -> SeriesRetu
     } else {
         None
     };
-    SeriesReturn { latest_value, total_pnl, total_pnl_pct }
+    SeriesReturn {
+        latest_value,
+        total_pnl,
+        total_pnl_pct,
+    }
 }
 
 #[cfg(test)]
@@ -247,8 +258,14 @@ mod tests {
 
     #[test]
     fn parse_holding_input_wrong_field_count_is_error() {
-        assert_eq!(parse_holding_input("10"), Err(HoldingParseError::WrongFieldCount));
-        assert_eq!(parse_holding_input("10 150 3"), Err(HoldingParseError::WrongFieldCount));
+        assert_eq!(
+            parse_holding_input("10"),
+            Err(HoldingParseError::WrongFieldCount)
+        );
+        assert_eq!(
+            parse_holding_input("10 150 3"),
+            Err(HoldingParseError::WrongFieldCount)
+        );
     }
 
     #[test]
@@ -261,28 +278,50 @@ mod tests {
 
     #[test]
     fn parse_holding_input_non_positive_shares_is_error() {
-        assert_eq!(parse_holding_input("0 150"), Err(HoldingParseError::NonPositiveShares(0.0)));
-        assert_eq!(parse_holding_input("-5 150"), Err(HoldingParseError::NonPositiveShares(-5.0)));
+        assert_eq!(
+            parse_holding_input("0 150"),
+            Err(HoldingParseError::NonPositiveShares(0.0))
+        );
+        assert_eq!(
+            parse_holding_input("-5 150"),
+            Err(HoldingParseError::NonPositiveShares(-5.0))
+        );
     }
 
     #[test]
     fn parse_holding_input_negative_cost_is_error() {
-        assert_eq!(parse_holding_input("10 -3"), Err(HoldingParseError::NegativeCost(-3.0)));
+        assert_eq!(
+            parse_holding_input("10 -3"),
+            Err(HoldingParseError::NegativeCost(-3.0))
+        );
     }
 
     #[test]
     fn parse_holding_entry_valid() {
         assert_eq!(
             parse_holding_entry("aapl 10 150.5"),
-            Ok(Holding { ticker: "AAPL".to_string(), shares: 10.0, avg_cost: 150.5 })
+            Ok(Holding {
+                ticker: "AAPL".to_string(),
+                shares: 10.0,
+                avg_cost: 150.5
+            })
         );
     }
 
     #[test]
     fn parse_holding_entry_missing_fields_is_error() {
-        assert_eq!(parse_holding_entry("AAPL"), Err(HoldingParseError::WrongFieldCount));
-        assert_eq!(parse_holding_entry("AAPL 10"), Err(HoldingParseError::WrongFieldCount));
-        assert_eq!(parse_holding_entry(""), Err(HoldingParseError::WrongFieldCount));
+        assert_eq!(
+            parse_holding_entry("AAPL"),
+            Err(HoldingParseError::WrongFieldCount)
+        );
+        assert_eq!(
+            parse_holding_entry("AAPL 10"),
+            Err(HoldingParseError::WrongFieldCount)
+        );
+        assert_eq!(
+            parse_holding_entry(""),
+            Err(HoldingParseError::WrongFieldCount)
+        );
     }
 
     #[test]
@@ -413,8 +452,24 @@ mod tests {
     fn persistable_totals_returns_value_and_cost_when_every_holding_is_priced() {
         // arrange
         let positions = vec![
-            value_position(Holding { ticker: "AAPL".into(), shares: 10.0, avg_cost: 100.0 }, Some(120.0), None),
-            value_position(Holding { ticker: "TSLA".into(), shares: 5.0, avg_cost: 200.0 }, Some(220.0), None),
+            value_position(
+                Holding {
+                    ticker: "AAPL".into(),
+                    shares: 10.0,
+                    avg_cost: 100.0,
+                },
+                Some(120.0),
+                None,
+            ),
+            value_position(
+                Holding {
+                    ticker: "TSLA".into(),
+                    shares: 5.0,
+                    avg_cost: 200.0,
+                },
+                Some(220.0),
+                None,
+            ),
         ];
 
         // act
@@ -427,8 +482,24 @@ mod tests {
     #[test]
     fn persistable_totals_is_none_when_any_holding_is_unpriced() {
         let positions = vec![
-            value_position(Holding { ticker: "AAPL".into(), shares: 10.0, avg_cost: 100.0 }, Some(120.0), None),
-            value_position(Holding { ticker: "TSLA".into(), shares: 5.0, avg_cost: 200.0 }, None, None),
+            value_position(
+                Holding {
+                    ticker: "AAPL".into(),
+                    shares: 10.0,
+                    avg_cost: 100.0,
+                },
+                Some(120.0),
+                None,
+            ),
+            value_position(
+                Holding {
+                    ticker: "TSLA".into(),
+                    shares: 5.0,
+                    avg_cost: 200.0,
+                },
+                None,
+                None,
+            ),
         ];
 
         assert_eq!(persistable_totals(&positions), None);

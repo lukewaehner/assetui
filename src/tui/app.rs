@@ -16,8 +16,8 @@ use super::theme::{Appearance, Theme};
 use crate::{
     cli::parse_tickers,
     models::{
-        Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis,
-        QuoteRecordStatistics, QuoteTick, StockNews, Ticker, crosses, parse_alert_entry,
+        Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics,
+        QuoteTick, StockNews, Ticker, crosses, parse_alert_entry,
     },
     news_feed::{NewsFeedState, feed_source_tickers, merge_feed},
     portfolio::{Holding, parse_holding_entry},
@@ -84,7 +84,10 @@ pub enum AppEvent {
     /// Quarterly earnings history loaded for the selected stock.
     EarningsReady(crate::earnings::TickerEarnings),
     /// Quarterly earnings fetch failed for `ticker`.
-    EarningsFailed { ticker: String, message: String },
+    EarningsFailed {
+        ticker: String,
+        message: String,
+    },
     /// Active price alerts loaded from the database at startup.
     AlertsLoaded(Vec<Alert>),
     /// Portfolio holdings loaded from the database at startup.
@@ -433,7 +436,10 @@ impl InputMode {
 
     /// Whether a fuzzy filter is active (being typed or already applied).
     pub fn is_fuzzy(&self) -> bool {
-        matches!(self.activity, InputActivity::Fuzzy | InputActivity::FuzzyApplied)
+        matches!(
+            self.activity,
+            InputActivity::Fuzzy | InputActivity::FuzzyApplied
+        )
     }
 }
 
@@ -746,10 +752,8 @@ impl App {
     }
 
     fn sample_portfolio_value(&mut self) {
-        let positions = crate::portfolio::portfolio_positions(
-            &self.holdings,
-            &self.market.db_display.all_rows,
-        );
+        let positions =
+            crate::portfolio::portfolio_positions(&self.holdings, &self.market.db_display.all_rows);
         if !positions.iter().any(|p| p.market_value.is_some()) {
             return;
         }
@@ -766,10 +770,8 @@ impl App {
         if !self.has_live_prices {
             return None;
         }
-        let positions = crate::portfolio::portfolio_positions(
-            &self.holdings,
-            &self.market.db_display.all_rows,
-        );
+        let positions =
+            crate::portfolio::portfolio_positions(&self.holdings, &self.market.db_display.all_rows);
         crate::portfolio::persistable_totals(&positions)
     }
 
@@ -787,8 +789,12 @@ impl App {
         {
             Some(row) => *row = (day, market_value, cost_basis),
             None => {
-                self.portfolio_modal.history.push((day, market_value, cost_basis));
-                self.portfolio_modal.history.sort_unstable_by_key(|(d, _, _)| *d);
+                self.portfolio_modal
+                    .history
+                    .push((day, market_value, cost_basis));
+                self.portfolio_modal
+                    .history
+                    .sort_unstable_by_key(|(d, _, _)| *d);
             }
         }
         self.spawn_history_sample(day, market_value, cost_basis);
@@ -819,10 +825,7 @@ impl App {
         } else if self.overlay == Overlay::Earnings {
             (StatusMode::View, "q/e/esc close")
         } else if self.page == Page::Sectors {
-            (
-                StatusMode::Sectors,
-                "r refresh · tab pages · q quit",
-            )
+            (StatusMode::Sectors, "r refresh · tab pages · q quit")
         } else if self.page == Page::News {
             (
                 StatusMode::News,
@@ -831,7 +834,10 @@ impl App {
         } else if self.page == Page::Optimizer {
             (StatusMode::Optimizer, "r refresh · tab pages")
         } else if self.market.input_mode.is_focused() && self.market.input_mode.is_fuzzy() {
-            (StatusMode::Search, "type to filter · enter apply · esc cancel")
+            (
+                StatusMode::Search,
+                "type to filter · enter apply · esc cancel",
+            )
         } else if self.market.input_mode.is_focused() {
             (StatusMode::Input, "type ticker · enter fetch · esc done")
         } else if self.market.input_mode.is_fuzzy() {
@@ -878,10 +884,9 @@ impl App {
                 self.push_log(format!("[SUCCESS] stored {name}"));
                 if let Some(tk) = record.ticker.as_deref() {
                     let up = tk.to_ascii_uppercase();
-                    self.market
-                        .db_display
-                        .all_rows
-                        .retain(|r| r.ticker.as_deref().map(str::to_ascii_uppercase) != Some(up.clone()));
+                    self.market.db_display.all_rows.retain(|r| {
+                        r.ticker.as_deref().map(str::to_ascii_uppercase) != Some(up.clone())
+                    });
                 }
                 if let (Some(ticker), Some(price)) = (record.ticker.as_deref(), record.price) {
                     append_spark_point(
@@ -981,7 +986,9 @@ impl App {
                 self.push_error(message);
             }
             AppEvent::OptimizerDataReady { histories } => {
-                use crate::optimizer::{MC_SAMPLES, MC_SEED, RISK_FREE_ANNUAL, compute_optimization};
+                use crate::optimizer::{
+                    MC_SAMPLES, MC_SEED, RISK_FREE_ANNUAL, compute_optimization,
+                };
                 use crate::portfolio::portfolio_positions;
                 self.optimizer.loading = false;
                 let total = histories.len();
@@ -1047,7 +1054,8 @@ impl App {
 
         let mut fired: Vec<Alert> = Vec::new();
         self.alerts.retain(|a| {
-            let hit = a.ticker.eq_ignore_ascii_case(ticker) && crosses(a.direction, a.threshold, price);
+            let hit =
+                a.ticker.eq_ignore_ascii_case(ticker) && crosses(a.direction, a.threshold, price);
             if hit {
                 fired.push(a.clone());
             }
@@ -1174,7 +1182,12 @@ impl App {
         };
         match feed_item.item.link.clone() {
             Some(link) if !link.is_empty() => self.spawn_open_url(link),
-            _ => self.push_toast(Level::Info, "News", "NEWS", "no link for this headline".into()),
+            _ => self.push_toast(
+                Level::Info,
+                "News",
+                "NEWS",
+                "no link for this headline".into(),
+            ),
         }
     }
 
@@ -1225,7 +1238,8 @@ impl App {
                     self.manage.selected -= 1;
                 } else {
                     self.manage.section = ManageSection::Holdings;
-                    self.manage.selected = ManageSection::Holdings.item_count(self).saturating_sub(1);
+                    self.manage.selected =
+                        ManageSection::Holdings.item_count(self).saturating_sub(1);
                 }
             }
         }
@@ -1645,7 +1659,8 @@ impl App {
             return;
         }
         let i = self
-            .market.db_display
+            .market
+            .db_display
             .table_state
             .selected()
             .map(|i| {
@@ -1687,7 +1702,8 @@ impl App {
     fn apply_filter(&mut self) {
         let query = &self.market.input_mode.input;
         let mut rows: Vec<QuoteRecord> = if self.market.input_mode.is_fuzzy() {
-            self.market.db_display
+            self.market
+                .db_display
                 .all_rows
                 .iter()
                 .filter(|r| r.matches_query(query))
@@ -1710,7 +1726,8 @@ impl App {
             return;
         }
         let global_idx = self
-            .market.db_display
+            .market
+            .db_display
             .table_state
             .selected()
             .map(|i| self.market.db_display.page * self.market.db_display.page_size + i);
@@ -1718,7 +1735,8 @@ impl App {
         self.market.db_display.page_size = size;
 
         let target_page = global_idx.map(|gi| gi / size).unwrap_or(0);
-        self.market.db_display.page = target_page.min(self.market.db_display.total_pages().saturating_sub(1));
+        self.market.db_display.page =
+            target_page.min(self.market.db_display.total_pages().saturating_sub(1));
 
         let win_len = self.market.db_display.window_len();
         if win_len == 0 {
@@ -1741,7 +1759,8 @@ impl App {
 
     fn open_info_modal(&mut self) {
         let Some(stock) = self
-            .market.db_display
+            .market
+            .db_display
             .table_state
             .selected()
             .and_then(|i| self.market.db_display.window().get(i))
@@ -1789,7 +1808,8 @@ impl App {
 
     fn open_chart_modal(&mut self) {
         let Some(stock) = self
-            .market.db_display
+            .market
+            .db_display
             .table_state
             .selected()
             .and_then(|i| self.market.db_display.window().get(i))
@@ -1808,7 +1828,8 @@ impl App {
     /// Opens the options-chain modal for the selected row and starts fetching its chain in the background.
     fn open_options_modal(&mut self) {
         let Some(stock) = self
-            .market.db_display
+            .market
+            .db_display
             .table_state
             .selected()
             .and_then(|i| self.market.db_display.window().get(i))
@@ -1840,7 +1861,8 @@ impl App {
 
     fn open_earnings_modal(&mut self) {
         let Some(stock) = self
-            .market.db_display
+            .market
+            .db_display
             .table_state
             .selected()
             .and_then(|i| self.market.db_display.window().get(i))
@@ -1931,8 +1953,10 @@ mod tests {
             priced_row("NVDA", None),
             priced_row("TSLA", Some(250.0)),
         ];
-        let subscribed: HashSet<String> =
-            ["AAPL", "MSFT", "NVDA"].iter().map(|s| s.to_string()).collect();
+        let subscribed: HashSet<String> = ["AAPL", "MSFT", "NVDA"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let now = Utc::now();
 
         let out = snapshot_records(&rows, &subscribed, now);
@@ -2007,8 +2031,18 @@ mod tests {
 
         let (mut app, _rx) = make_test_app();
         let tiles = vec![
-            SectorTile { ticker: "AAPL".into(), name: "Apple".into(), market_cap: 100.0, day_pct: 1.0 },
-            SectorTile { ticker: "MSFT".into(), name: "Microsoft".into(), market_cap: 50.0, day_pct: -0.5 },
+            SectorTile {
+                ticker: "AAPL".into(),
+                name: "Apple".into(),
+                market_cap: 100.0,
+                day_pct: 1.0,
+            },
+            SectorTile {
+                ticker: "MSFT".into(),
+                name: "Microsoft".into(),
+                market_cap: 50.0,
+                day_pct: -0.5,
+            },
         ];
 
         app.handle_event(AppEvent::SectorDataReady {
@@ -2028,9 +2062,16 @@ mod tests {
         use yfinance_rs::screener::EquitySector;
         let (mut app, _rx) = make_test_app();
 
-        app.handle_event(AppEvent::SectorDataReady { sector: EquitySector::Energy, tiles: Vec::new() });
+        app.handle_event(AppEvent::SectorDataReady {
+            sector: EquitySector::Energy,
+            tiles: Vec::new(),
+        });
 
-        assert_eq!(app.sectors.map.groups.len(), 1, "empty sector still forms a group");
+        assert_eq!(
+            app.sectors.map.groups.len(),
+            1,
+            "empty sector still forms a group"
+        );
         assert_eq!(app.sectors.map.groups[0].total_market_cap, 0.0);
     }
 
@@ -2146,7 +2187,10 @@ mod tests {
         let (mode, hint) = app.status_mode();
 
         // assert
-        assert_eq!((mode, mode.label(), hint), (StatusMode::Help, "HELP", "esc close"));
+        assert_eq!(
+            (mode, mode.label(), hint),
+            (StatusMode::Help, "HELP", "esc close")
+        );
     }
 
     #[tokio::test]
@@ -2166,7 +2210,10 @@ mod tests {
 
         app.handle_event(AppEvent::SparkSeriesLoaded(series));
 
-        assert_eq!(app.market.db_display.spark_series.get("AAPL"), Some(&vec![1.0, 2.0]));
+        assert_eq!(
+            app.market.db_display.spark_series.get("AAPL"),
+            Some(&vec![1.0, 2.0])
+        );
     }
 
     #[test]
@@ -2191,7 +2238,10 @@ mod tests {
     #[tokio::test]
     async fn fetch_completed_extends_the_spark_series_live() {
         let (mut app, _rx) = make_test_app();
-        app.market.db_display.spark_series.insert("AAPL".to_string(), vec![100.0]);
+        app.market
+            .db_display
+            .spark_series
+            .insert("AAPL".to_string(), vec![100.0]);
 
         app.handle_event(AppEvent::FetchCompleted(QuoteRecord {
             ticker: Some("AAPL".into()),
@@ -2449,7 +2499,10 @@ mod tests {
         app.handle_event(AppEvent::OptionChainReady(chain_for("AAPL")));
 
         assert_eq!(
-            app.stock_modal.option_chain.as_ref().map(|c| c.underlying.as_str()),
+            app.stock_modal
+                .option_chain
+                .as_ref()
+                .map(|c| c.underlying.as_str()),
             Some("AAPL")
         );
     }
@@ -2459,7 +2512,9 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.stock_modal.selected_expiry = 2;
 
-        app.handle_event(AppEvent::OptionChainReady(chain_with_expirations("AAPL", 5)));
+        app.handle_event(AppEvent::OptionChainReady(chain_with_expirations(
+            "AAPL", 5,
+        )));
 
         assert_eq!(app.stock_modal.selected_expiry, 2);
     }
@@ -2469,7 +2524,9 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.stock_modal.selected_expiry = 9;
 
-        app.handle_event(AppEvent::OptionChainReady(chain_with_expirations("AAPL", 3)));
+        app.handle_event(AppEvent::OptionChainReady(chain_with_expirations(
+            "AAPL", 3,
+        )));
 
         assert_eq!(app.stock_modal.selected_expiry, 2);
     }
@@ -2487,7 +2544,9 @@ mod tests {
         app.handle_event(AppEvent::OptionChainReady(chain_for("AAPL")));
 
         assert_eq!(
-            app.stock_modal.option_chain.and_then(|c| c.underlying_price),
+            app.stock_modal
+                .option_chain
+                .and_then(|c| c.underlying_price),
             Some(150.0)
         );
     }
@@ -2807,8 +2866,15 @@ mod tests {
 
         type_str(&mut app, "apl");
         assert_eq!(app.market.db_display.rows.len(), 1);
-        assert_eq!(app.market.db_display.rows[0].ticker.as_deref(), Some("AAPL"));
-        assert_eq!(app.market.db_display.all_rows.len(), 3, "master list untouched");
+        assert_eq!(
+            app.market.db_display.rows[0].ticker.as_deref(),
+            Some("AAPL")
+        );
+        assert_eq!(
+            app.market.db_display.all_rows.len(),
+            3,
+            "master list untouched"
+        );
         assert_eq!(app.market.db_display.table_state.selected(), Some(0));
     }
 
@@ -2830,7 +2896,11 @@ mod tests {
         let mut app = app_with_three_stocks();
         app.handle_key(KeyCode::Char('/'));
         type_str(&mut app, "inc");
-        assert_eq!(app.market.db_display.rows.len(), 2, "Apple Inc. + Tesla Inc.");
+        assert_eq!(
+            app.market.db_display.rows.len(),
+            2,
+            "Apple Inc. + Tesla Inc."
+        );
 
         app.handle_key(KeyCode::Enter);
         assert!(!app.market.input_mode.is_focused(), "input box loses focus");
@@ -2878,7 +2948,10 @@ mod tests {
         app.handle_key(KeyCode::Enter);
 
         app.handle_key(KeyCode::Char('i'));
-        assert!(app.market.input_mode.is_focused(), "input box focused for a fetch");
+        assert!(
+            app.market.input_mode.is_focused(),
+            "input box focused for a fetch"
+        );
         assert!(!app.market.input_mode.is_fuzzy());
         assert!(app.market.input_mode.input.is_empty());
         assert_eq!(app.market.db_display.rows.len(), 3, "filter cleared");
@@ -2896,8 +2969,15 @@ mod tests {
             named("TSLA", "Tesla Inc."),
         ]));
         assert_eq!(app.market.db_display.all_rows.len(), 2);
-        assert_eq!(app.market.db_display.rows.len(), 1, "filter survives the reload");
-        assert_eq!(app.market.db_display.rows[0].ticker.as_deref(), Some("AAPL"));
+        assert_eq!(
+            app.market.db_display.rows.len(),
+            1,
+            "filter survives the reload"
+        );
+        assert_eq!(
+            app.market.db_display.rows[0].ticker.as_deref(),
+            Some("AAPL")
+        );
     }
 
     #[tokio::test]
@@ -2918,7 +2998,8 @@ mod tests {
 
         app.handle_key(KeyCode::Esc);
         let tsla = app
-            .market.db_display
+            .market
+            .db_display
             .rows
             .iter()
             .find(|r| r.ticker.as_deref() == Some("TSLA"))
@@ -2991,7 +3072,10 @@ mod tests {
                 link: Some("http://old".into()),
             }],
         });
-        assert!(!app.market.news_feed.items.is_empty(), "feed pre-seeded before the toggle");
+        assert!(
+            !app.market.news_feed.items.is_empty(),
+            "feed pre-seeded before the toggle"
+        );
 
         app.handle_key(KeyCode::Char('w'));
 
@@ -3157,7 +3241,9 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         let day = chrono::NaiveDate::from_ymd_opt(2026, 8, 18).unwrap();
 
-        app.handle_event(AppEvent::PortfolioHistoryLoaded(vec![(day, 1100.0, 1000.0)]));
+        app.handle_event(AppEvent::PortfolioHistoryLoaded(vec![(
+            day, 1100.0, 1000.0,
+        )]));
 
         assert_eq!(app.portfolio_modal.history, vec![(day, 1100.0, 1000.0)]);
     }
@@ -3177,7 +3263,9 @@ mod tests {
         let (mut app, _rx) = make_test_app();
         app.portfolio_modal.loading = true;
 
-        app.handle_event(AppEvent::PortfolioHistoryFailed("db unreachable".to_string()));
+        app.handle_event(AppEvent::PortfolioHistoryFailed(
+            "db unreachable".to_string(),
+        ));
 
         assert!(!app.portfolio_modal.loading);
     }
@@ -3204,7 +3292,9 @@ mod tests {
     async fn test_opening_the_portfolio_modal_does_not_refetch() {
         let (mut app, _rx) = make_test_app();
         let day = chrono::NaiveDate::from_ymd_opt(2026, 8, 18).unwrap();
-        app.handle_event(AppEvent::PortfolioHistoryLoaded(vec![(day, 1100.0, 1000.0)]));
+        app.handle_event(AppEvent::PortfolioHistoryLoaded(vec![(
+            day, 1100.0, 1000.0,
+        )]));
 
         app.handle_command_key('P');
 
@@ -3271,7 +3361,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_record_history_sample_keeps_the_series_sorted_when_today_is_earlier_than_an_existing_entry() {
+    async fn test_record_history_sample_keeps_the_series_sorted_when_today_is_earlier_than_an_existing_entry()
+     {
         let (mut app, _rx) = make_test_app();
         let day = chrono::Local::now().date_naive();
         let future_day = day + chrono::Duration::days(1);
@@ -3398,7 +3489,11 @@ mod tests {
 
         app.handle_event(AppEvent::QuoteTick(price_tick("TSLA", Some(9_999.0))));
 
-        assert_eq!(app.alerts.len(), 1, "AAPL alert must not fire on a TSLA tick");
+        assert_eq!(
+            app.alerts.len(),
+            1,
+            "AAPL alert must not fire on a TSLA tick"
+        );
     }
 
     #[tokio::test]
@@ -3443,7 +3538,11 @@ mod tests {
 
         let positions =
             crate::portfolio::portfolio_positions(&app.holdings, &app.market.db_display.all_rows);
-        assert_eq!(positions[0].market_value, Some(1200.0), "AAPL still valued at its own price");
+        assert_eq!(
+            positions[0].market_value,
+            Some(1200.0),
+            "AAPL still valued at its own price"
+        );
     }
 
     #[tokio::test]
@@ -3484,7 +3583,8 @@ mod tests {
         app.handle_event(AppEvent::QuoteTick(price_tick("MSFT", Some(200.0))));
 
         assert!(
-            !app.market.db_display
+            !app.market
+                .db_display
                 .all_rows
                 .iter()
                 .any(|r| r.ticker.as_deref() == Some("MSFT")),
@@ -3556,7 +3656,11 @@ mod tests {
 
         app.handle_key(KeyCode::Tab);
         assert!(app.page_picker.is_open, "tab opens the picker");
-        assert_eq!(app.page_picker.highlighted, Page::Market, "seeded to current page");
+        assert_eq!(
+            app.page_picker.highlighted,
+            Page::Market,
+            "seeded to current page"
+        );
         assert_eq!(app.page, Page::Market, "page unchanged while picking");
 
         app.handle_key(KeyCode::Tab);
@@ -3601,7 +3705,11 @@ mod tests {
         app.handle_key(KeyCode::Char('a'));
         assert!(app.manage.input.is_some(), "entry is active");
         app.handle_key(KeyCode::Tab);
-        assert_eq!(app.overlay, Overlay::None, "tab does not open the picker mid-entry");
+        assert_eq!(
+            app.overlay,
+            Overlay::None,
+            "tab does not open the picker mid-entry"
+        );
     }
 
     #[tokio::test]
@@ -3613,7 +3721,10 @@ mod tests {
         app.handle_key(KeyCode::Char('k'));
         app.handle_key(KeyCode::Enter);
         assert_eq!(app.page, Page::News);
-        assert!(app.market.news_feed.requested, "entering News lazily fetches");
+        assert!(
+            app.market.news_feed.requested,
+            "entering News lazily fetches"
+        );
     }
 
     #[tokio::test]
@@ -3654,7 +3765,10 @@ mod tests {
     #[test]
     fn test_manage_section_input_kind_maps_each_section() {
         // arrange
-        assert_eq!(ManageSection::Holdings.input_kind(), ManageInputKind::Holding);
+        assert_eq!(
+            ManageSection::Holdings.input_kind(),
+            ManageInputKind::Holding
+        );
         assert_eq!(ManageSection::Alerts.input_kind(), ManageInputKind::Alert);
     }
 
@@ -3687,7 +3801,10 @@ mod tests {
 
         app.handle_key(KeyCode::Char('e'));
 
-        assert_eq!(app.manage.input.as_ref().map(|i| i.buffer.as_str()), Some("AAPL 5 100"));
+        assert_eq!(
+            app.manage.input.as_ref().map(|i| i.buffer.as_str()),
+            Some("AAPL 5 100")
+        );
     }
 
     #[tokio::test]
@@ -3721,7 +3838,10 @@ mod tests {
         app.handle_key(KeyCode::Char('d'));
 
         assert_eq!(app.holdings.len(), 1);
-        assert_eq!(app.holdings[0].ticker, "TSLA", "the selected (first) holding is removed");
+        assert_eq!(
+            app.holdings[0].ticker, "TSLA",
+            "the selected (first) holding is removed"
+        );
     }
 
     #[tokio::test]
@@ -3734,7 +3854,10 @@ mod tests {
         app.handle_key(KeyCode::Enter);
 
         assert!(app.holdings.is_empty());
-        assert!(app.manage.input.is_some(), "a bad entry keeps the line open");
+        assert!(
+            app.manage.input.is_some(),
+            "a bad entry keeps the line open"
+        );
     }
 
     #[tokio::test]
@@ -3747,7 +3870,11 @@ mod tests {
         app.handle_key(KeyCode::Esc);
 
         assert!(app.manage.input.is_none());
-        assert_eq!(app.page, Page::Manage, "esc cancels the input, not the page");
+        assert_eq!(
+            app.page,
+            Page::Manage,
+            "esc cancels the input, not the page"
+        );
     }
 
     #[tokio::test]
@@ -3838,14 +3965,20 @@ mod tests {
         assert!(dashboard.contains("movers"), "movers cube is drawn");
         assert!(dashboard.contains("alerts"), "alerts cube is drawn");
         assert!(dashboard.contains("breadth"), "breadth cube is drawn");
-        assert!(dashboard.contains("most active"), "most-active cube is drawn");
+        assert!(
+            dashboard.contains("most active"),
+            "most-active cube is drawn"
+        );
         assert!(dashboard.contains("status"), "status cube is drawn");
 
         app.handle_key(KeyCode::Char('L'));
         terminal
             .draw(|f| crate::tui::draw::draw(f, &mut app))
             .expect("log panel should render after toggle");
-        assert!(buffer_text(&terminal).contains("logs"), "logs panel is drawn");
+        assert!(
+            buffer_text(&terminal).contains("logs"),
+            "logs panel is drawn"
+        );
     }
 
     fn buffer_text(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> String {
@@ -3864,18 +3997,25 @@ mod tests {
             &app.market.dashboard.holdings,
             &app.market.dashboard.rows,
         )[0]
-            .market_value
+        .market_value
     }
 
     #[tokio::test]
     async fn test_dashboard_snapshot_primes_on_first_tick() {
         let (mut app, _rx) = make_test_app();
         app.handle_event(AppEvent::PageLoaded(vec![quote("AAPL", 110.0, 100.0)]));
-        assert!(app.market.dashboard.rows.is_empty(), "empty before any tick");
+        assert!(
+            app.market.dashboard.rows.is_empty(),
+            "empty before any tick"
+        );
 
         app.tick(Duration::from_millis(100));
 
-        assert_eq!(app.market.dashboard.rows.len(), 1, "first tick primes the snapshot");
+        assert_eq!(
+            app.market.dashboard.rows.len(),
+            1,
+            "first tick primes the snapshot"
+        );
     }
 
     #[tokio::test]
@@ -3901,7 +4041,11 @@ mod tests {
         );
 
         app.tick(Duration::from_secs(2));
-        assert_eq!(dashboard_market_value(&app), Some(1500.0), "10 shares * $150");
+        assert_eq!(
+            dashboard_market_value(&app),
+            Some(1500.0),
+            "10 shares * $150"
+        );
     }
 
     #[tokio::test]
@@ -3929,15 +4073,17 @@ mod tests {
     #[tokio::test]
     async fn test_portfolio_value_series_caps_and_drops_oldest() {
         let (mut app, _rx) = make_test_app();
-        app.market.portfolio_value_series = (0..PORTFOLIO_SERIES_CAP as u64)
-            .map(|i| i as f64)
-            .collect();
+        app.market.portfolio_value_series =
+            (0..PORTFOLIO_SERIES_CAP as u64).map(|i| i as f64).collect();
         app.holdings = vec![holding_for("AAPL")];
         app.handle_event(AppEvent::PageLoaded(vec![quote("AAPL", 110.0, 100.0)]));
 
         app.tick(Duration::from_millis(100));
 
-        assert_eq!(app.market.portfolio_value_series.len(), PORTFOLIO_SERIES_CAP);
+        assert_eq!(
+            app.market.portfolio_value_series.len(),
+            PORTFOLIO_SERIES_CAP
+        );
         assert_eq!(app.market.portfolio_value_series.front(), Some(&1.0));
         assert_eq!(app.market.portfolio_value_series.back(), Some(&1100.0));
     }

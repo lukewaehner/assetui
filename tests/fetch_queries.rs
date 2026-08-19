@@ -1,8 +1,8 @@
-use chrono::{DateTime, TimeZone, Utc};
 use assetui::db::quotes::store_quote_to_db;
 use assetui::fetch::fetch_latest_per_ticker;
 use assetui::models::QuoteRecord;
 use assetui::sort::{SortMode, SortOrder};
+use chrono::{DateTime, TimeZone, Utc};
 
 fn make_quote(ticker: &str, price: f64, as_of: DateTime<Utc>) -> QuoteRecord {
     QuoteRecord {
@@ -35,7 +35,11 @@ async fn test_fetch_latest_per_ticker_recent_respects_limit(pool: sqlx::PgPool) 
     let rows = fetch_latest_per_ticker(&pool, SortMode::ByAsOf, SortOrder::Descending, 3)
         .await
         .unwrap();
-    assert_eq!(rows.len(), 3, "fetch_latest_per_ticker should respect the limit of 3");
+    assert_eq!(
+        rows.len(),
+        3,
+        "fetch_latest_per_ticker should respect the limit of 3"
+    );
 }
 
 #[sqlx::test]

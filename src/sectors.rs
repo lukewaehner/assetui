@@ -93,10 +93,20 @@ mod tests {
 
     #[test]
     fn make_tile_builds_a_tile_when_all_fields_present() {
-        let t = make_tile(Some("AAPL".into()), Some("Apple".into()), Some(100.0), Some(1.5));
+        let t = make_tile(
+            Some("AAPL".into()),
+            Some("Apple".into()),
+            Some(100.0),
+            Some(1.5),
+        );
         assert_eq!(
             t,
-            Some(SectorTile { ticker: "AAPL".into(), name: "Apple".into(), market_cap: 100.0, day_pct: 1.5 })
+            Some(SectorTile {
+                ticker: "AAPL".into(),
+                name: "Apple".into(),
+                market_cap: 100.0,
+                day_pct: 1.5
+            })
         );
     }
 

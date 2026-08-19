@@ -8,8 +8,8 @@ use assetui::cli::print_tickers;
 use assetui::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
 use assetui::db::quotes::dump_table_to_csv;
 use assetui::run::fetch_and_store;
-use tracing_subscriber::EnvFilter;
 use std::time::Duration;
+use tracing_subscriber::EnvFilter;
 use yfinance_rs::{CacheEndpoint, YfClient};
 
 #[derive(Parser)]

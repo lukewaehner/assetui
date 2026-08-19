@@ -1,10 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Layout},
     style::Style,
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 
 use crate::earnings::{TickerEarnings, surprise_pct};
@@ -58,7 +58,10 @@ impl EarningsModal {
         let mut lines = vec![
             section_heading("EPS", None, t),
             Line::from(Span::styled(
-                format!("  {:<10}{:>9}{:>9}{:>11}", "PERIOD", "EST", "ACTUAL", "SURPRISE"),
+                format!(
+                    "  {:<10}{:>9}{:>9}{:>11}",
+                    "PERIOD", "EST", "ACTUAL", "SURPRISE"
+                ),
                 Style::default().fg(t.dim),
             )),
         ];
@@ -87,9 +90,15 @@ impl EarningsModal {
                 .filter_map(|r| r.revenue)
                 .fold(0.0_f64, f64::max);
             for r in &data.revenue {
-                let cells = r.revenue.map_or(0, |v| bar_cells(v, max, REVENUE_BAR_WIDTH));
+                let cells = r
+                    .revenue
+                    .map_or(0, |v| bar_cells(v, max, REVENUE_BAR_WIDTH));
                 lines.push(Line::from(vec![
-                    Span::raw(format!("  {:<10}{:>9}  ", r.period, fmt_market_cap(r.revenue))),
+                    Span::raw(format!(
+                        "  {:<10}{:>9}  ",
+                        r.period,
+                        fmt_market_cap(r.revenue)
+                    )),
                     Span::styled("▆".repeat(cells), Style::default().fg(t.accent)),
                 ]));
             }
@@ -138,7 +147,7 @@ mod tests {
     use super::*;
     use crate::earnings::QuarterEps;
     use crate::tui::theme::Appearance;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
         terminal
@@ -181,8 +190,14 @@ mod tests {
         // assert
         let text = buffer_text(&terminal);
         assert!(text.contains("SURPRISE"), "surprise column header is drawn");
-        assert!(text.contains("+25.0%"), "the beat's surprise percentage is drawn");
-        assert!(text.contains("-25.0%"), "the miss's surprise percentage is drawn");
+        assert!(
+            text.contains("+25.0%"),
+            "the beat's surprise percentage is drawn"
+        );
+        assert!(
+            text.contains("-25.0%"),
+            "the miss's surprise percentage is drawn"
+        );
     }
 
     #[test]

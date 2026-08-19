@@ -5,7 +5,9 @@ use chrono::Utc;
 /// A fresh database has no active alerts.
 #[sqlx::test]
 async fn test_list_empty_returns_empty(pool: sqlx::PgPool) {
-    let alerts = list_alerts(&pool).await.expect("list should succeed on empty db");
+    let alerts = list_alerts(&pool)
+        .await
+        .expect("list should succeed on empty db");
     assert!(alerts.is_empty(), "expected no alerts, got {alerts:?}");
 }
 
@@ -61,7 +63,9 @@ async fn test_remove_deletes_alert(pool: sqlx::PgPool) {
         .await
         .expect("add should succeed");
 
-    remove_alert(&pool, a.id).await.expect("remove should succeed");
+    remove_alert(&pool, a.id)
+        .await
+        .expect("remove should succeed");
 
     let alerts = list_alerts(&pool).await.expect("list should succeed");
     assert!(alerts.is_empty(), "removed alert should be gone");
@@ -77,5 +81,9 @@ async fn test_multiple_alerts_per_ticker(pool: sqlx::PgPool) {
         .expect("add second failed");
 
     let alerts = list_alerts(&pool).await.expect("list should succeed");
-    assert_eq!(alerts.len(), 2, "both alerts on the same ticker should persist");
+    assert_eq!(
+        alerts.len(),
+        2,
+        "both alerts on the same ticker should persist"
+    );
 }

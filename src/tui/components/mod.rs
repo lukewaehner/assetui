@@ -1,6 +1,6 @@
-use std::io;
-use crossterm::event::{Event, KeyEvent, MouseEvent};
 use super::action::Action;
+use crossterm::event::{Event, KeyEvent, MouseEvent};
+use std::io;
 
 #[allow(dead_code)]
 pub trait Component {

@@ -20,7 +20,13 @@ pub fn daily_returns(closes: &[f64]) -> Vec<f64> {
     }
     closes
         .windows(2)
-        .map(|w| if w[0] > 0.0 && w[1] > 0.0 { (w[1] / w[0]).ln() } else { 0.0 })
+        .map(|w| {
+            if w[0] > 0.0 && w[1] > 0.0 {
+                (w[1] / w[0]).ln()
+            } else {
+                0.0
+            }
+        })
         .collect()
 }
 
@@ -46,7 +52,10 @@ pub fn covariance_matrix(returns: &[Vec<f64>]) -> Vec<Vec<f64>> {
     if n < 2 {
         return cov;
     }
-    let means: Vec<f64> = returns.iter().map(|r| r.iter().sum::<f64>() / n as f64).collect();
+    let means: Vec<f64> = returns
+        .iter()
+        .map(|r| r.iter().sum::<f64>() / n as f64)
+        .collect();
     for i in 0..k {
         for j in 0..k {
             let s: f64 = (0..n)
@@ -145,7 +154,11 @@ pub struct Portfolio {
 pub fn portfolio_stats(weights: &[f64], mean: &[f64], cov: &[Vec<f64>], rf: f64) -> PortfolioPoint {
     let ret: f64 = weights.iter().zip(mean).map(|(w, m)| w * m).sum();
     let var: f64 = (0..weights.len())
-        .map(|i| (0..weights.len()).map(|j| weights[i] * weights[j] * cov[i][j]).sum::<f64>())
+        .map(|i| {
+            (0..weights.len())
+                .map(|j| weights[i] * weights[j] * cov[i][j])
+                .sum::<f64>()
+        })
         .sum();
     let risk = var.max(0.0).sqrt();
     let sharpe = if risk > 0.0 { (ret - rf) / risk } else { 0.0 };
@@ -195,7 +208,9 @@ fn invert(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
 
 /// Matrix-vector product `mat · v`.
 fn mat_vec(mat: &[Vec<f64>], v: &[f64]) -> Vec<f64> {
-    mat.iter().map(|row| row.iter().zip(v).map(|(a, b)| a * b).sum()).collect()
+    mat.iter()
+        .map(|row| row.iter().zip(v).map(|(a, b)| a * b).sum())
+        .collect()
 }
 
 /// Analytical global minimum-variance portfolio: `w = Σ⁻¹·1 / (1ᵀΣ⁻¹1)`.
@@ -318,7 +333,10 @@ pub fn compute_optimization(
     let tangency = tangency(&mean, &cov, rf);
     let min_variance = min_variance(&cov, &mean, rf);
 
-    let mvs: Vec<f64> = tickers.iter().map(|t| *market_values.get(t).unwrap_or(&0.0)).collect();
+    let mvs: Vec<f64> = tickers
+        .iter()
+        .map(|t| *market_values.get(t).unwrap_or(&0.0))
+        .collect();
     let total_mv: f64 = mvs.iter().sum();
     let current_weights: Vec<f64> = if total_mv > 0.0 {
         mvs.iter().map(|v| v / total_mv).collect()
@@ -374,7 +392,11 @@ mod tests {
     fn sample_frontier_points_are_finite() {
         let cov = vec![vec![0.04, 0.01], vec![0.01, 0.09]];
         let cloud = sample_frontier(&[0.10, 0.15], &cov, 0.0, 200, 1);
-        assert!(cloud.iter().all(|p| p.risk.is_finite() && p.ret.is_finite() && p.sharpe.is_finite()));
+        assert!(
+            cloud
+                .iter()
+                .all(|p| p.risk.is_finite() && p.ret.is_finite() && p.sharpe.is_finite())
+        );
     }
 
     fn d(n: u32) -> NaiveDate {
@@ -388,14 +410,8 @@ mod tests {
         let mut mv = std::collections::HashMap::new();
         mv.insert("A".to_string(), 6000.0);
         mv.insert("B".to_string(), 4000.0);
-        let res = compute_optimization(
-            &[("A".into(), a), ("B".into(), b)],
-            &mv,
-            0.0,
-            500,
-            7,
-        )
-        .expect("two priced holdings optimize");
+        let res = compute_optimization(&[("A".into(), a), ("B".into(), b)], &mv, 0.0, 500, 7)
+            .expect("two priced holdings optimize");
         assert_eq!(res.tickers, vec!["A".to_string(), "B".to_string()]);
         assert_eq!(res.included, 2);
         assert_eq!(res.total, 2);
@@ -484,9 +500,7 @@ mod tests {
     fn aligned_returns_rejects_exactly_min_aligned_dates() {
         let d = |n: u32| NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(n as u64);
         let series_a: Vec<(NaiveDate, f64)> = (0..40).map(|n| (d(n), 100.0 + n as f64)).collect();
-        let series_b: Vec<(NaiveDate, f64)> = (10..50)
-            .map(|n| (d(n), 200.0 + n as f64))
-            .collect();
+        let series_b: Vec<(NaiveDate, f64)> = (10..50).map(|n| (d(n), 200.0 + n as f64)).collect();
         let (tickers, returns) = aligned_returns(&[("A".into(), series_a), ("B".into(), series_b)]);
         assert!(tickers.is_empty());
         assert!(returns.is_empty());
@@ -496,9 +510,7 @@ mod tests {
     fn aligned_returns_accepts_one_past_min_aligned_dates() {
         let d = |n: u32| NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(n as u64);
         let series_a: Vec<(NaiveDate, f64)> = (0..40).map(|n| (d(n), 100.0 + n as f64)).collect();
-        let series_b: Vec<(NaiveDate, f64)> = (9..49)
-            .map(|n| (d(n), 200.0 + n as f64))
-            .collect();
+        let series_b: Vec<(NaiveDate, f64)> = (9..49).map(|n| (d(n), 200.0 + n as f64)).collect();
         let (tickers, returns) = aligned_returns(&[("A".into(), series_a), ("B".into(), series_b)]);
         assert_eq!(tickers.len(), 2);
         assert_eq!(tickers, vec!["A".to_string(), "B".to_string()]);

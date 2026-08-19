@@ -12,15 +12,15 @@ use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered, remove_ale
 use crate::db::portfolio::{list_holdings, remove_holding, upsert_holding};
 use crate::db::portfolio_history::{load_history, upsert_day};
 use crate::db::quotes::{prune_quotes_history, store_quote_to_db};
-use crate::models::AlertDirection;
-use crate::portfolio::Holding;
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
     fetch_analysis, fetch_chart_data, fetch_earnings, fetch_key_statistics,
     fetch_latest_per_ticker, fetch_news, fetch_option_chain, fetch_option_chain_for_expiry,
     fetch_quote_and_store, fetch_return_history, fetch_spark_series,
 };
+use crate::models::AlertDirection;
 use crate::models::{QuoteRecord, QuoteTick};
+use crate::portfolio::Holding;
 use crate::tui::stream::start_quote_stream;
 use crate::tui::theme::{Appearance, parse_appearance};
 
@@ -43,7 +43,8 @@ impl App {
                     let _ = tx.send(AppEvent::PageLoaded(rows));
                     match fetch_spark_series(&pool, &tickers).await {
                         Ok(series) => {
-                            let _ = tx.send(AppEvent::SparkSeriesLoaded(group_spark_series(series)));
+                            let _ =
+                                tx.send(AppEvent::SparkSeriesLoaded(group_spark_series(series)));
                         }
                         Err(e) => {
                             let _ = tx.send(AppEvent::LogLine(format!(
@@ -307,7 +308,9 @@ impl App {
         let tx = self.services.event_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = add_alert(&pool, &ticker, direction, threshold).await {
-                let _ = tx.send(AppEvent::Error(format!("Failed to save alert for {ticker}: {e}")));
+                let _ = tx.send(AppEvent::Error(format!(
+                    "Failed to save alert for {ticker}: {e}"
+                )));
             }
             reload_alerts(&pool, &tx).await;
         });
@@ -330,7 +333,9 @@ impl App {
         let tx = self.services.event_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = mark_alert_triggered(&pool, id, triggered_at).await {
-                let _ = tx.send(AppEvent::Error(format!("Failed to persist alert {id}: {e}")));
+                let _ = tx.send(AppEvent::Error(format!(
+                    "Failed to persist alert {id}: {e}"
+                )));
             }
         });
     }
@@ -387,7 +392,9 @@ impl App {
         let tx = self.services.event_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = remove_holding(&pool, &ticker).await {
-                let _ = tx.send(AppEvent::Error(format!("Failed to remove holding {ticker}: {e}")));
+                let _ = tx.send(AppEvent::Error(format!(
+                    "Failed to remove holding {ticker}: {e}"
+                )));
             }
             reload_portfolio(&pool, &tx).await;
         });
@@ -521,7 +528,10 @@ impl App {
                             "sector {}: {e}",
                             sector_label(sector)
                         )));
-                        let _ = tx.send(AppEvent::SectorDataReady { sector, tiles: Vec::new() });
+                        let _ = tx.send(AppEvent::SectorDataReady {
+                            sector,
+                            tiles: Vec::new(),
+                        });
                         return;
                     }
                 };
@@ -548,7 +558,10 @@ impl App {
                             "sector {}: {e}",
                             sector_label(sector)
                         )));
-                        let _ = tx.send(AppEvent::SectorDataReady { sector, tiles: Vec::new() });
+                        let _ = tx.send(AppEvent::SectorDataReady {
+                            sector,
+                            tiles: Vec::new(),
+                        });
                     }
                 }
             });
@@ -600,10 +613,7 @@ fn sector_label(s: yfinance_rs::screener::EquitySector) -> &'static str {
     }
 }
 
-async fn reload_portfolio(
-    pool: &sqlx::PgPool,
-    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
-) {
+async fn reload_portfolio(pool: &sqlx::PgPool, tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>) {
     match list_holdings(pool).await {
         Ok(holdings) => {
             let _ = tx.send(AppEvent::PortfolioLoaded(holdings));
@@ -614,10 +624,7 @@ async fn reload_portfolio(
     }
 }
 
-async fn reload_alerts(
-    pool: &sqlx::PgPool,
-    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
-) {
+async fn reload_alerts(pool: &sqlx::PgPool, tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>) {
     match list_alerts(pool).await {
         Ok(alerts) => {
             let _ = tx.send(AppEvent::AlertsLoaded(alerts));

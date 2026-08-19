@@ -1,8 +1,8 @@
-use chrono::{DateTime, TimeZone, Utc};
 use assetui::db::quotes::{dump_table_to_csv, fetch_all_quotes, store_quote_to_db};
 use assetui::fetch::fetch_latest_per_ticker;
 use assetui::models::QuoteRecord;
 use assetui::sort::{SortMode, SortOrder};
+use chrono::{DateTime, TimeZone, Utc};
 
 fn full_quote(
     ticker: &str,
@@ -189,9 +189,10 @@ async fn test_fetch_latest_per_ticker_remaining_modes(pool: sqlx::PgPool) {
         "ByName ASC: third should be GAMMA Corporation"
     );
 
-    let by_prev_close_asc = fetch_latest_per_ticker(&pool, SortMode::ByPrevClose, SortOrder::Ascending, 10)
-        .await
-        .expect("fetch_latest_per_ticker ByPrevClose ASC failed");
+    let by_prev_close_asc =
+        fetch_latest_per_ticker(&pool, SortMode::ByPrevClose, SortOrder::Ascending, 10)
+            .await
+            .expect("fetch_latest_per_ticker ByPrevClose ASC failed");
     assert_eq!(by_prev_close_asc.len(), 3);
     assert_eq!(
         by_prev_close_asc[0].previous_close,
@@ -209,9 +210,10 @@ async fn test_fetch_latest_per_ticker_remaining_modes(pool: sqlx::PgPool) {
         "ByPrevClose ASC: third should be 80.0 (BETA)"
     );
 
-    let by_volume_desc = fetch_latest_per_ticker(&pool, SortMode::ByVolume, SortOrder::Descending, 10)
-        .await
-        .expect("fetch_latest_per_ticker ByVolume DESC failed");
+    let by_volume_desc =
+        fetch_latest_per_ticker(&pool, SortMode::ByVolume, SortOrder::Descending, 10)
+            .await
+            .expect("fetch_latest_per_ticker ByVolume DESC failed");
     assert_eq!(by_volume_desc.len(), 3);
     assert_eq!(
         by_volume_desc[0].day_volume,

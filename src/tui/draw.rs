@@ -19,11 +19,11 @@ use ratatui::{
 use yfinance_rs::{Candle, Price, PriceTarget, RecommendationSummary};
 
 use crate::black_scholes::{DEFAULT_RISK_FREE_RATE, OptionKind};
+use crate::models::quote::NewsItem;
 use crate::models::{
     Alert, AlertDirection, FLASH_TTL, OptionChain, OptionContract, QuoteRecord,
     QuoteRecordAnalysis, QuoteRecordStatistics, StockNews, Ticker, day_change_pct,
 };
-use crate::models::quote::NewsItem;
 use crate::portfolio::{portfolio_positions, resolve_price, summarize};
 use crate::search::subseq_match_ci;
 
@@ -220,17 +220,24 @@ fn spark_text(values: &[f64], width: usize) -> String {
 }
 
 fn draw_dashboard(f: &mut Frame, area: Rect, app: &App) {
-    let [portfolio_area, movers_area, news_area, alerts_area, breadth_area, active_area, status_area] =
-        Layout::vertical([
-            Constraint::Length(6),
-            Constraint::Length(5),
-            Constraint::Min(0),
-            Constraint::Length(4),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
-        ])
-        .areas(area);
+    let [
+        portfolio_area,
+        movers_area,
+        news_area,
+        alerts_area,
+        breadth_area,
+        active_area,
+        status_area,
+    ] = Layout::vertical([
+        Constraint::Length(6),
+        Constraint::Length(5),
+        Constraint::Min(0),
+        Constraint::Length(4),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+    ])
+    .areas(area);
     draw_portfolio_cube(f, portfolio_area, app);
     draw_movers_cube(f, movers_area, app);
     draw_news_cube(f, news_area, app);
@@ -306,7 +313,10 @@ fn draw_movers_cube(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let max_pct = movers.iter().map(|m| m.day_pct.abs()).fold(0.0_f64, f64::max);
+    let max_pct = movers
+        .iter()
+        .map(|m| m.day_pct.abs())
+        .fold(0.0_f64, f64::max);
     let bar_width = (inner.width as usize).saturating_sub(6 + 1 + 7);
     let lines: Vec<Line> = movers
         .iter()
@@ -347,7 +357,11 @@ fn draw_news_cube(f: &mut Frame, area: Rect, app: &App) {
 
     let feed = &app.market.news_feed;
     if feed.items.is_empty() {
-        let msg = news_empty_message(app.market.db_display.watchlist.is_empty(), feed.loading, false);
+        let msg = news_empty_message(
+            app.market.db_display.watchlist.is_empty(),
+            feed.loading,
+            false,
+        );
         f.render_widget(Paragraph::new(dim_line(msg, &t)), inner);
         return;
     }
@@ -367,7 +381,10 @@ fn news_snippet_line(ticker: &str, title: &str, width: usize, t: &Theme) -> Line
     let remaining = width.saturating_sub(prefix.chars().count());
     Line::from(vec![
         Span::styled(prefix, Style::default().fg(t.accent)),
-        Span::styled(truncate_ellipsis(title, remaining), Style::default().fg(t.fg)),
+        Span::styled(
+            truncate_ellipsis(title, remaining),
+            Style::default().fg(t.fg),
+        ),
     ])
 }
 
@@ -422,8 +439,8 @@ fn draw_breadth_cube(f: &mut Frame, area: Rect, app: &App) {
     let down_color = direction_color(Direction::Down, &t);
     let left = format!("{} {advancers} ", direction_arrow(Direction::Up));
     let right = format!(" {} {decliners}", direction_arrow(Direction::Down));
-    let bar_width = (inner.width as usize)
-        .saturating_sub(left.chars().count() + right.chars().count());
+    let bar_width =
+        (inner.width as usize).saturating_sub(left.chars().count() + right.chars().count());
     let (up, down) = breadth_bar(advancers, decliners, bar_width);
 
     f.render_widget(
@@ -840,7 +857,11 @@ fn label(text: &'static str, t: &Theme) -> Span<'static> {
     Span::styled(text, Style::default().fg(t.dim))
 }
 
-pub(crate) fn section_heading(text: &'static str, meta: Option<String>, t: &Theme) -> Line<'static> {
+pub(crate) fn section_heading(
+    text: &'static str,
+    meta: Option<String>,
+    t: &Theme,
+) -> Line<'static> {
     let mut spans = vec![Span::styled(
         text,
         Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
@@ -1711,7 +1732,11 @@ fn draw_sectors_page(f: &mut Frame, area: Rect, app: &mut App) {
     let map = &app.sectors.map;
 
     if map.groups.is_empty() {
-        let msg = if app.sectors.loading { "loading sectors…" } else { "press r to load sectors" };
+        let msg = if app.sectors.loading {
+            "loading sectors…"
+        } else {
+            "press r to load sectors"
+        };
         f.render_widget(placeholder(msg, &t), area);
         return;
     }
@@ -1783,14 +1808,22 @@ fn draw_news_page(f: &mut Frame, area: Rect, app: &mut App) {
 
     let feed = &app.market.news_feed;
     if feed.items.is_empty() {
-        let msg = news_empty_message(app.market.db_display.watchlist.is_empty(), feed.loading, true);
+        let msg = news_empty_message(
+            app.market.db_display.watchlist.is_empty(),
+            feed.loading,
+            true,
+        );
         f.render_widget(placeholder(msg, &t), inner);
         return;
     }
 
     let selected = app.news_page.selected.min(feed.items.len() - 1);
     let height = inner.height.max(1) as usize;
-    let start = if selected >= height { selected + 1 - height } else { 0 };
+    let start = if selected >= height {
+        selected + 1 - height
+    } else {
+        0
+    };
     let width = inner.width as usize;
     let lines: Vec<Line> = feed
         .items
@@ -1803,11 +1836,21 @@ fn draw_news_page(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn news_row_line(selected: bool, ticker: &str, item: &NewsItem, width: usize, t: &Theme) -> Line<'static> {
+fn news_row_line(
+    selected: bool,
+    ticker: &str,
+    item: &NewsItem,
+    width: usize,
+    t: &Theme,
+) -> Line<'static> {
     let caret = if selected { "› " } else { "  " };
     let ticker_field = format!("{ticker:<6} ");
     let meta = fmt_news_meta(item.publisher.as_deref(), item.published_at);
-    let meta_field = if meta.is_empty() { String::new() } else { format!("  {meta}") };
+    let meta_field = if meta.is_empty() {
+        String::new()
+    } else {
+        format!("  {meta}")
+    };
     let used = caret.chars().count() + ticker_field.chars().count() + meta_field.chars().count();
     let title = truncate_ellipsis(&item.title, width.saturating_sub(used));
     let title_style = if selected {
@@ -1834,8 +1877,7 @@ fn draw_optimizer_page(f: &mut Frame, area: Rect, app: &mut App) {
             if app.holdings.len() < 2 {
                 "Add at least 2 holdings with price history to optimize.".to_string()
             } else {
-                "Not enough overlapping price history across your holdings to optimize."
-                    .to_string()
+                "Not enough overlapping price history across your holdings to optimize.".to_string()
             }
         });
         return draw_optimizer_note(f, area, &msg, &t);
@@ -1874,7 +1916,12 @@ fn padded_axis_bounds(values: &[f64]) -> (f64, f64) {
     (lo - pad, hi + pad)
 }
 
-fn draw_frontier_panel(f: &mut Frame, area: Rect, r: &crate::optimizer::OptimizerResult, t: &Theme) {
+fn draw_frontier_panel(
+    f: &mut Frame,
+    area: Rect,
+    r: &crate::optimizer::OptimizerResult,
+    t: &Theme,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Efficient Frontier ");
@@ -1953,12 +2000,20 @@ fn draw_frontier_panel(f: &mut Frame, area: Rect, r: &crate::optimizer::Optimize
         .title(Span::styled("Risk (σ)", title_style))
         .style(label_style)
         .bounds([x_min, x_max])
-        .labels([pct_label(x_min), pct_label((x_min + x_max) / 2.0), pct_label(x_max)]);
+        .labels([
+            pct_label(x_min),
+            pct_label((x_min + x_max) / 2.0),
+            pct_label(x_max),
+        ]);
     let y_axis = Axis::default()
         .title(Span::styled("Return", title_style))
         .style(label_style)
         .bounds([y_min, y_max])
-        .labels([pct_label(y_min), pct_label((y_min + y_max) / 2.0), pct_label(y_max)]);
+        .labels([
+            pct_label(y_min),
+            pct_label((y_min + y_max) / 2.0),
+            pct_label(y_max),
+        ]);
 
     let chart = Chart::new(datasets)
         .block(block)
@@ -1977,7 +2032,12 @@ fn draw_weights_panel(f: &mut Frame, area: Rect, r: &crate::optimizer::Optimizer
     let header = Row::new(
         ["Ticker", "Current", "Tangency", "MinVar"]
             .into_iter()
-            .map(|h| Cell::from(Span::styled(h, Style::default().fg(t.accent).add_modifier(Modifier::BOLD)))),
+            .map(|h| {
+                Cell::from(Span::styled(
+                    h,
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                ))
+            }),
     );
     let rows: Vec<Row> = r
         .tickers
@@ -2007,14 +2067,18 @@ fn draw_weights_panel(f: &mut Frame, area: Rect, r: &crate::optimizer::Optimizer
     f.render_widget(table, area);
 }
 
-fn draw_correlation_panel(f: &mut Frame, area: Rect, r: &crate::optimizer::OptimizerResult, t: &Theme) {
+fn draw_correlation_panel(
+    f: &mut Frame,
+    area: Rect,
+    r: &crate::optimizer::OptimizerResult,
+    t: &Theme,
+) {
     use crate::optimizer::correlation_rgb;
 
     let n = r.tickers.len();
     let short = |s: &str| s.chars().take(4).collect::<String>();
     let header = Row::new(
-        std::iter::once(Cell::from(""))
-            .chain(r.tickers.iter().map(|s| Cell::from(short(s)))),
+        std::iter::once(Cell::from("")).chain(r.tickers.iter().map(|s| Cell::from(short(s)))),
     );
 
     let rows: Vec<Row> = (0..n)
@@ -2292,8 +2356,16 @@ fn draw_chart_modal(f: &mut Frame, app: &mut App) {
         Some(candles) => {
             let show_volume = app.stock_modal.show_volume;
             let show_rsi = app.stock_modal.show_rsi;
-            let volume_h = if show_volume && inner.height >= 14 { 7 } else { 0 };
-            let rsi_h = if show_rsi && inner.height >= 14 + volume_h { 8 } else { 0 };
+            let volume_h = if show_volume && inner.height >= 14 {
+                7
+            } else {
+                0
+            };
+            let rsi_h = if show_rsi && inner.height >= 14 + volume_h {
+                8
+            } else {
+                0
+            };
             let [price_area, volume_area, rsi_area] = Layout::vertical([
                 Constraint::Min(6),
                 Constraint::Length(volume_h),
@@ -2345,7 +2417,10 @@ fn draw_volume_panel(f: &mut Frame, area: Rect, candles: &[Candle], t: &Theme) {
 
 fn draw_rsi_panel(f: &mut Frame, area: Rect, candles: &[Candle], t: &Theme) {
     let block = Block::default()
-        .title(block_title(format!("RSI {}", crate::indicators::RSI_PERIOD), t))
+        .title(block_title(
+            format!("RSI {}", crate::indicators::RSI_PERIOD),
+            t,
+        ))
         .borders(Borders::TOP)
         .border_style(Style::default().fg(t.border));
     let inner = block.inner(area);
@@ -2385,7 +2460,11 @@ fn draw_rsi_panel(f: &mut Frame, area: Rect, candles: &[Candle], t: &Theme) {
         .style(Style::default().fg(t.dim))
         .data(&under);
     let chart = Chart::new(vec![rsi_ds, over_ds, under_ds])
-        .x_axis(Axis::default().style(Style::default().fg(t.dim)).bounds([0.0, xmax]))
+        .x_axis(
+            Axis::default()
+                .style(Style::default().fg(t.dim))
+                .bounds([0.0, xmax]),
+        )
         .y_axis(
             Axis::default()
                 .style(Style::default().fg(t.dim))
@@ -2407,8 +2486,14 @@ fn range_of(lows: &[f64], highs: &[f64]) -> Option<(f64, f64)> {
 
 /// Period low/high across `candles` (min low, max high).
 fn price_range(candles: &[Candle]) -> Option<(f64, f64)> {
-    let lows: Vec<f64> = candles.iter().map(|c| c.ohlc.low.as_decimal().as_f64()).collect();
-    let highs: Vec<f64> = candles.iter().map(|c| c.ohlc.high.as_decimal().as_f64()).collect();
+    let lows: Vec<f64> = candles
+        .iter()
+        .map(|c| c.ohlc.low.as_decimal().as_f64())
+        .collect();
+    let highs: Vec<f64> = candles
+        .iter()
+        .map(|c| c.ohlc.high.as_decimal().as_f64())
+        .collect();
     range_of(&lows, &highs)
 }
 
@@ -2756,7 +2841,10 @@ mod tests {
 
     #[test]
     fn news_empty_message_prompts_to_follow_when_watchlist_is_empty() {
-        assert_eq!(news_empty_message(true, false, false), "watchlist empty — press w");
+        assert_eq!(
+            news_empty_message(true, false, false),
+            "watchlist empty — press w"
+        );
         assert_eq!(
             news_empty_message(true, false, true),
             "watchlist empty — press w on a quote to follow it"

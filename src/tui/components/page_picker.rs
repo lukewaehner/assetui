@@ -1,9 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 
 use crate::tui::{
@@ -15,8 +15,13 @@ use crate::tui::{
 };
 
 /// The page order used by the picker and its highlight movement.
-pub const PAGE_ORDER: [Page; 5] =
-    [Page::Market, Page::Manage, Page::Sectors, Page::News, Page::Optimizer];
+pub const PAGE_ORDER: [Page; 5] = [
+    Page::Market,
+    Page::Manage,
+    Page::Sectors,
+    Page::News,
+    Page::Optimizer,
+];
 
 /// The `Tab` page-picker modal: the pages in [`PAGE_ORDER`] with one of them highlighted.
 #[derive(Default, Debug, Clone)]

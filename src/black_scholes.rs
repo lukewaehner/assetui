@@ -10,10 +10,18 @@ pub enum OptionKind {
 /// Structured errors from the pricing core.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BlackScholesError {
-    NonPositiveInput { field: &'static str, value: f64 },
+    NonPositiveInput {
+        field: &'static str,
+        value: f64,
+    },
     /// A non-`s`/`k`/`t`/`sigma` input (`r` or `q`) was non-finite.
-    NonFiniteInput { field: &'static str, value: f64 },
-    PriceOutOfBounds { market_price: f64 },
+    NonFiniteInput {
+        field: &'static str,
+        value: f64,
+    },
+    PriceOutOfBounds {
+        market_price: f64,
+    },
     /// The implied-volatility solver hit its iteration cap without converging.
     DidNotConverge,
 }
@@ -22,13 +30,19 @@ impl std::fmt::Display for BlackScholesError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BlackScholesError::NonPositiveInput { field, value } => {
-                write!(f, "input `{field}` must be finite and positive (was {value})")
+                write!(
+                    f,
+                    "input `{field}` must be finite and positive (was {value})"
+                )
             }
             BlackScholesError::NonFiniteInput { field, value } => {
                 write!(f, "input `{field}` must be finite (was {value})")
             }
             BlackScholesError::PriceOutOfBounds { market_price } => {
-                write!(f, "market price {market_price} is outside no-arbitrage bounds")
+                write!(
+                    f,
+                    "market price {market_price} is outside no-arbitrage bounds"
+                )
             }
             BlackScholesError::DidNotConverge => {
                 write!(f, "implied-volatility solver did not converge")
@@ -59,7 +73,14 @@ pub struct BlackScholesInputs {
 }
 
 impl BlackScholesInputs {
-    pub fn new(s: f64, k: f64, t: f64, r: f64, sigma: f64, q: f64) -> Result<Self, BlackScholesError> {
+    pub fn new(
+        s: f64,
+        k: f64,
+        t: f64,
+        r: f64,
+        sigma: f64,
+        q: f64,
+    ) -> Result<Self, BlackScholesError> {
         for (field, value) in [("s", s), ("k", k), ("t", t), ("sigma", sigma)] {
             if !value.is_finite() || value <= 0.0 {
                 return Err(BlackScholesError::NonPositiveInput { field, value });
@@ -70,7 +91,14 @@ impl BlackScholesInputs {
                 return Err(BlackScholesError::NonFiniteInput { field, value });
             }
         }
-        Ok(Self { s, k, t, r, sigma, q })
+        Ok(Self {
+            s,
+            k,
+            t,
+            r,
+            sigma,
+            q,
+        })
     }
 }
 
@@ -132,12 +160,8 @@ pub fn price(inputs: &BlackScholesInputs, kind: OptionKind) -> f64 {
     let disc_q = (-inputs.q * inputs.t).exp();
     let disc_r = (-inputs.r * inputs.t).exp();
     match kind {
-        OptionKind::Call => {
-            inputs.s * disc_q * norm_cdf(d1) - inputs.k * disc_r * norm_cdf(d2)
-        }
-        OptionKind::Put => {
-            inputs.k * disc_r * norm_cdf(-d2) - inputs.s * disc_q * norm_cdf(-d1)
-        }
+        OptionKind::Call => inputs.s * disc_q * norm_cdf(d1) - inputs.k * disc_r * norm_cdf(d2),
+        OptionKind::Put => inputs.k * disc_r * norm_cdf(-d2) - inputs.s * disc_q * norm_cdf(-d1),
     }
 }
 
@@ -172,7 +196,13 @@ pub fn greeks(inputs: &BlackScholesInputs, kind: OptionKind) -> Greeks {
         }
     };
 
-    Greeks { delta, gamma, theta, vega, rho }
+    Greeks {
+        delta,
+        gamma,
+        theta,
+        vega,
+        rho,
+    }
 }
 
 const IV_PRICE_TOLERANCE: f64 = 1e-8;
@@ -284,9 +314,13 @@ mod tests {
         let put = price(&inputs, OptionKind::Put);
 
         // assert
-        let expected = inputs.s * (-inputs.q * inputs.t).exp()
-            - inputs.k * (-inputs.r * inputs.t).exp();
-        assert!((call - put - expected).abs() < 1e-9, "parity diff {}", call - put - expected);
+        let expected =
+            inputs.s * (-inputs.q * inputs.t).exp() - inputs.k * (-inputs.r * inputs.t).exp();
+        assert!(
+            (call - put - expected).abs() < 1e-9,
+            "parity diff {}",
+            call - put - expected
+        );
     }
 
     #[test]
@@ -331,19 +365,34 @@ mod tests {
     #[test]
     fn constructor_rejects_zero_spot() {
         let err = BlackScholesInputs::new(0.0, 40.0, 0.5, 0.10, 0.20, 0.0).unwrap_err();
-        assert_eq!(err, BlackScholesError::NonPositiveInput { field: "s", value: 0.0 });
+        assert_eq!(
+            err,
+            BlackScholesError::NonPositiveInput {
+                field: "s",
+                value: 0.0
+            }
+        );
     }
 
     #[test]
     fn constructor_rejects_negative_volatility() {
         let err = BlackScholesInputs::new(42.0, 40.0, 0.5, 0.10, -0.20, 0.0).unwrap_err();
-        assert_eq!(err, BlackScholesError::NonPositiveInput { field: "sigma", value: -0.20 });
+        assert_eq!(
+            err,
+            BlackScholesError::NonPositiveInput {
+                field: "sigma",
+                value: -0.20
+            }
+        );
     }
 
     #[test]
     fn constructor_rejects_non_finite_rate() {
         let err = BlackScholesInputs::new(42.0, 40.0, 0.5, f64::NAN, 0.20, 0.0).unwrap_err();
-        assert!(matches!(err, BlackScholesError::NonFiniteInput { field: "r", .. }));
+        assert!(matches!(
+            err,
+            BlackScholesError::NonFiniteInput { field: "r", .. }
+        ));
     }
 
     #[test]
@@ -358,7 +407,11 @@ mod tests {
 
     #[test]
     fn norm_cdf_matches_known_quantile() {
-        assert!((norm_cdf(1.96) - 0.975).abs() < 1e-4, "N(1.96) = {}", norm_cdf(1.96));
+        assert!(
+            (norm_cdf(1.96) - 0.975).abs() < 1e-4,
+            "N(1.96) = {}",
+            norm_cdf(1.96)
+        );
     }
 
     #[test]
@@ -369,11 +422,13 @@ mod tests {
             let market = price(&inputs, OptionKind::Call);
 
             // act
-            let recovered =
-                implied_volatility(market, &inputs, OptionKind::Call).unwrap();
+            let recovered = implied_volatility(market, &inputs, OptionKind::Call).unwrap();
 
             // assert
-            assert!((recovered - sigma).abs() < 1e-6, "sigma {sigma} -> {recovered}");
+            assert!(
+                (recovered - sigma).abs() < 1e-6,
+                "sigma {sigma} -> {recovered}"
+            );
         }
     }
 
@@ -383,10 +438,12 @@ mod tests {
             let inputs = BlackScholesInputs::new(42.0, 40.0, 0.5, 0.10, sigma, 0.0).unwrap();
             let market = price(&inputs, OptionKind::Put);
 
-            let recovered =
-                implied_volatility(market, &inputs, OptionKind::Put).unwrap();
+            let recovered = implied_volatility(market, &inputs, OptionKind::Put).unwrap();
 
-            assert!((recovered - sigma).abs() < 1e-6, "sigma {sigma} -> {recovered}");
+            assert!(
+                (recovered - sigma).abs() < 1e-6,
+                "sigma {sigma} -> {recovered}"
+            );
         }
     }
 
@@ -409,7 +466,10 @@ mod tests {
 
         let err = implied_volatility(0.5, &inputs, OptionKind::Call).unwrap_err();
 
-        assert_eq!(err, BlackScholesError::PriceOutOfBounds { market_price: 0.5 });
+        assert_eq!(
+            err,
+            BlackScholesError::PriceOutOfBounds { market_price: 0.5 }
+        );
     }
 
     #[test]
@@ -418,6 +478,11 @@ mod tests {
 
         let err = implied_volatility(100.0, &inputs, OptionKind::Call).unwrap_err();
 
-        assert_eq!(err, BlackScholesError::PriceOutOfBounds { market_price: 100.0 });
+        assert_eq!(
+            err,
+            BlackScholesError::PriceOutOfBounds {
+                market_price: 100.0
+            }
+        );
     }
 }

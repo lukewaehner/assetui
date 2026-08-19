@@ -14,8 +14,13 @@ fn holding(ticker: &str, shares: f64, avg_cost: f64) -> Holding {
 /// A fresh database has no holdings.
 #[sqlx::test]
 async fn test_list_empty_returns_empty(pool: sqlx::PgPool) {
-    let holdings = list_holdings(&pool).await.expect("list should succeed on empty db");
-    assert!(holdings.is_empty(), "expected no holdings, got {holdings:?}");
+    let holdings = list_holdings(&pool)
+        .await
+        .expect("list should succeed on empty db");
+    assert!(
+        holdings.is_empty(),
+        "expected no holdings, got {holdings:?}"
+    );
 }
 
 #[sqlx::test]
@@ -38,7 +43,11 @@ async fn test_upsert_same_ticker_edits_in_place(pool: sqlx::PgPool) {
         .expect("second upsert failed");
 
     let holdings = list_holdings(&pool).await.expect("list should succeed");
-    assert_eq!(holdings, vec![holding("AAPL", 25.0, 140.0)], "edit should replace, not duplicate");
+    assert_eq!(
+        holdings,
+        vec![holding("AAPL", 25.0, 140.0)],
+        "edit should replace, not duplicate"
+    );
 }
 
 #[sqlx::test]
@@ -65,10 +74,15 @@ async fn test_remove_deletes_holding(pool: sqlx::PgPool) {
         .await
         .expect("upsert failed");
 
-    remove_holding(&pool, "aapl").await.expect("remove should succeed");
+    remove_holding(&pool, "aapl")
+        .await
+        .expect("remove should succeed");
 
     let holdings = list_holdings(&pool).await.expect("list should succeed");
-    assert!(holdings.is_empty(), "lowercase remove should delete the stored holding");
+    assert!(
+        holdings.is_empty(),
+        "lowercase remove should delete the stored holding"
+    );
 }
 
 /// Removing a holding that isn't present is a no-op, not an error.

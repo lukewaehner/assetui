@@ -50,7 +50,11 @@ pub fn rsi(values: &[f64], period: usize) -> Vec<Option<f64>> {
 
     for i in (period + 1)..n {
         let delta = values[i] - values[i - 1];
-        let (gain, loss) = if delta >= 0.0 { (delta, 0.0) } else { (0.0, -delta) };
+        let (gain, loss) = if delta >= 0.0 {
+            (delta, 0.0)
+        } else {
+            (0.0, -delta)
+        };
         avg_gain = (avg_gain * (period as f64 - 1.0) + gain) / period as f64;
         avg_loss = (avg_loss * (period as f64 - 1.0) + loss) / period as f64;
         out[i] = Some(rsi_from(avg_gain, avg_loss));
@@ -109,8 +113,8 @@ mod tests {
     #[test]
     fn rsi_known_series_matches_wilder() {
         let closes = vec![
-            44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
-            45.89, 46.03, 45.61, 46.28, 46.28,
+            44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08, 45.89, 46.03,
+            45.61, 46.28, 46.28,
         ];
         let out = rsi(&closes, 14);
         let v = out[14].expect("defined at index 14");

@@ -149,7 +149,9 @@ pub async fn fetch_key_statistics(
         ticker: Some(symbol.to_string()),
         market_cap: stats.market_cap.map(|m| m.amount().as_f64()),
         pe_ratio: stats.pe_trailing_twelve_months.map(|d| d.as_f64()),
-        eps: stats.eps_trailing_twelve_months.map(|p| p.amount().as_f64()),
+        eps: stats
+            .eps_trailing_twelve_months
+            .map(|p| p.amount().as_f64()),
         dividend_yield: stats.dividend_yield_trailing.map(|d| d.as_f64()),
         fifty_two_week_high: stats.fifty_two_week_high.map(|p| p.amount().as_f64()),
         fifty_two_week_low: stats.fifty_two_week_low.map(|p| p.amount().as_f64()),
@@ -226,7 +228,11 @@ pub async fn fetch_earnings(client: &YfClient, symbol: &str) -> Result<TickerEar
         })
         .collect();
 
-    debug!(eps_quarters = eps.len(), revenue_quarters = revenue.len(), "earnings fetched");
+    debug!(
+        eps_quarters = eps.len(),
+        revenue_quarters = revenue.len(),
+        "earnings fetched"
+    );
 
     Ok(TickerEarnings {
         ticker: symbol.to_string(),
@@ -277,9 +283,13 @@ fn map_option_contract(c: &YfOptionContract) -> OptionContract {
         OptionSide::Call => OptionKind::Call,
         OptionSide::Put => OptionKind::Put,
     };
-    let expiry = c
-        .expiration_at
-        .unwrap_or_else(|| c.key.expiration_date.and_hms_opt(0, 0, 0).unwrap().and_utc());
+    let expiry = c.expiration_at.unwrap_or_else(|| {
+        c.key
+            .expiration_date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+    });
     OptionContract {
         kind,
         expiry,
@@ -287,7 +297,10 @@ fn map_option_contract(c: &YfOptionContract) -> OptionContract {
         bid: c.bid.as_ref().map(|p| p.as_decimal().as_f64()),
         ask: c.ask.as_ref().map(|p| p.as_decimal().as_f64()),
         last: c.price.as_ref().map(|p| p.as_decimal().as_f64()),
-        implied_volatility: c.implied_volatility.as_ref().map(|iv| iv.as_decimal().as_f64()),
+        implied_volatility: c
+            .implied_volatility
+            .as_ref()
+            .map(|iv| iv.as_decimal().as_f64()),
         volume: c.volume,
         open_interest: c.open_interest,
     }
@@ -342,7 +355,8 @@ mod tests {
         c.price = Some(PriceAmount::new(Decimal::from_str("5.25").unwrap()));
         c.bid = Some(PriceAmount::new(Decimal::from_str("5.20").unwrap()));
         c.ask = Some(PriceAmount::new(Decimal::from_str("5.30").unwrap()));
-        c.implied_volatility = Some(NonNegativeDecimal::new(Decimal::from_str("0.25").unwrap()).unwrap());
+        c.implied_volatility =
+            Some(NonNegativeDecimal::new(Decimal::from_str("0.25").unwrap()).unwrap());
         c.volume = Some(1_000);
         c.open_interest = Some(500);
         c
@@ -365,7 +379,10 @@ mod tests {
         assert_eq!(mapped.implied_volatility, Some(0.25));
         assert_eq!(mapped.volume, Some(1_000));
         assert_eq!(mapped.open_interest, Some(500));
-        assert_eq!(mapped.expiry.date_naive(), NaiveDate::from_ymd_opt(2026, 1, 16).unwrap());
+        assert_eq!(
+            mapped.expiry.date_naive(),
+            NaiveDate::from_ymd_opt(2026, 1, 16).unwrap()
+        );
     }
 
     #[test]

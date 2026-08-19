@@ -70,15 +70,22 @@ impl OptionContract {
             Some(iv) if iv > 0.0 => iv,
             _ => {
                 let market = contract_market_price(self)?;
-                let seed =
-                    BlackScholesInputs::new(spot, self.strike, t, risk_free_rate, 0.5, dividend_yield)
-                        .ok()?;
+                let seed = BlackScholesInputs::new(
+                    spot,
+                    self.strike,
+                    t,
+                    risk_free_rate,
+                    0.5,
+                    dividend_yield,
+                )
+                .ok()?;
                 implied_volatility(market, &seed, self.kind).ok()?
             }
         };
 
         let inputs =
-            BlackScholesInputs::new(spot, self.strike, t, risk_free_rate, iv, dividend_yield).ok()?;
+            BlackScholesInputs::new(spot, self.strike, t, risk_free_rate, iv, dividend_yield)
+                .ok()?;
         Some(ContractAnalytics {
             theo_price: bs_price(&inputs, self.kind),
             iv,
@@ -91,8 +98,8 @@ impl OptionContract {
 mod tests {
     use super::*;
     use crate::black_scholes::{BlackScholesInputs, DEFAULT_RISK_FREE_RATE, OptionKind, price};
-    use chrono::Utc;
     use chrono::Duration as ChronoDuration;
+    use chrono::Utc;
 
     fn one_year_contract(strike: f64) -> (OptionContract, chrono::DateTime<Utc>) {
         let now = Utc::now();
@@ -163,7 +170,11 @@ mod tests {
     fn analytics_none_without_spot() {
         let (mut contract, now) = one_year_contract(100.0);
         contract.implied_volatility = Some(0.25);
-        assert!(contract.analytics(None, DEFAULT_RISK_FREE_RATE, 0.0, now).is_none());
+        assert!(
+            contract
+                .analytics(None, DEFAULT_RISK_FREE_RATE, 0.0, now)
+                .is_none()
+        );
     }
 
     #[test]
@@ -180,12 +191,20 @@ mod tests {
             volume: None,
             open_interest: None,
         };
-        assert!(contract.analytics(Some(100.0), DEFAULT_RISK_FREE_RATE, 0.0, now).is_none());
+        assert!(
+            contract
+                .analytics(Some(100.0), DEFAULT_RISK_FREE_RATE, 0.0, now)
+                .is_none()
+        );
     }
 
     #[test]
     fn analytics_none_when_no_iv_and_no_market_price() {
         let (contract, now) = one_year_contract(100.0);
-        assert!(contract.analytics(Some(100.0), DEFAULT_RISK_FREE_RATE, 0.0, now).is_none());
+        assert!(
+            contract
+                .analytics(Some(100.0), DEFAULT_RISK_FREE_RATE, 0.0, now)
+                .is_none()
+        );
     }
 }

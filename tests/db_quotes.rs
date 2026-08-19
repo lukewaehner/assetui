@@ -167,16 +167,24 @@ async fn prune_keeps_only_the_most_recent_rows(pool: sqlx::PgPool) {
 
 #[sqlx::test]
 async fn prune_is_a_noop_when_under_the_cap(pool: sqlx::PgPool) {
-    store_quote_to_db(&quote_at("MSFT", 400.0, 2_000), &pool).await.unwrap();
+    store_quote_to_db(&quote_at("MSFT", 400.0, 2_000), &pool)
+        .await
+        .unwrap();
     let deleted = prune_quotes_history(&pool, "MSFT", 200).await.unwrap();
     assert_eq!(deleted, 0);
 }
 
 #[sqlx::test]
 async fn latest_per_ticker_returns_one_row_per_ticker(pool: sqlx::PgPool) {
-    store_quote_to_db(&quote_at("AAPL", 100.0, 1), &pool).await.unwrap();
-    store_quote_to_db(&quote_at("AAPL", 110.0, 2), &pool).await.unwrap();
-    store_quote_to_db(&quote_at("MSFT", 400.0, 1), &pool).await.unwrap();
+    store_quote_to_db(&quote_at("AAPL", 100.0, 1), &pool)
+        .await
+        .unwrap();
+    store_quote_to_db(&quote_at("AAPL", 110.0, 2), &pool)
+        .await
+        .unwrap();
+    store_quote_to_db(&quote_at("MSFT", 400.0, 1), &pool)
+        .await
+        .unwrap();
 
     let rows = fetch_latest_per_ticker(&pool, SortMode::ByTicker, SortOrder::Ascending, 200)
         .await
@@ -191,10 +199,16 @@ async fn latest_per_ticker_returns_one_row_per_ticker(pool: sqlx::PgPool) {
 
 #[sqlx::test]
 async fn spark_series_returns_prices_oldest_first(pool: sqlx::PgPool) {
-    store_quote_to_db(&quote_at("AAPL", 100.0, 1), &pool).await.unwrap();
-    store_quote_to_db(&quote_at("AAPL", 105.0, 2), &pool).await.unwrap();
+    store_quote_to_db(&quote_at("AAPL", 100.0, 1), &pool)
+        .await
+        .unwrap();
+    store_quote_to_db(&quote_at("AAPL", 105.0, 2), &pool)
+        .await
+        .unwrap();
 
-    let series = fetch_spark_series(&pool, &["AAPL".to_string()]).await.unwrap();
+    let series = fetch_spark_series(&pool, &["AAPL".to_string()])
+        .await
+        .unwrap();
 
     assert_eq!(series, vec![("AAPL".into(), 100.0), ("AAPL".into(), 105.0)]);
 }
