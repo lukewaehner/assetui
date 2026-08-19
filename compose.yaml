@@ -1,0 +1,29 @@
+# Local Postgres for development and for the test suite.
+#
+# `#[sqlx::test]` creates and drops a fresh database per test, so the role here
+# is a superuser rather than an app-scoped one.
+#
+# The host port is 5433, not 5432: a locally installed Postgres (Postgres.app,
+# Homebrew) already holds 5432, and silently connecting to the wrong server is a
+# worse failure than a port that doesn't match the default.
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: yfinance
+      POSTGRES_PASSWORD: yfinance
+      POSTGRES_DB: yfinance_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # `docker compose up --wait` blocks until this passes, so the test suite
+    # can start immediately after it returns instead of racing startup.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yfinance -d yfinance_dev"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  pgdata:
