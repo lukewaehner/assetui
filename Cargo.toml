@@ -3,6 +3,24 @@ name = "assetui"
 version = "0.1.0"
 edition = "2024"
 
+# Kept deliberately narrow: every lint here is one the tree already satisfies,
+# so `cargo clippy` locally matches CI's `-D warnings` with no flag to remember.
+# Turning on `clippy::pedantic` is a large mechanical diff and its own decision.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Leftover debugging scaffolding, which is never intentional in a commit.
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+# Deliberately absent: `clippy::let_underscore_must_use` fires on all 54
+# `let _ = tx.send(event)` sites, where ignoring the error is the intended
+# behaviour (a closed channel means the event loop is already gone), and
+# `unused_qualifications` wants 25 mechanical edits. Neither is a bug worth a
+# gate; both would just train people to ignore the lint output.
+
 [profile.release]
 opt-level = 3
 lto = "fat"
