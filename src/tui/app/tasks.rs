@@ -29,6 +29,9 @@ use super::{
     App, AppEvent, FetchOrigin, PAGE_FETCH_LIMIT, fetch_failure_event, group_spark_series,
 };
 
+/// How often the macOS system appearance is polled.
+const APPEARANCE_POLL_INTERVAL: Duration = Duration::from_secs(10);
+
 impl App {
     pub(crate) fn spawn_reload(&self) {
         let pool = self.services.pool.clone();
@@ -254,7 +257,7 @@ impl App {
         let tx = self.services.event_tx.clone();
         let mut last = self.appearance;
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(2));
+            let mut ticker = tokio::time::interval(APPEARANCE_POLL_INTERVAL);
             loop {
                 ticker.tick().await;
                 let current = poll_appearance().await;

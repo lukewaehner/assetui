@@ -130,7 +130,9 @@ Updates are display-only; streamed ticks are not written to Postgres. Ticks only
 
 ### Appearance
 
-On macOS the TUI follows your system appearance: it picks a light or dark palette at launch and switches automatically within a couple of seconds when you toggle the OS between Light and Dark - no key or restart needed. On other platforms it defaults to the dark palette.
+On macOS the TUI follows your system appearance: it picks a light or dark palette at launch and switches automatically within about ten seconds when you toggle the OS between Light and Dark - no key or restart needed. On other platforms it defaults to the dark palette.
+
+(Ten seconds rather than instant because detecting the setting means spawning a `defaults` subprocess, and polling it aggressively is the one thing an otherwise-idle app would do continuously.)
 
 ## CLI
 
