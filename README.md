@@ -138,7 +138,23 @@ cargo run -- dump-to-csv                               # write the quotes table 
 cargo run -- pull-from-db                              # print a formatted table of everything stored
 ```
 
-Tickers can also be passed as `-t`. Log verbosity is controlled via `RUST_LOG` (defaults to `info`); the TUI captures its own logs in-app instead.
+Tickers can also be passed as `-t`. Log verbosity is controlled via `RUST_LOG` (defaults to `info`).
+
+## Logs
+
+CLI subcommands log to stderr. The TUI can't — it owns the alternate screen — so
+it writes to a daily rotating file instead, keeping the last 7 days:
+
+| Platform | Location |
+|---|---|
+| macOS | `~/Library/Logs/assetui/assetui.<date>.log` |
+| Other | `$XDG_STATE_HOME/assetui/`, else `~/.local/state/assetui/` |
+
+Set `ASSETUI_LOG_DIR` to override. `RUST_LOG` controls verbosity in both modes;
+note that `debug` includes sqlx's per-query logging, which is verbose.
+
+This is separate from the in-app log panel, which shows a curated feed of fetch
+and stream activity rather than the full trace.
 
 ## Project layout
 

@@ -6,6 +6,7 @@ pub mod db;
 pub mod earnings;
 pub mod fetch;
 pub mod indicators;
+pub mod logging;
 pub mod models;
 pub mod news_feed;
 pub mod optimizer;

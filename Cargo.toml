@@ -59,3 +59,4 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = "0.3"
 ratatui-notifications = "0.1.0"
 clap = { version = "4.6.1", features = ["derive"] }
+tracing-appender = "0.2.5"

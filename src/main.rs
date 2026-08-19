@@ -9,6 +9,8 @@ use assetui::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
 use assetui::db::quotes::dump_table_to_csv;
 use assetui::run::fetch_and_store;
 use std::time::Duration;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use yfinance_rs::{CacheEndpoint, YfClient};
 
@@ -33,13 +35,53 @@ enum Commands {
     PullFromDb,
 }
 
-fn init_tracing() {
+/// Log verbosity, from `RUST_LOG` and defaulting to `info`.
+fn log_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
+fn init_cli_tracing() {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(log_filter())
         .with_target(false)
         .init();
+}
+
+fn init_tui_tracing() -> Option<WorkerGuard> {
+    let dir = assetui::logging::log_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!(
+            "warning: could not create log directory {}: {e}; continuing without file logging",
+            dir.display()
+        );
+        return None;
+    }
+
+    let appender = match rolling::Builder::new()
+        .rotation(rolling::Rotation::DAILY)
+        .filename_prefix(assetui::logging::LOG_FILE_PREFIX)
+        .filename_suffix("log")
+        .max_log_files(assetui::logging::LOG_FILES_KEPT)
+        .build(&dir)
+    {
+        Ok(appender) => appender,
+        Err(e) => {
+            eprintln!(
+                "warning: could not open a log file in {}: {e}; continuing without file logging",
+                dir.display()
+            );
+            return None;
+        }
+    };
+
+    let (writer, guard) = tracing_appender::non_blocking(appender);
+    tracing_subscriber::fmt()
+        .with_env_filter(log_filter())
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(writer)
+        .init();
+    Some(guard)
 }
 
 /// Builds the Yahoo Finance client with per-endpoint response caching enabled.
@@ -57,9 +99,12 @@ fn build_yf_client() -> Result<YfClient, AppError> {
 async fn main() -> Result<(), AppError> {
     let args = Args::parse();
 
-    if args.command.is_some() {
-        init_tracing();
-    }
+    let _log_guard = if args.command.is_some() {
+        init_cli_tracing();
+        None
+    } else {
+        init_tui_tracing()
+    };
 
     let database_url = dotenvy::var("DATABASE_URL")?;
     let pool = setup_pool(&database_url, DEFAULT_MAX_CONNECTIONS).await?;
