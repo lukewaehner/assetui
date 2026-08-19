@@ -1,5 +1,5 @@
 use assetui::db::quotes::store_quote_to_db;
-use assetui::fetch::fetch_latest_per_ticker;
+use assetui::fetch::{fetch_latest_for_tickers, fetch_latest_per_ticker};
 use assetui::models::QuoteRecord;
 use assetui::sort::{SortMode, SortOrder};
 use chrono::{DateTime, TimeZone, Utc};
@@ -138,4 +138,52 @@ async fn test_fetch_latest_per_ticker_by_ticker_asc(pool: sqlx::PgPool) {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].ticker.as_deref(), Some("AAA"));
     assert_eq!(rows[1].ticker.as_deref(), Some("ZZZ"));
+}
+
+#[sqlx::test]
+async fn fetch_latest_for_tickers_ignores_untracked_tickers_that_sort_earlier(pool: sqlx::PgPool) {
+    // arrange
+    let ts = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+    for ticker in ["AAAA", "BBBB", "ZZZZ"] {
+        store_quote_to_db(&make_quote(ticker, 10.0, ts), &pool)
+            .await
+            .unwrap();
+    }
+
+    // act
+    let rows = fetch_latest_for_tickers(&pool, &["ZZZZ".to_string()])
+        .await
+        .unwrap();
+
+    // assert
+    let tickers: Vec<&str> = rows.iter().filter_map(|r| r.ticker.as_deref()).collect();
+    assert_eq!(tickers, vec!["ZZZZ"]);
+}
+
+#[sqlx::test]
+async fn fetch_latest_for_tickers_returns_the_newest_row_per_ticker(pool: sqlx::PgPool) {
+    let older = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+    let newer = Utc.with_ymd_and_hms(2024, 1, 2, 12, 0, 0).unwrap();
+    store_quote_to_db(&make_quote("AAPL", 100.0, older), &pool)
+        .await
+        .unwrap();
+    store_quote_to_db(&make_quote("AAPL", 150.0, newer), &pool)
+        .await
+        .unwrap();
+
+    let rows = fetch_latest_for_tickers(&pool, &["AAPL".to_string()])
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 1, "one row per ticker");
+    assert_eq!(rows[0].price, Some(150.0));
+}
+
+#[sqlx::test]
+async fn fetch_latest_for_tickers_omits_tickers_with_no_rows(pool: sqlx::PgPool) {
+    let rows = fetch_latest_for_tickers(&pool, &["NOPE".to_string()])
+        .await
+        .unwrap();
+
+    assert!(rows.is_empty());
 }

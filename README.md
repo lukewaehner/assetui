@@ -134,9 +134,61 @@ For batch operations, pass a subcommand instead of launching the TUI:
 
 ```sh
 cargo run -- fetch-and-store --ticker AAPL,MSFT,GOOG   # fetch quotes in parallel and store them
+cargo run -- snapshot                                  # record everything tracked (for a scheduler)
 cargo run -- dump-to-csv                               # write the quotes table to quotes_dump.csv
 cargo run -- pull-from-db                              # print a formatted table of everything stored
 ```
+
+### Scheduled snapshots
+
+`snapshot` is the unattended path. It fetches a quote for every watchlist ticker
+and holding, prunes each ticker's history to the retention cap, and writes the
+day's portfolio totals — the same work the TUI does while it happens to be open.
+Without it, history only accumulates on days you launch the app, which leaves
+gaps in the portfolio chart and thin series for the optimizer.
+
+Every step is idempotent (quotes dedupe on `(ticker, as_of)`, the history row
+upserts on the day), so running it more than once a day is harmless.
+
+On macOS, a launchd agent at
+`~/Library/LaunchAgents/com.assetui.snapshot.plist` that runs it on weekday
+afternoons:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.assetui.snapshot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/absolute/path/to/assetui</string>
+    <string>snapshot</string>
+  </array>
+  <key>WorkingDirectory</key><string>/absolute/path/to/assetui-checkout</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>DATABASE_URL</key><string>postgres://user:pass@localhost/db</string></dict>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+</dict>
+</plist>
+```
+
+`launchctl load ~/Library/LaunchAgents/com.assetui.snapshot.plist` to enable it.
+The equivalent crontab line, at 16:30 on weekdays:
+
+```
+30 16 * * 1-5 cd /path/to/assetui && ./target/release/assetui snapshot
+```
+
+`WorkingDirectory` / `cd` matters only if you rely on `.env` for `DATABASE_URL`;
+setting it in the environment instead makes the job location-independent.
 
 Tickers can also be passed as `-t`. Log verbosity is controlled via `RUST_LOG` (defaults to `info`).
 
@@ -168,6 +220,8 @@ src/
   search.rs           fuzzy subsequence matching
   sort.rs             SortMode / SortOrder enums
   cli/                stdin prompts and comfy-table rendering
+  logging.rs          log destinations for the CLI (stderr) and TUI (file)
+  snapshot.rs         headless snapshot run (the `snapshot` subcommand)
   db/                 Postgres pool setup and queries
   tui/                ratatui interface (default mode)
     run.rs                 terminal setup and event loop

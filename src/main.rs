@@ -8,6 +8,7 @@ use assetui::cli::print_tickers;
 use assetui::db::connection::{DEFAULT_MAX_CONNECTIONS, setup_pool};
 use assetui::db::quotes::dump_table_to_csv;
 use assetui::run::fetch_and_store;
+use assetui::snapshot::run_snapshot;
 use std::time::Duration;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
@@ -27,6 +28,8 @@ enum Commands {
         #[arg(short, long, value_delimiter = ',', required = true)]
         ticker: Vec<String>,
     },
+
+    Snapshot,
 
     /// Dumps the quotes table to a CSV file in the current directory.
     DumpToCsv,
@@ -114,6 +117,20 @@ async fn main() -> Result<(), AppError> {
     match &args.command {
         Some(Commands::FetchAndStore { ticker }) => {
             fetch_and_store(&pool, &client, ticker).await?;
+        }
+        Some(Commands::Snapshot) => {
+            let day = chrono::Local::now().date_naive();
+            let report = run_snapshot(&pool, &client, day).await?;
+            println!(
+                "Snapshot: {} ticker(s), {} old row(s) pruned, portfolio history {}",
+                report.tickers,
+                report.pruned,
+                if report.history_recorded {
+                    "recorded"
+                } else {
+                    "skipped"
+                }
+            );
         }
         Some(Commands::DumpToCsv) => {
             let written = dump_table_to_csv(&pool, Path::new("quotes_dump.csv")).await?;

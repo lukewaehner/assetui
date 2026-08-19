@@ -104,6 +104,22 @@ pub async fn fetch_spark_series(
     .await
 }
 
+pub async fn fetch_latest_for_tickers(
+    pool: &sqlx::PgPool,
+    tickers: &[String],
+) -> sqlx::Result<Vec<QuoteRecord>> {
+    sqlx::query_as::<_, QuoteRecord>(
+        "SELECT DISTINCT ON (ticker)
+             id, ticker, name, price, previous_close, day_volume, as_of
+         FROM quotes
+         WHERE ticker = ANY($1)
+         ORDER BY ticker, as_of DESC",
+    )
+    .bind(tickers)
+    .fetch_all(pool)
+    .await
+}
+
 /// Whether an instrument's asset class carries sell-side analyst coverage.
 fn has_analyst_coverage(kind: &AssetKind) -> bool {
     matches!(kind, AssetKind::Equity | AssetKind::REIT)
