@@ -21,8 +21,12 @@ DATABASE_URL=postgres://<user>:<pass>@localhost/<database_name>
 Put that in a `.env` file you just created at the project root, then optionally run migrations (running the app will run migrations):
 
 ```sh
-sqlx migrate run
+cargo run -- migrate   # uses the migrations embedded in the binary
+sqlx migrate run       # equivalent, if you have sqlx-cli
 ```
+
+Pass `--skip-migrations` to connect without applying anything, for a database
+whose schema is managed elsewhere. `migrate` ignores that flag.
 
 Build the binary:
 

@@ -17,6 +17,10 @@ use yfinance_rs::{CacheEndpoint, YfClient};
 
 #[derive(Parser)]
 struct Args {
+    /// Connect without applying pending migrations.
+    #[arg(long, global = true)]
+    skip_migrations: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -30,6 +34,9 @@ enum Commands {
     },
 
     Snapshot,
+
+    /// Applies any pending migrations and exits.
+    Migrate,
 
     /// Dumps the quotes table to a CSV file in the current directory.
     DumpToCsv,
@@ -112,9 +119,16 @@ async fn main() -> Result<(), AppError> {
     let database_url = dotenvy::var("DATABASE_URL")?;
     let pool = setup_pool(&database_url, DEFAULT_MAX_CONNECTIONS).await?;
     let client = build_yf_client()?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
+
+    let explicitly_requested = matches!(args.command, Some(Commands::Migrate));
+    if explicitly_requested || !args.skip_migrations {
+        sqlx::migrate!("./migrations").run(&pool).await?;
+    } else {
+        tracing::info!("skipping migrations at startup (--skip-migrations)");
+    }
 
     match &args.command {
+        Some(Commands::Migrate) => println!("Migrations applied."),
         Some(Commands::FetchAndStore { ticker }) => {
             fetch_and_store(&pool, &client, ticker).await?;
         }
