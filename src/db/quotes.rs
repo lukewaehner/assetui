@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use futures_util::TryStreamExt;
 use sqlx::{Pool, Postgres};
 use tracing::{debug, info, instrument};
 
@@ -82,13 +83,19 @@ pub async fn fetch_all_quotes(p: &Pool<Postgres>) -> Result<Vec<QuoteRecord>, Ap
 #[instrument(skip(p, out))]
 pub async fn dump_table_to_csv(p: &Pool<Postgres>, out: &Path) -> Result<PathBuf, AppError> {
     debug!("dumping quotes table to csv");
-    let rows: Vec<QuoteRecord> = fetch_all_quotes(p).await?;
     let mut wtr = csv::Writer::from_path(out)?;
-    for row in rows {
+    let mut rows = sqlx::query_as::<_, QuoteRecord>(
+        "SELECT id, ticker, name, price, previous_close, day_volume, as_of FROM quotes",
+    )
+    .fetch(p);
+    let mut written = 0u64;
+    while let Some(row) = rows.try_next().await? {
         wtr.serialize(row)?;
+        written += 1;
     }
     wtr.flush()?;
     info!(
+        rows = written,
         "quotes table dumped to csv successfully, written at: {}",
         out.display()
     );
