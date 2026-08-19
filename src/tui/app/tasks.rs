@@ -95,9 +95,13 @@ impl App {
         T: Send + 'static,
         Fut: Future<Output = Result<T, AppError>> + Send + 'static,
     {
+        let Some(guard) = self.services.inflight.begin(err_prefix, &symbol) else {
+            return;
+        };
         let tx = self.services.event_tx.clone();
         let client = self.services.client.clone();
         tokio::spawn(async move {
+            let _guard = guard;
             match fetch(client, symbol.clone()).await {
                 Ok(value) => {
                     let _ = tx.send(to_event(value));

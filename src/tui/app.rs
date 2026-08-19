@@ -12,6 +12,7 @@ use ratatui_notifications::{
 };
 use tokio::sync::mpsc;
 
+use super::inflight::Inflight;
 use super::theme::{Appearance, Theme};
 use crate::{
     cli::parse_tickers,
@@ -397,6 +398,7 @@ pub struct Services {
     pub client: YfClient,
     /// Channel used by async tasks to push [`AppEvent`]s back to the loop.
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub inflight: Inflight,
 }
 
 /// Transient animation state advanced by [`App::tick`].
@@ -637,6 +639,7 @@ impl App {
                 pool,
                 client,
                 event_tx,
+                inflight: Inflight::default(),
             },
             animations: Animations {
                 blink_state: true,

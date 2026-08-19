@@ -2,6 +2,7 @@
 
 mod app;
 mod draw;
+mod inflight;
 mod run;
 mod stream;
 mod theme;
