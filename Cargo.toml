@@ -25,10 +25,19 @@ unimplemented = "warn"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 strip = true
-overflow-checks = false
-debug-assertions = false
+
+# `panic = "abort"` was here, and it silently disabled error handling this crate
+# already has: `run.rs` logs a fetch task that panicked, and `tokio::spawn`'s
+# JoinError only exists under unwinding. With abort, one panicking background
+# fetch took down a whole interactive session instead of being isolated to that
+# task. Unwind tables cost some binary size; keeping a long-running TUI alive
+# through a panic in one of its ~27 spawned tasks is worth more.
+#
+# `overflow-checks = false` and `debug-assertions = false` were also here; both
+# restate the release defaults, so removing them makes the settings above read as
+# deliberate rather than as a wall of knobs.
+panic = "unwind"
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
