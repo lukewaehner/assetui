@@ -11,7 +11,7 @@ use crate::AppError;
 use crate::db::alerts::{add_alert, list_alerts, mark_alert_triggered, remove_alert};
 use crate::db::portfolio::{list_holdings, remove_holding, upsert_holding};
 use crate::db::portfolio_history::{load_history, upsert_day};
-use crate::db::quotes::{prune_quotes_history, store_quote_to_db};
+use crate::db::quotes::{QUOTE_HISTORY_RETENTION, prune_quotes_history, store_quote_to_db};
 use crate::db::watchlist::{add_to_watchlist, fetch_watchlist, remove_from_watchlist};
 use crate::fetch::{
     fetch_analysis, fetch_chart_data, fetch_earnings, fetch_key_statistics,
@@ -26,8 +26,7 @@ use crate::tui::stream::start_quote_stream;
 use crate::tui::theme::{Appearance, parse_appearance};
 
 use super::{
-    App, AppEvent, FetchOrigin, PAGE_FETCH_LIMIT, SNAPSHOT_RETENTION, fetch_failure_event,
-    group_spark_series,
+    App, AppEvent, FetchOrigin, PAGE_FETCH_LIMIT, fetch_failure_event, group_spark_series,
 };
 
 impl App {
@@ -604,7 +603,8 @@ impl App {
                     )));
                     continue;
                 }
-                if let Err(e) = prune_quotes_history(&pool, &ticker, SNAPSHOT_RETENTION).await {
+                if let Err(e) = prune_quotes_history(&pool, &ticker, QUOTE_HISTORY_RETENTION).await
+                {
                     let _ = tx.send(AppEvent::LogLine(format!(
                         "[WARN] prune {ticker} failed: {e}"
                     )));

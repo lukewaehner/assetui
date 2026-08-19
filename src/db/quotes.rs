@@ -8,6 +8,9 @@ use tracing::{debug, info, instrument};
 use crate::AppError;
 use crate::models::QuoteRecord;
 
+/// Rows kept per ticker in the `quotes` history.
+pub const QUOTE_HISTORY_RETENTION: i64 = 200;
+
 /// Inserts a quote into the database and returns the row's `id`.
 #[instrument(skip(quote, p), fields(ticker = ?quote.ticker))]
 pub async fn store_quote_to_db(quote: &QuoteRecord, p: &Pool<Postgres>) -> Result<i32, AppError> {

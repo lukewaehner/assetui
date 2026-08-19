@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use super::theme::{Appearance, Theme};
 use crate::{
     cli::parse_tickers,
+    db::quotes::QUOTE_HISTORY_RETENTION,
     models::{
         Alert, FLASH_TTL, OptionChain, QuoteRecord, QuoteRecordAnalysis, QuoteRecordStatistics,
         QuoteTick, StockNews, Ticker, crosses, parse_alert_entry,
@@ -41,8 +42,6 @@ const PORTFOLIO_SERIES_CAP: usize = 120;
 
 /// How often a periodic price snapshot is persisted per subscribed ticker.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(300);
-/// Rows kept per ticker in the `quotes` history (retention cap).
-const SNAPSHOT_RETENTION: i64 = 200;
 
 /// How often the portfolio's totals are written to `portfolio_value_history`.
 const HISTORY_SAMPLE_INTERVAL: Duration = Duration::from_secs(300);
@@ -747,7 +746,7 @@ impl App {
                     &mut self.market.db_display.spark_series,
                     ticker,
                     price,
-                    SNAPSHOT_RETENTION as usize,
+                    QUOTE_HISTORY_RETENTION as usize,
                 );
             }
         }
@@ -896,7 +895,7 @@ impl App {
                         &mut self.market.db_display.spark_series,
                         ticker,
                         price,
-                        SNAPSHOT_RETENTION as usize,
+                        QUOTE_HISTORY_RETENTION as usize,
                     );
                 }
                 self.market.db_display.all_rows.insert(0, record);
