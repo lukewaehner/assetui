@@ -20,6 +20,7 @@ use crate::fetch::{
 };
 use crate::models::AlertDirection;
 use crate::models::{QuoteRecord, QuoteTick};
+use crate::optimizer::{MC_SAMPLES, MC_SEED, RISK_FREE_ANNUAL, compute_optimization};
 use crate::portfolio::Holding;
 use crate::tui::stream::start_quote_stream;
 use crate::tui::theme::{Appearance, parse_appearance};
@@ -462,6 +463,25 @@ impl App {
                 }
             }
             let _ = tx.send(AppEvent::OptimizerDataReady { histories });
+        });
+    }
+
+    pub(crate) fn spawn_optimizer_compute(
+        &self,
+        histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)>,
+        market_values: std::collections::HashMap<String, f64>,
+    ) {
+        let tx = self.services.event_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let total = histories.len();
+            let result = compute_optimization(
+                &histories,
+                &market_values,
+                RISK_FREE_ANNUAL,
+                MC_SAMPLES,
+                MC_SEED,
+            );
+            let _ = tx.send(AppEvent::OptimizerComputed { result, total });
         });
     }
 

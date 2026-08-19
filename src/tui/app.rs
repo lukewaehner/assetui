@@ -115,6 +115,11 @@ pub enum AppEvent {
     OptimizerDataReady {
         histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)>,
     },
+    /// The finished mean-variance optimization, back from the blocking pool.
+    OptimizerComputed {
+        result: Option<crate::optimizer::OptimizerResult>,
+        total: usize,
+    },
     NewsFeedItemReady {
         ticker: String,
         items: Vec<crate::models::quote::NewsItem>,
@@ -331,10 +336,8 @@ pub struct NewsPageState {
 pub struct OptimizerPageState {
     /// Whether the one-time history fetch has been kicked off.
     pub requested: bool,
-    /// Whether a fetch is in flight.
+    /// Whether a fetch or the compute that follows it is in flight.
     pub loading: bool,
-    /// Per-holding `(ticker, (date, close)…)` histories from the last fetch.
-    pub histories: Vec<(String, Vec<(chrono::NaiveDate, f64)>)>,
     /// The last computed result, if any.
     pub result: Option<crate::optimizer::OptimizerResult>,
     /// A load error to surface, if any.
@@ -986,26 +989,18 @@ impl App {
                 self.push_error(message);
             }
             AppEvent::OptimizerDataReady { histories } => {
-                use crate::optimizer::{
-                    MC_SAMPLES, MC_SEED, RISK_FREE_ANNUAL, compute_optimization,
-                };
                 use crate::portfolio::portfolio_positions;
-                self.optimizer.loading = false;
-                let total = histories.len();
-                self.optimizer.histories = histories;
                 let rows = &self.market.db_display.all_rows;
                 let market_values: std::collections::HashMap<String, f64> =
                     portfolio_positions(&self.holdings, rows)
                         .into_iter()
                         .filter_map(|p| p.market_value.map(|mv| (p.holding.ticker.clone(), mv)))
                         .collect();
-                self.optimizer.result = compute_optimization(
-                    &self.optimizer.histories,
-                    &market_values,
-                    RISK_FREE_ANNUAL,
-                    MC_SAMPLES,
-                    MC_SEED,
-                );
+                self.spawn_optimizer_compute(histories, market_values);
+            }
+            AppEvent::OptimizerComputed { result, total } => {
+                self.optimizer.loading = false;
+                self.optimizer.result = result;
                 if self.optimizer.result.is_none() && total < 2 {
                     self.optimizer.error =
                         Some("Add at least 2 holdings with price history to optimize.".to_string());
@@ -4237,6 +4232,112 @@ mod tests {
         let alerts = vec![alert_for(1, "AAPL")];
 
         assert!(crate::tui::draw::nearest_alert(&alerts, &[]).is_none());
+    }
+
+    /// A 40-day close series on a fixed calendar.
+    fn close_series(
+        ticker: &str,
+        base: f64,
+        stride: i64,
+    ) -> (String, Vec<(chrono::NaiveDate, f64)>) {
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let closes = (0..40)
+            .map(|i| {
+                (
+                    start + chrono::Duration::days(i),
+                    base + ((i * stride) % 7) as f64,
+                )
+            })
+            .collect();
+        (ticker.to_string(), closes)
+    }
+
+    fn optimizable_histories() -> Vec<(String, Vec<(chrono::NaiveDate, f64)>)> {
+        vec![
+            close_series("AAPL", 100.0, 1),
+            close_series("MSFT", 50.0, 3),
+        ]
+    }
+
+    /// The compute is thousands of sampled portfolios plus a covariance inverse.
+    #[tokio::test]
+    async fn optimizer_data_ready_computes_off_the_event_loop() {
+        // arrange
+        let (mut app, mut rx) = make_test_app();
+        app.optimizer.loading = true;
+
+        // act
+        app.handle_event(AppEvent::OptimizerDataReady {
+            histories: optimizable_histories(),
+        });
+
+        // assert
+        assert!(
+            app.optimizer.result.is_none(),
+            "the handler must not compute inline"
+        );
+        assert!(
+            app.optimizer.loading,
+            "stays loading until the compute reports back"
+        );
+        match rx.recv().await {
+            Some(AppEvent::OptimizerComputed { result, total }) => {
+                assert_eq!(total, 2, "both holdings were handed to the compute");
+                assert!(result.is_some(), "two aligned series are optimizable");
+            }
+            _ => panic!("expected an OptimizerComputed event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn optimizer_computed_applies_the_result_and_clears_loading() {
+        // arrange
+        let (mut app, _rx) = make_test_app();
+        app.optimizer.loading = true;
+        let result = crate::optimizer::compute_optimization(
+            &optimizable_histories(),
+            &std::collections::HashMap::new(),
+            crate::optimizer::RISK_FREE_ANNUAL,
+            16,
+            crate::optimizer::MC_SEED,
+        );
+        assert!(result.is_some(), "fixture should be optimizable");
+
+        // act
+        app.handle_event(AppEvent::OptimizerComputed { result, total: 2 });
+
+        // assert
+        assert!(app.optimizer.result.is_some(), "result is applied");
+        assert!(!app.optimizer.loading, "loading is cleared");
+        assert!(app.optimizer.error.is_none(), "a success clears any error");
+    }
+
+    #[tokio::test]
+    async fn optimizer_computed_explains_a_too_small_portfolio() {
+        let (mut app, _rx) = make_test_app();
+
+        app.handle_event(AppEvent::OptimizerComputed {
+            result: None,
+            total: 1,
+        });
+
+        assert_eq!(
+            app.optimizer.error.as_deref(),
+            Some("Add at least 2 holdings with price history to optimize.")
+        );
+    }
+
+    #[tokio::test]
+    async fn optimizer_computed_does_not_blame_holding_count_when_there_are_enough() {
+        let (mut app, _rx) = make_test_app();
+        app.optimizer.error = Some("stale".to_string());
+
+        app.handle_event(AppEvent::OptimizerComputed {
+            result: None,
+            total: 4,
+        });
+
+        assert!(app.optimizer.error.is_none());
     }
 
     #[tokio::test]
