@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build rather than silently emitting a partial backtrace-less panic.
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Formatting and lints need no database: the committed `.sqlx/` query data
+  # lets the `sqlx::query!` macro resolve offline.
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rustfmt and clippy
+        run: rustup component add rustfmt clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-lint-
+
+      - run: cargo fmt --all --check
+
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: assetui_ci
+        ports:
+          - 5432:5432
+        # Without this the first connection can land before Postgres is
+        # accepting them, which shows up as a flaky "connection refused".
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/assetui_ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      - name: Install sqlx-cli
+        run: |
+          if ! command -v sqlx >/dev/null; then
+            cargo install sqlx-cli --version 0.9.0 --locked \
+              --no-default-features --features postgres,rustls
+          fi
+
+      - name: Run migrations
+        run: sqlx migrate run
+
+      # Catches a `query!` added without regenerating `.sqlx/`, which would
+      # otherwise only break for whoever next builds without a database.
+      - name: Check offline query data is current
+        run: cargo sqlx prepare --check -- --all-targets
+
+      # `#[sqlx::test]` provisions a fresh database per test, so the suite needs
+      # a role that can CREATE/DROP DATABASE — hence the superuser above.
+      # Plain `cargo test` rather than `--all-targets`, which would silently
+      # skip doctests.
+      - run: cargo test

@@ -30,6 +30,44 @@ Build the binary:
 cargo build --release
 ```
 
+### Using the bundled Postgres
+
+If you'd rather not install Postgres, `compose.yaml` brings one up:
+
+```sh
+docker compose up --wait
+```
+
+It publishes on **5433**, not 5432, so it can't collide with a Postgres.app or
+Homebrew server already holding the default port:
+
+```
+DATABASE_URL=postgres://yfinance:yfinance@localhost:5433/yfinance_dev
+```
+
+### Tests
+
+```sh
+cargo test
+```
+
+The suite needs a reachable `DATABASE_URL` whose role can create databases:
+`#[sqlx::test]` provisions a fresh database per test, applies `migrations/`, and
+drops it afterwards, so tests are isolated and order-independent.
+
+Building does *not* need a database. The one compile-time-checked query
+(`sqlx::query!`) resolves against the committed `.sqlx/` query data, so
+`SQLX_OFFLINE=true cargo build` works from a clean checkout. If you add or edit
+a `query!`, regenerate it:
+
+```sh
+cargo sqlx prepare -- --all-targets
+```
+
+CI (`.github/workflows/ci.yml`) gates on `cargo fmt --check`, `cargo clippy -D
+warnings`, `cargo sqlx prepare --check`, and the full suite against a Postgres
+service container.
+
 ## TUI
 
 The TUI is the default: run with no subcommand to launch it.
